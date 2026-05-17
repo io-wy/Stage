@@ -20,21 +20,20 @@ Director 统筹全局，Agent 各尽其能。
 ```bash
 uv sync
 cp .env.example .env  # 编辑填入 LLM key/base/model
-python run.py "你的目标"
+python run.py "objective"
 ```
 
 或分阶段执行：
 ```bash
-python phased_run.py plan "目标" -o plan.json
+python phased_run.py plan "objective" -o plan.json
 python phased_run.py step plan.json
 ```
 
 ## Fallback 机制
 
-三层兜底：
 1. `spawn_agent` 自动 retry 瞬时错误（timeout/connection/429，3次指数退避）
-2. 导演弹性决策：观察状态 → `replan` / `spawn_resident` / `ask_human`
-3. 3次失败强制 `ask_human`
+2. 弹性决策：观察状态 → `replan` / `spawn_resident` / `ask_human` (软约束 + 硬约束)
+3. 3次失败强制 `ask_human` 
 
 ## Agent 类型
 
@@ -45,6 +44,13 @@ python phased_run.py step plan.json
 | tester | 写和跑测试 | read/write/edit/bash |
 | researcher | 搜索研究 | web_search/read/bash/glob/grep |
 | monitor | 系统验证 | read/bash |
+| ... | ... | ... |
+
+## 亮点
+
+waiting for eplain (or you can read the repo)
+- For single Agent: Context, Tool, Pattern, Skill
+- For multi Agent: Fallback, Communication, Duty
 
 ## 测试
 
