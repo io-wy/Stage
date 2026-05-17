@@ -112,6 +112,7 @@ uv run pytest tests/test_integration.py -v # 集成测试
 - 任何代码改动必须有对应测试
 - 测试必须能通过才能提交
 - Mock LLM 调用，不依赖真实 API
+- 在demo文件夹里面进行测试
 
 ---
 
