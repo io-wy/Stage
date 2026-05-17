@@ -10,6 +10,12 @@ Director 统筹全局，Agent 各尽其能。
 戏台 (StateBoard) — 全局状态面板，唯一真相源
 ```
 
+## 亮点
+
+waiting for eplain (or you can read the repo)
+- For single Agent: Context, Tool, Pattern, Skill
+- For multi Agent: Fallback, Communication, Duty, SubAgent
+
 ## 快速开始
 
 ```bash
@@ -23,23 +29,6 @@ python run.py "objective"
 python phased_run.py plan "objective" -o plan.json
 python phased_run.py step plan.json
 ```
-
-## Agent 类型
-
-| Agent | 职责 | 工具 |
-|-------|------|------|
-| coder | 写代码 | read/write/edit/glob/grep/bash |
-| reviewer | 代码审查 | read/write/edit/glob/grep/bash |
-| tester | 写和跑测试 | read/write/edit/bash |
-| researcher | 搜索研究 | web_search/read/bash/glob/grep |
-| monitor | 系统验证 | read/bash |
-| ... | ... | ... |
-
-## 亮点
-
-waiting for eplain (or you can read the repo)
-- For single Agent: Context, Tool, Pattern, Skill
-- For multi Agent: Fallback, Communication, Duty
 
 ## 测试
 
