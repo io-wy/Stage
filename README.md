@@ -10,11 +10,6 @@ Director 统筹全局，Agent 各尽其能。
 戏台 (StateBoard) — 全局状态面板，唯一真相源
 ```
 
-## 两种戏子模式
-
-- **一次性**：`spawn_agent` → 执行 → 返回 → 销毁
-- **常驻**：`ResidentAgent` 常驻内存，持久 transcript，可交互
-
 ## 快速开始
 
 ```bash
@@ -28,12 +23,6 @@ python run.py "objective"
 python phased_run.py plan "objective" -o plan.json
 python phased_run.py step plan.json
 ```
-
-## Fallback 机制
-
-1. `spawn_agent` 自动 retry 瞬时错误（timeout/connection/429，3次指数退避）
-2. 弹性决策：观察状态 → `replan` / `spawn_resident` / `ask_human` (软约束 + 硬约束)
-3. 3次失败强制 `ask_human` 
 
 ## Agent 类型
 
