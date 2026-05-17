@@ -1,0 +1,16 @@
+.ace-tool/
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.agent_memory/
+.residents/
+output_phased/
+*.egg-info/
+fallback_test_plan.json
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+*.sqlite3

@@ -1,0 +1,524 @@
+{
+  "version": "1.0",
+  "logging": {
+    "auto_configure": true,
+    "pretty": true,
+    "level": "INFO"
+  },
+  "events": {
+    "type": "async",
+    "config": {
+      "max_history": 10000
+    }
+  },
+  "runtime": {
+    "type": "default",
+    "config": {
+      "tool_executor": {
+        "type": "safe",
+        "config": {
+          "default_timeout_ms": 60000
+        }
+      }
+    }
+  },
+  "agents": [
+    {
+      "id": "director",
+      "name": "Orchestrator Director",
+      "memory": {
+        "type": "window_buffer",
+        "config": {
+          "window_size": 20
+        }
+      },
+      "pattern": {
+        "impl": "openagents_orchestration.patterns.director.DirectorPattern",
+        "config": {
+          "max_steps": 20,
+          "max_tokens": 4096,
+          "temperature": 0.2
+        }
+      },
+      "context_assembler": {
+        "impl": "openagents_orchestration.context.CompressingContextAssembler",
+        "config": {
+          "max_input_tokens": 16000,
+          "reserve_for_response": 4096,
+          "snip_threshold": 0.5,
+          "summarize_threshold": 0.7,
+          "hard_collapse_threshold": 0.9,
+          "tool_output_max_bytes": 2000,
+          "tool_output_keep_head": 1000,
+          "tool_output_keep_tail": 500
+        }
+      },
+      "llm": {
+        "provider": "${LLM_PROVIDER:-openai_compatible}",
+        "api_base": "${LLM_API_BASE}",
+        "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+        "model": "${LLM_MODEL}",
+        "temperature": 0.2,
+        "max_tokens": 4096,
+        "timeout_ms": 120000
+      },
+      "tools": [
+        {
+          "id": "read_file",
+          "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "bash",
+          "impl": "openagents_orchestration.tools.corecoder.bash_tool.BashTool"
+        },
+        {
+          "id": "spawn_agent",
+          "impl": "openagents_orchestration.tools.spawn_agent.SpawnAgentTool"
+        },
+        {
+          "id": "show_state",
+          "impl": "openagents_orchestration.tools.show_state.ShowStateTool"
+        },
+        {
+          "id": "replan",
+          "impl": "openagents_orchestration.tools.replan.ReplanTool"
+        },
+        {
+          "id": "finalize",
+          "impl": "openagents_orchestration.tools.finalize.FinalizeTool"
+        },
+        {
+          "id": "ask_human",
+          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+        },
+        {
+          "id": "send_message",
+          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+        },
+        {
+          "id": "spawn_resident",
+          "impl": "openagents_orchestration.tools.spawn_resident.SpawnResidentTool"
+        },
+        {
+          "id": "send_to_resident",
+          "impl": "openagents_orchestration.tools.send_to_resident.SendToResidentTool"
+        },
+        {
+          "id": "read_resident_state",
+          "impl": "openagents_orchestration.tools.read_resident_state.ReadResidentStateTool"
+        },
+        {
+          "id": "stop_resident",
+          "impl": "openagents_orchestration.tools.stop_resident.StopResidentTool"
+        }
+      ],
+      "runtime": {
+        "max_steps": 30,
+        "step_timeout_ms": 600000,
+        "session_queue_size": 1000,
+        "event_queue_size": 4000
+      }
+    },
+    {
+      "id": "coder",
+      "name": "Code Agent",
+      "memory": {
+        "type": "chain",
+        "on_error": "continue",
+        "config": {
+          "memories": [
+            {
+              "impl": "openagents_orchestration.memory.CoreCoderMemory",
+              "config": {
+                "storage_dir": ".agent_memory/coder",
+                "max_summaries": 10
+              }
+            }
+          ]
+        }
+      },
+      "pattern": {
+        "impl": "openagents_orchestration.patterns.corecoder.CoreCoderPattern",
+        "config": {
+          "max_steps": 30,
+          "max_tokens": 4096,
+          "temperature": 0.1
+        }
+      },
+      "context_assembler": {
+        "impl": "openagents_orchestration.context.CompressingContextAssembler",
+        "config": {
+          "max_input_tokens": 16000,
+          "reserve_for_response": 4096,
+          "snip_threshold": 0.5,
+          "summarize_threshold": 0.7,
+          "hard_collapse_threshold": 0.9,
+          "tool_output_max_bytes": 2000,
+          "tool_output_keep_head": 1000,
+          "tool_output_keep_tail": 500
+        }
+      },
+      "llm": {
+        "provider": "${LLM_PROVIDER:-openai_compatible}",
+        "api_base": "${LLM_API_BASE}",
+        "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+        "model": "${LLM_MODEL}",
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "timeout_ms": 120000
+      },
+      "tools": [
+        {
+          "id": "read_file",
+          "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "write_file",
+          "impl": "openagents_orchestration.tools.corecoder.write_file.WriteFileTool"
+        },
+        {
+          "id": "edit_file",
+          "impl": "openagents_orchestration.tools.corecoder.edit_file.EditFileTool"
+        },
+        {
+          "id": "glob",
+          "impl": "openagents_orchestration.tools.corecoder.glob_tool.GlobTool"
+        },
+        {
+          "id": "grep",
+          "impl": "openagents_orchestration.tools.corecoder.grep_tool.GrepTool"
+        },
+        {
+          "id": "bash",
+          "impl": "openagents_orchestration.tools.corecoder.bash_tool.BashTool"
+        },
+        {
+          "id": "send_message",
+          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+        },
+        {
+          "id": "ask_human",
+          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+        },
+        {
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+        },
+        {
+          "id": "run_skill",
+          "impl": "openagents_orchestration.tools.run_skill.RunSkillTool"
+        }
+      ],
+      "runtime": {
+        "max_steps": 20,
+        "step_timeout_ms": 300000,
+        "session_queue_size": 1000,
+        "event_queue_size": 4000
+      }
+    },
+    {
+      "id": "reviewer",
+      "name": "Review Agent",
+      "memory": {
+        "type": "window_buffer",
+        "config": {
+          "window_size": 12
+        }
+      },
+      "pattern": {
+        "impl": "openagents_orchestration.patterns.corecoder.CoreCoderPattern",
+        "config": {
+          "max_steps": 12,
+          "max_tokens": 4096,
+          "temperature": 0.1
+        }
+      },
+      "context_assembler": {
+        "impl": "openagents_orchestration.context.CompressingContextAssembler",
+        "config": {
+          "max_input_tokens": 12000,
+          "reserve_for_response": 3000,
+          "snip_threshold": 0.5,
+          "summarize_threshold": 0.7,
+          "hard_collapse_threshold": 0.9
+        }
+      },
+      "llm": {
+        "provider": "${LLM_PROVIDER:-openai_compatible}",
+        "api_base": "${LLM_API_BASE}",
+        "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+        "model": "${LLM_MODEL}",
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "timeout_ms": 120000
+      },
+      "tools": [
+        {
+          "id": "read_file",
+          "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "write_file",
+          "impl": "openagents_orchestration.tools.corecoder.write_file.WriteFileTool"
+        },
+        {
+          "id": "edit_file",
+          "impl": "openagents_orchestration.tools.corecoder.edit_file.EditFileTool"
+        },
+        {
+          "id": "glob",
+          "impl": "openagents_orchestration.tools.corecoder.glob_tool.GlobTool"
+        },
+        {
+          "id": "grep",
+          "impl": "openagents_orchestration.tools.corecoder.grep_tool.GrepTool"
+        },
+        {
+          "id": "bash",
+          "impl": "openagents_orchestration.tools.corecoder.bash_tool.BashTool"
+        },
+        {
+          "id": "send_message",
+          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+        },
+        {
+          "id": "ask_human",
+          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+        },
+        {
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+        },
+        {
+          "id": "run_skill",
+          "impl": "openagents_orchestration.tools.run_skill.RunSkillTool"
+        }
+      ],
+      "runtime": {
+        "max_steps": 15,
+        "step_timeout_ms": 300000
+      }
+    },
+    {
+      "id": "tester",
+      "name": "Test Agent",
+      "memory": {
+        "type": "window_buffer",
+        "config": {
+          "window_size": 12
+        }
+      },
+      "pattern": {
+        "impl": "openagents_orchestration.patterns.corecoder.CoreCoderPattern",
+        "config": {
+          "max_steps": 15,
+          "max_tokens": 4096,
+          "temperature": 0.1
+        }
+      },
+      "context_assembler": {
+        "impl": "openagents_orchestration.context.CompressingContextAssembler",
+        "config": {
+          "max_input_tokens": 12000,
+          "reserve_for_response": 3000,
+          "snip_threshold": 0.5,
+          "summarize_threshold": 0.7,
+          "hard_collapse_threshold": 0.9
+        }
+      },
+      "llm": {
+        "provider": "${LLM_PROVIDER:-openai_compatible}",
+        "api_base": "${LLM_API_BASE}",
+        "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+        "model": "${LLM_MODEL}",
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "timeout_ms": 120000
+      },
+      "tools": [
+        {
+          "id": "read_file",
+          "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "write_file",
+          "impl": "openagents_orchestration.tools.corecoder.write_file.WriteFileTool"
+        },
+        {
+          "id": "edit_file",
+          "impl": "openagents_orchestration.tools.corecoder.edit_file.EditFileTool"
+        },
+        {
+          "id": "bash",
+          "impl": "openagents_orchestration.tools.corecoder.bash_tool.BashTool"
+        },
+        {
+          "id": "send_message",
+          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+        },
+        {
+          "id": "ask_human",
+          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+        },
+        {
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+        },
+        {
+          "id": "run_skill",
+          "impl": "openagents_orchestration.tools.run_skill.RunSkillTool"
+        }
+      ],
+      "runtime": {
+        "max_steps": 15,
+        "step_timeout_ms": 300000
+      }
+    },
+    {
+      "id": "researcher",
+      "name": "Research Agent",
+      "memory": {
+        "type": "window_buffer",
+        "config": {
+          "window_size": 16
+        }
+      },
+      "pattern": {
+        "impl": "openagents_orchestration.patterns.corecoder.CoreCoderPattern",
+        "config": {
+          "max_steps": 15,
+          "max_tokens": 4096,
+          "temperature": 0.1
+        }
+      },
+      "context_assembler": {
+        "impl": "openagents_orchestration.context.CompressingContextAssembler",
+        "config": {
+          "max_input_tokens": 12000,
+          "reserve_for_response": 3000,
+          "snip_threshold": 0.5,
+          "summarize_threshold": 0.7,
+          "hard_collapse_threshold": 0.9
+        }
+      },
+      "llm": {
+        "provider": "${LLM_PROVIDER:-openai_compatible}",
+        "api_base": "${LLM_API_BASE}",
+        "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+        "model": "${LLM_MODEL}",
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "timeout_ms": 120000
+      },
+      "tools": [
+        {
+          "id": "read_file",
+          "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "glob",
+          "impl": "openagents_orchestration.tools.corecoder.glob_tool.GlobTool"
+        },
+        {
+          "id": "grep",
+          "impl": "openagents_orchestration.tools.corecoder.grep_tool.GrepTool"
+        },
+        {
+          "id": "bash",
+          "impl": "openagents_orchestration.tools.corecoder.bash_tool.BashTool"
+        },
+        {
+          "id": "send_message",
+          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+        },
+        {
+          "id": "ask_human",
+          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+        },
+        {
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+        },
+        {
+          "id": "web_search",
+          "impl": "openagents_orchestration.tools.corecoder.web_search.WebSearchTool"
+        },
+        {
+          "id": "run_skill",
+          "impl": "openagents_orchestration.tools.run_skill.RunSkillTool"
+        }
+      ],
+      "runtime": {
+        "max_steps": 15,
+        "step_timeout_ms": 300000
+      }
+    },
+    {
+      "id": "monitor",
+      "name": "Monitor Agent",
+      "memory": {
+        "type": "window_buffer",
+        "config": {
+          "window_size": 12
+        }
+      },
+      "pattern": {
+        "impl": "openagents_orchestration.patterns.corecoder.CoreCoderPattern",
+        "config": {
+          "max_steps": 12,
+          "max_tokens": 4096,
+          "temperature": 0.1
+        }
+      },
+      "context_assembler": {
+        "impl": "openagents_orchestration.context.CompressingContextAssembler",
+        "config": {
+          "max_input_tokens": 12000,
+          "reserve_for_response": 3000,
+          "snip_threshold": 0.5,
+          "summarize_threshold": 0.7,
+          "hard_collapse_threshold": 0.9
+        }
+      },
+      "llm": {
+        "provider": "${LLM_PROVIDER:-openai_compatible}",
+        "api_base": "${LLM_API_BASE}",
+        "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+        "model": "${LLM_MODEL}",
+        "temperature": 0.1,
+        "max_tokens": 4096,
+        "timeout_ms": 120000
+      },
+      "tools": [
+        {
+          "id": "read_file",
+          "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "bash",
+          "impl": "openagents_orchestration.tools.corecoder.bash_tool.BashTool"
+        },
+        {
+          "id": "send_message",
+          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+        },
+        {
+          "id": "ask_human",
+          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+        },
+        {
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+        },
+        {
+          "id": "run_skill",
+          "impl": "openagents_orchestration.tools.run_skill.RunSkillTool"
+        }
+      ],
+      "runtime": {
+        "max_steps": 12,
+        "step_timeout_ms": 300000
+      }
+    }
+  ]
+}
