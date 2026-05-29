@@ -38,6 +38,7 @@ from openagents.interfaces.context import (
     ContextAssemblerPlugin,
     ContextAssemblyResult,
 )
+from openagents_orchestration.token_counter import TokenCounter
 
 
 _DEFAULT_BUDGET_TOKENS = 12_000
@@ -66,6 +67,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config or {})
         self._cfg = self.Config.model_validate(self.config)
+        self._counter = TokenCounter(model=self._cfg.summary_model)
 
     @property
     def _budget(self) -> int:
@@ -85,7 +87,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
         artifacts = await session_manager.list_artifacts(request.session_id)
 
         layers_fired: list[str] = []
-        original_tokens = self._count_total(llm_client, transcript)
+        original_tokens = self._count_total(transcript)
 
         # ---- Layer 1: snip long tool outputs (>= 50%) ---------------------
         ratio = original_tokens / self._budget if self._budget else 0.0
@@ -94,7 +96,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
             if snipped_bytes > 0:
                 layers_fired.append("snip")
 
-        after_layer1 = self._count_total(llm_client, transcript)
+        after_layer1 = self._count_total(transcript)
         ratio = after_layer1 / self._budget if self._budget else 0.0
 
         # ---- Layer 2: LLM summarize older half (>= 70%) -------------------
@@ -102,7 +104,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
             transcript = await self._summarize_old_half(llm_client, transcript)
             layers_fired.append("summarize")
 
-        after_layer2 = self._count_total(llm_client, transcript)
+        after_layer2 = self._count_total(transcript)
         ratio = after_layer2 / self._budget if self._budget else 0.0
 
         # ---- Layer 3: hard collapse middle (>= 90%) -----------------------
@@ -116,7 +118,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
         else:
             omitted_artifacts = 0
 
-        final_tokens = self._count_total(llm_client, transcript)
+        final_tokens = self._count_total(transcript)
         return ContextAssemblyResult(
             transcript=transcript,
             session_artifacts=artifacts,
@@ -128,7 +130,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
                 "tokens_after": final_tokens,
                 "layers_fired": layers_fired,
                 "omitted_artifacts": omitted_artifacts,
-                "token_counter": self._token_counter_name(llm_client),
+                "token_counter": self._counter.name,
             },
         )
 
@@ -153,30 +155,8 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
 
     # ---- token counting helpers ------------------------------------------
 
-    def _measure(self, llm_client: Any, msg: dict[str, Any]) -> int:
-        text = _content_to_text(msg.get("content"))
-        if llm_client is None:
-            return max(1, len(text) // 4)
-        try:
-            return max(1, llm_client.count_tokens(text))
-        except (AttributeError, TypeError):
-            return max(1, len(text) // 4)
-
-    def _count_total(self, llm_client: Any, msgs: list[dict[str, Any]]) -> int:
-        return sum(self._measure(llm_client, m) for m in msgs)
-
-    def _token_counter_name(self, llm_client: Any) -> str:
-        if llm_client is None:
-            return "fallback_len//4"
-        provider = getattr(llm_client, "provider_name", "")
-        if provider == "openai_compatible":
-            try:
-                import tiktoken  # noqa: F401
-
-                return "tiktoken"
-            except ImportError:
-                return "fallback_len//4"
-        return "fallback_len//4"
+    def _count_total(self, msgs: list[dict[str, Any]]) -> int:
+        return self._counter.count_messages(msgs)
 
     # ---- Layer 1: snip ---------------------------------------------------
 

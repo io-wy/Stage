@@ -16,10 +16,6 @@ from typing import Any
 from openagents.errors.exceptions import PermanentToolError, RetryableToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-# Maximum number of parallel agent spawns in batch mode.
-_BATCH_PARALLEL_LIMIT = 3
-_batch_semaphore = asyncio.Semaphore(_BATCH_PARALLEL_LIMIT)
-
 from openagents_orchestration.models.task import TaskStatus
 from openagents_orchestration.state_board import AgentStatus
 
@@ -240,11 +236,10 @@ class SpawnAgentTool(ToolPlugin):
             )
 
         async def _spawn_one(tid: str) -> dict[str, Any]:
-            async with _batch_semaphore:
-                try:
-                    return await self._spawn_single(tid, board, runner_delegate, context)
-                except Exception as exc:
-                    return {"task_id": tid, "status": "failed", "error": str(exc)}
+            try:
+                return await self._spawn_single(tid, board, runner_delegate, context)
+            except Exception as exc:
+                return {"task_id": tid, "status": "failed", "error": str(exc)}
 
         results = await asyncio.gather(*[_spawn_one(tid) for tid in task_ids])
         succeeded = sum(1 for r in results if r.get("status") == "completed")
@@ -315,10 +310,10 @@ class SpawnAgentTool(ToolPlugin):
                     for art_path in arts:
                         if not os.path.exists(art_path) and dep.result_output:
                             preview = dep.result_output[:2000]
+                            suffix = "\n... (truncated)" if len(dep.result_output) > 2000 else ""
                             parts.append(
                                 f"\n# Content of {art_path} (from {dep_id} output, "
-                                f"file not yet on disk)\n{preview}"
-                                f"{'\n... (truncated)' if len(dep.result_output) > 2000 else ''}"
+                                f"file not yet on disk)\n{preview}{suffix}"
                             )
                             break  # Only inject first missing artifact to save tokens
 

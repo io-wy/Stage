@@ -31,6 +31,7 @@ from typing import Any
 from uuid import uuid4
 
 from openagents.errors.exceptions import ModelRetryError, ToolError
+from openagents.interfaces.capabilities import PATTERN_EXECUTE
 from openagents.interfaces.pattern import PatternPlugin, unwrap_tool_result
 
 from openagents_orchestration.prompts import CORE_PRINCIPLES, build_runtime_fragment, gather_runtime_context
@@ -74,32 +75,48 @@ _TOOL_RESULT_CHAR_LIMIT = 8_000
 class CoreCoderPattern(PatternPlugin):
     """Native tool-calling ReAct loop with CoreCoder semantics."""
 
+    _PRINCIPLES = CORE_PRINCIPLES
+
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config or {})
+        self.capabilities = {PATTERN_EXECUTE}
         self._max_steps = int(self.config.get("max_steps", _DEFAULT_MAX_STEPS))
         self._max_tokens = int(self.config.get("max_tokens", _DEFAULT_MAX_TOKENS))
         self._temperature = self.config.get("temperature")
         self._model_override = self.config.get("model")
 
     def compose_system_prompt(self, base_prompt: str) -> str:
-        """Inject CoreCoder principles + dynamic runtime fragment."""
+        """Inject principles + dynamic runtime fragment.
+
+        Static content (identity, rules) is separated from dynamic content
+        (runtime context, fragments) by __DYNAMIC_BOUNDARY__ so the caller
+        can split them into distinct system messages for prompt caching.
+        """
         ctx = self.context
-        fragments: list[str] = []
+        static_fragments: list[str] = []
+        dynamic_fragments: list[str] = []
+
         base = (base_prompt or "").strip()
         if base:
-            fragments.append(base)
-        fragments.append(CORE_PRINCIPLES.strip())
+            static_fragments.append(base)
+        static_fragments.append(self._PRINCIPLES.strip())
+
         if ctx is not None:
             runtime_kwargs = gather_runtime_context(ctx)
             runtime_fragment = build_runtime_fragment(**runtime_kwargs)
             if runtime_fragment.strip():
-                fragments.append(runtime_fragment.strip())
-            fragments.extend(
+                dynamic_fragments.append(runtime_fragment.strip())
+            dynamic_fragments.extend(
                 fragment.strip()
                 for fragment in ctx.system_prompt_fragments
                 if isinstance(fragment, str) and fragment.strip()
             )
-        return "\n\n".join(f for f in fragments if f)
+
+        static = "\n\n".join(f for f in static_fragments if f)
+        dynamic = "\n\n".join(f for f in dynamic_fragments if f)
+        if dynamic:
+            return f"{static}\n\n__DYNAMIC_BOUNDARY__\n\n{dynamic}"
+        return static
 
     async def execute(self) -> str:
         """Run the ReAct loop until the model emits a text-only turn."""
@@ -123,12 +140,13 @@ class CoreCoderPattern(PatternPlugin):
             messages.append({"role": "user", "content": ctx.input_text})
 
         system_prompt = self.compose_system_prompt("")
+        system_messages = _split_system_prompt(system_prompt)
         final_text = ""
         consecutive_empty = 0
         max_consecutive_empty = 2
         for step in range(1, self._max_steps + 1):
             response = await self._invoke_llm(
-                messages=[{"role": "system", "content": system_prompt}, *messages],
+                messages=[*system_messages, *messages],
                 tools=tool_schemas,
             )
 
@@ -202,6 +220,15 @@ class CoreCoderPattern(PatternPlugin):
                 messages.append({"role": "assistant", "content": assistant_content})
                 tool_result_blocks = await self._dispatch_tool_calls(tool_calls)
                 messages.append({"role": "user", "content": tool_result_blocks})
+
+            # Allow subclasses to decide whether to keep looping.
+            if not await self._should_continue_step(step):
+                final_text = "[CoreCoder] loop terminated by pattern condition."
+                ctx.state["__steps_used__"] = step
+                ctx.state["__tool_calls_used__"] = (
+                    sum(1 for m in messages if m.get("role") == "assistant" and "tool_calls" in m)
+                )
+                break
         else:  # for/else: ran out of steps
             await self.emit(
                 "pattern.step_budget_exhausted",
@@ -232,7 +259,8 @@ class CoreCoderPattern(PatternPlugin):
             "litellm"
         )
         schemas: list[dict[str, Any]] = []
-        for tool_id, bound in (ctx.tools or {}).items():
+        # Sort by tool_id to ensure deterministic ordering → stable cache fingerprints
+        for tool_id, bound in sorted((ctx.tools or {}).items(), key=lambda item: item[0]):
             raw = getattr(bound, "_tool", bound)
             description = getattr(raw, "description", "") or ""
             schema_fn = getattr(raw, "schema", None)
@@ -477,6 +505,14 @@ class CoreCoderPattern(PatternPlugin):
     def _uses_openai_conversation(self) -> bool:
         return self._provider_name() != "anthropic"
 
+    async def _should_continue_step(self, step: int) -> bool:
+        """Hook for subclasses to terminate the ReAct loop early.
+
+        Return False to stop looping before max_steps is reached.
+        Called after each tool-dispatch turn (not after text-only turns).
+        """
+        return True
+
     def _assistant_text_message(
         self,
         text: str,
@@ -599,3 +635,29 @@ def _truncate(text: str) -> str:
         return text
     head = text[: _TOOL_RESULT_CHAR_LIMIT - 200]
     return head + "\n... (tool output truncated)"
+
+
+# ---- prompt-cache boundary helpers ---------------------------------------
+
+_SYSTEM_PROMPT_BOUNDARY = "__DYNAMIC_BOUNDARY__"
+
+
+def _split_system_prompt(system_prompt: str) -> list[dict[str, Any]]:
+    """Split a system prompt at the dynamic boundary into cacheable blocks.
+
+    Returns one or two ``{"role": "system", "content": ...}`` messages.
+    The static prefix (before the boundary) is cacheable across turns;
+    the dynamic suffix changes per turn.
+    """
+    if _SYSTEM_PROMPT_BOUNDARY not in system_prompt:
+        return [{"role": "system", "content": system_prompt}]
+
+    static_part, dynamic_part = system_prompt.split(_SYSTEM_PROMPT_BOUNDARY, 1)
+    messages: list[dict[str, Any]] = []
+    static = static_part.strip()
+    dynamic = dynamic_part.strip()
+    if static:
+        messages.append({"role": "system", "content": static})
+    if dynamic:
+        messages.append({"role": "system", "content": dynamic})
+    return messages

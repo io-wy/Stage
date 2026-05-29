@@ -108,6 +108,32 @@ def apply_sdk_patches() -> None:
     provider._parse_tool_calls = _safe_parse_tool_calls
 
 
+def patch_tool_capabilities() -> None:
+    """Auto-inject TOOL_INVOKE capability into all ToolPlugin subclasses.
+
+    The SDK loader validates that every tool declares TOOL_INVOKE, but the
+    base ToolPlugin class does not set it. We patch it once at import time
+    so concrete tool subclasses inherit the capability automatically.
+    """
+    try:
+        from openagents.interfaces.capabilities import TOOL_INVOKE
+        from openagents.interfaces.tool import ToolPlugin
+    except Exception:
+        return
+
+    # If ToolPlugin itself already has it, skip
+    if TOOL_INVOKE in getattr(ToolPlugin, "capabilities", set()):
+        return
+
+    original_init = ToolPlugin.__init__
+
+    def _patched_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        self.capabilities = {TOOL_INVOKE}
+
+    ToolPlugin.__init__ = _patched_init
+
+
 def is_retryable_llm_error(exc: BaseException) -> bool:
     """Best-effort classifier for flaky upstream/provider failures."""
     text = str(exc).lower()

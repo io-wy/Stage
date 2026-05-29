@@ -59,6 +59,7 @@ class ResidentAgent:
         runner: Any,
         board: Any,
         max_idle_s: float = 300.0,
+        persist_dir: Path | None = None,
     ):
         self.resident_id = resident_id
         self.agent_type = agent_type
@@ -70,7 +71,14 @@ class ResidentAgent:
         self._active = False
         self._transcript: list[dict[str, Any]] = []
         self._state = ResidentState(resident_id=resident_id, agent_type=agent_type)
-        self._persist_path = Path(f".residents/{resident_id}.json")
+        if persist_dir is not None:
+            self._persist_path = Path(persist_dir) / "residents" / f"{resident_id}.json"
+        else:
+            self._persist_path = Path(f".residents/{resident_id}.json")
+
+    @property
+    def state(self) -> ResidentState:
+        return self._state
 
     # -- lifecycle -----------------------------------------------------------
 
