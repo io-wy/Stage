@@ -129,3 +129,16 @@ class DirectorPattern(CoreCoderPattern):
         if board.budget.exhausted:
             return False
         return True
+
+    async def _should_accept_text_response(self, text: str) -> bool:
+        """Director must call a tool on every turn.
+
+        Only accept text when finalize has already been called.
+        """
+        ctx = self.context
+        if ctx is None or ctx.deps is None:
+            return True
+        board = getattr(ctx.deps, "state_board", None)
+        if board is None:
+            return True
+        return bool(board._final_summary)

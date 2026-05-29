@@ -157,19 +157,54 @@ class CoreCoderPattern(PatternPlugin):
             if not tool_calls:
                 stripped = text_part.strip()
                 if stripped:
-                    # Real text-only final answer.
-                    final_text = stripped
-                    messages.append(self._assistant_text_message(stripped, assistant_content))
-                    ctx.state["__steps_used__"] = step
-                    ctx.state["__tool_calls_used__"] = (
-                        sum(1 for m in messages if m.get("role") == "assistant" and "tool_calls" in m)
-                    )
+                    # Subclasses can veto text-only responses (e.g. Director
+                    # must always end with a tool call or finalize).
+                    if await self._should_accept_text_response(stripped):
+                        final_text = stripped
+                        messages.append(self._assistant_text_message(stripped, assistant_content))
+                        ctx.state["__steps_used__"] = step
+                        ctx.state["__tool_calls_used__"] = (
+                            sum(1 for m in messages if m.get("role") == "assistant" and "tool_calls" in m)
+                        )
+                        await self.emit(
+                            "pattern.completed",
+                            steps=step,
+                            final_chars=len(final_text),
+                        )
+                        break
+
+                    # Text was rejected — nudge the model back into the loop.
+                    consecutive_text_rejected = ctx.state.get("__consecutive_text_rejected__", 0) + 1
+                    ctx.state["__consecutive_text_rejected__"] = consecutive_text_rejected
                     await self.emit(
-                        "pattern.completed",
-                        steps=step,
-                        final_chars=len(final_text),
+                        "pattern.text_rejected",
+                        step=step,
+                        consecutive=consecutive_text_rejected,
                     )
-                    break
+                    if consecutive_text_rejected >= 2:
+                        # After two rejections, accept it to avoid infinite loops.
+                        final_text = (
+                            f"[CoreCoder] text response rejected twice; accepting to avoid loop.\n\n"
+                            f"{stripped}"
+                        )
+                        ctx.state["__steps_used__"] = step
+                        ctx.state["__tool_calls_used__"] = (
+                            sum(1 for m in messages if m.get("role") == "assistant" and "tool_calls" in m)
+                        )
+                        break
+
+                    messages.append(self._assistant_text_message(stripped, assistant_content))
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            "Your text response was not accepted. "
+                            "You must call a tool on every turn. "
+                            "If all tasks are complete, call finalize. "
+                            "If a task failed, call replan, retry, ask_human, or spawn_resident. "
+                            "Do not output tool-less text."
+                        ),
+                    })
+                    continue
                 # Empty response — model didn't emit a tool_call AND didn't say
                 # anything. Nudge it back into the loop instead of returning ""
                 # as the "final answer". After N consecutive empties, give up.
@@ -510,6 +545,14 @@ class CoreCoderPattern(PatternPlugin):
 
         Return False to stop looping before max_steps is reached.
         Called after each tool-dispatch turn (not after text-only turns).
+        """
+        return True
+
+    async def _should_accept_text_response(self, text: str) -> bool:
+        """Hook for subclasses to reject text-only responses.
+
+        Return False to force the model back into the tool-calling loop.
+        Useful for agents (like Director) that must always end with a tool call.
         """
         return True
 
