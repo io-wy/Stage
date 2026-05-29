@@ -1,0 +1,39 @@
+{
+  "objective": "写一个 hello world Python 脚本",
+  "tasks": [
+    {
+      "task_id": "t1",
+      "description": "创建 Hello World Python 脚本",
+      "agent_type": "coder",
+      "dependencies": [],
+      "expected_artifacts": [
+        "hello_world.py"
+      ],
+      "estimated_complexity": 1,
+      "status": "pending",
+      "error": null,
+      "retry_count": 0,
+      "input_context": "编写一个最简单的 Python 脚本，运行后在控制台输出 `Hello, World!`。文件名建议为 `hello_world.py`。代码应简洁、可直接通过 `python hello_world.py` 执行。",
+      "result_output": "",
+      "actual_artifacts": []
+    },
+    {
+      "task_id": "t2",
+      "description": "验证脚本可运行并输出正确内容",
+      "agent_type": "tester",
+      "dependencies": [
+        "t1"
+      ],
+      "expected_artifacts": [
+        "test_result.txt"
+      ],
+      "estimated_complexity": 1,
+      "status": "pending",
+      "error": null,
+      "retry_count": 0,
+      "input_context": "运行 `python hello_world.py`，确认程序正常退出，并且标准输出严格包含 `Hello, World!`。如发现问题，记录需要修复的内容。",
+      "result_output": "",
+      "actual_artifacts": []
+    }
+  ]
+}
