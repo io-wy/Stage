@@ -47,6 +47,13 @@ class AgentState:
     fallback_attempts: int = 0
     health_status: str = "healthy"  # healthy | warning | critical
 
+    # -- behavioral profiling (populated by SDK event bus bridge) --
+    tool_call_counts: dict[str, int] = field(default_factory=dict)
+    llm_call_count: int = 0
+    total_llm_latency_ms: float = 0.0
+    first_artifact_time: float = 0.0
+    error_types: list[str] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "agent_id": self.agent_id,
@@ -64,6 +71,10 @@ class AgentState:
             "api_error_count": self.api_error_count,
             "fallback_attempts": self.fallback_attempts,
             "health_status": self.health_status,
+            "tool_call_counts": self.tool_call_counts,
+            "llm_call_count": self.llm_call_count,
+            "avg_llm_latency_ms": round(self.total_llm_latency_ms / max(self.llm_call_count, 1), 1) if self.llm_call_count else 0,
+            "first_artifact_time": self.first_artifact_time,
         }
 
 
@@ -134,7 +145,15 @@ class Event:
 class StateBoard:
     """Global state panel — the single source of truth for the Director."""
 
-    def __init__(self, objective: str, budget: Budget | None = None, *, echo: bool = True):
+    def __init__(
+        self,
+        objective: str,
+        budget: Budget | None = None,
+        *,
+        echo: bool = True,
+        recorder: Any = None,
+        snapshotter: Any = None,
+    ):
         self.objective = objective
         self.tasks: dict[str, TaskNode] = {}
         self.agents: dict[str, AgentState] = {}
@@ -146,6 +165,9 @@ class StateBoard:
         self._echo = echo
         self._human_questions: list[dict[str, Any]] = []
         self._pending_messages: list[dict[str, Any]] = []
+        self._recorder = recorder
+        self._snapshotter = snapshotter
+        self._observers: list[Any] = []  # event bus subscribers
 
     # -- task management -----------------------------------------------------
 
@@ -153,9 +175,14 @@ class StateBoard:
         """Import tasks from a TaskGraph."""
         for task in graph.tasks:
             self.tasks[task.task_id] = task
+        self.log_event(
+            "tasks.imported",
+            message=f"Imported {len(graph.tasks)} task(s) from graph",
+        )
 
     def add_task(self, task: TaskNode) -> None:
         self.tasks[task.task_id] = task
+        self.log_event("task.added", task_id=task.task_id, message=f"Added {task.agent_type} task: {task.description[:80]}")
 
     def update_task(self, task_id: str, **fields: Any) -> None:
         if task_id not in self.tasks:
@@ -165,12 +192,32 @@ class StateBoard:
         for key, value in fields.items():
             if hasattr(task, key):
                 old = getattr(task, key)
+                # Coerce string status to TaskStatus enum
+                if key == "status" and isinstance(value, str):
+                    from openagents_orchestration.models.task import TaskStatus
+                    try:
+                        value = TaskStatus(value)
+                    except ValueError:
+                        pass
                 if old != value:
                     changed.append(f"{key}={value}")
                 setattr(task, key, value)
         if changed:
-            status = fields.get("status", task.status.value)
-            self.log_event(f"task.{status}", task_id=task_id, message=", ".join(changed))
+            status = fields.get("status", task.status)
+            status_val = status.value if hasattr(status, "value") else status
+            # Serialize fields for event replay (resume)
+            serializable_fields = {}
+            for k, v in fields.items():
+                if hasattr(v, "value"):
+                    serializable_fields[k] = v.value
+                else:
+                    serializable_fields[k] = v
+            self.log_event(
+                f"task.{status_val}",
+                task_id=task_id,
+                message=", ".join(changed),
+                fields=serializable_fields,
+            )
 
     def get_task(self, task_id: str) -> TaskNode | None:
         return self.tasks.get(task_id)
@@ -201,6 +248,7 @@ class StateBoard:
     def register_agent(self, agent_id: str, agent_type: str) -> None:
         if agent_id not in self.agents:
             self.agents[agent_id] = AgentState(agent_id=agent_id, agent_type=agent_type)
+            self.log_event("agent.registered", agent_id=agent_id, message=f"Registered {agent_type}")
 
     def update_agent(self, agent_id: str, **fields: Any) -> None:
         if agent_id not in self.agents:
@@ -210,12 +258,30 @@ class StateBoard:
         for key, value in fields.items():
             if hasattr(agent, key):
                 old = getattr(agent, key)
+                # Coerce string status to AgentStatus enum
+                if key == "status" and isinstance(value, str):
+                    try:
+                        value = AgentStatus(value)
+                    except ValueError:
+                        pass
                 if old != value:
                     changed.append(f"{key}={value}")
                 setattr(agent, key, value)
         if changed:
-            status = fields.get("status", agent.status.value)
-            self.log_event(f"agent.{status}", agent_id=agent_id, message=", ".join(changed))
+            status = fields.get("status", agent.status)
+            status_val = status.value if hasattr(status, "value") else status
+            serializable_fields = {}
+            for k, v in fields.items():
+                if hasattr(v, "value"):
+                    serializable_fields[k] = v.value
+                else:
+                    serializable_fields[k] = v
+            self.log_event(
+                f"agent.{status_val}",
+                agent_id=agent_id,
+                message=", ".join(changed),
+                fields=serializable_fields,
+            )
 
     def get_agent(self, agent_id: str) -> AgentState | None:
         return self.agents.get(agent_id)
@@ -224,14 +290,37 @@ class StateBoard:
 
     def register_resident(self, state: Any) -> None:
         self.residents[state.resident_id] = state
+        self.log_event(
+            "resident.registered",
+            agent_id=state.resident_id,
+            message=f"Registered {state.agent_type} resident",
+        )
 
     def update_resident(self, resident_id: str, **fields: Any) -> None:
         if resident_id not in self.residents:
             return
         resident = self.residents[resident_id]
+        changed: list[str] = []
         for key, value in fields.items():
             if hasattr(resident, key):
+                old = getattr(resident, key)
+                if old != value:
+                    changed.append(f"{key}={value}")
                 setattr(resident, key, value)
+        if changed:
+            status = fields.get("status", resident.status)
+            serializable_fields = {}
+            for k, v in fields.items():
+                if hasattr(v, "value"):
+                    serializable_fields[k] = v.value
+                else:
+                    serializable_fields[k] = v
+            self.log_event(
+                f"resident.{status}",
+                agent_id=resident_id,
+                message=", ".join(changed),
+                fields=serializable_fields,
+            )
 
     def get_resident(self, resident_id: str) -> Any | None:
         return self.residents.get(resident_id)
@@ -251,7 +340,11 @@ class StateBoard:
                 claimed_by=task_id,
             )
         if paths:
-            self.log_event("artifact.claimed", message=f"{len(paths)} artifact(s) by {task_id}: {paths}")
+            self.log_event(
+                "artifact.claimed",
+                message=f"{len(paths)} artifact(s) by {task_id}: {paths}",
+                paths=paths,
+            )
 
     def verify_artifact(self, path: str, exists: bool = True) -> None:
         rec = self.artifacts.get(path)
@@ -274,6 +367,21 @@ class StateBoard:
             payload=dict(payload),
         )
         self.events.append(evt)
+        # Notify observers (fire-and-forget, errors must not propagate)
+        for obs in self._observers:
+            try:
+                obs(evt)
+            except Exception:
+                pass
+        # Persist to JSONL if recorder is attached
+        if self._recorder is not None:
+            self._recorder.append(
+                event_type,
+                task_id=task_id,
+                agent_id=agent_id,
+                message=message,
+                **payload,
+            )
         if self._echo:
             ts_str = time.strftime("%H:%M:%S", time.localtime(evt.ts))
             parts = [f"[{ts_str}]"]
@@ -285,6 +393,13 @@ class StateBoard:
             if message:
                 parts.append(f"— {message}")
             print(" ".join(parts), file=sys.stderr, flush=True)
+        # Trigger snapshot if threshold reached
+        self._maybe_snapshot()
+
+    def _maybe_snapshot(self) -> None:
+        """Trigger periodic snapshot if snapshotter is attached."""
+        if self._snapshotter is not None:
+            self._snapshotter.on_mutation(self)
 
     def format_events(self) -> str:
         """Return a human-readable event timeline."""
@@ -311,13 +426,13 @@ class StateBoard:
         before = self.budget.token_used
         self.budget.token_used += n
         if n > 0:
-            self.log_event("budget.tokens", message=f"+{n} (was {before}, now {self.budget.token_used})")
+            self.log_event("budget.tokens", message=f"+{n} (was {before}, now {self.budget.token_used})", n=n)
 
     def add_steps(self, n: int) -> None:
         before = self.budget.steps_taken
         self.budget.steps_taken += n
         if n > 0:
-            self.log_event("budget.steps", message=f"+{n} (was {before}, now {self.budget.steps_taken})")
+            self.log_event("budget.steps", message=f"+{n} (was {before}, now {self.budget.steps_taken})", n=n)
 
     def increment_step(self) -> None:
         self.budget.steps_taken += 1
@@ -408,6 +523,13 @@ class StateBoard:
             "content": content,
             "ts": time.time(),
         })
+        self.log_event(
+            "mail.sent",
+            agent_id=from_id,
+            message=f"To {to_id}: {content[:100]}",
+            to_id=to_id,
+            content=content,
+        )
 
     def messages_for(self, recipient: str) -> list[dict[str, Any]]:
         """Return messages addressed to this recipient (or '*')."""
@@ -426,7 +548,13 @@ class StateBoard:
                 m for m in self._pending_messages
                 if m.get("to") not in (recipient, "*")
             ]
-        return before - len(self._pending_messages)
+        cleared = before - len(self._pending_messages)
+        if cleared > 0:
+            self.log_event(
+                "mail.cleared",
+                message=f"Cleared {cleared} message(s) for {recipient or 'all'}",
+            )
+        return cleared
 
     # -- human questions -----------------------------------------------------
 
@@ -440,6 +568,14 @@ class StateBoard:
             "options": options,
             "answer": None,
         })
+        self.log_event(
+            "human.asked",
+            agent_id=from_agent,
+            message=f"{qid}: {question[:100]}",
+            question=question,
+            options=options,
+            from_agent=from_agent,
+        )
         return qid
 
     def reply_human(self, qid: str, answer: str) -> bool:
@@ -452,6 +588,8 @@ class StateBoard:
                 self.log_event(
                     "human.replied",
                     message=f"{qid}: {answer[:100]}",
+                    qid=qid,
+                    answer=answer,
                 )
                 return True
         return False
@@ -508,6 +646,136 @@ class StateBoard:
             "all_done": self.all_terminal(),
             "waiting_for_human": len(unanswered),
         }
+
+    # -- full state for persistence -----------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        """Full state dict for persistence / resume.
+
+        Includes everything needed to reconstruct this StateBoard.
+        """
+        from openagents_orchestration.models.task import TaskGraph
+
+        return {
+            "objective": self.objective,
+            "budget": self.budget.to_dict(),
+            "tasks": [t.to_dict() for t in self.tasks.values()],
+            "agents": {aid: a.to_dict() for aid, a in self.agents.items()},
+            "residents": {rid: r.to_dict() for rid, r in self.residents.items()},
+            "artifacts": {path: a.to_dict() for path, a in self.artifacts.items()},
+            "events": [
+                {
+                    "ts": e.ts,
+                    "type": e.event_type,
+                    "task_id": e.task_id,
+                    "agent_id": e.agent_id,
+                    "message": e.message,
+                    "payload": e.payload,
+                }
+                for e in self.events
+            ],
+            "human_questions": list(self._human_questions),
+            "pending_messages": list(self._pending_messages),
+            "final_summary": self._final_summary,
+        }
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        echo: bool = True,
+        recorder: Any = None,
+        snapshotter: Any = None,
+        reset_budget_clock: bool = True,
+    ) -> StateBoard:
+        """Reconstruct a StateBoard from a full state dict."""
+        from openagents_orchestration.models.task import TaskNode, TaskStatus
+
+        objective = data.get("objective", "")
+        budget_data = data.get("budget", {})
+        budget = Budget(
+            token_limit=budget_data.get("token_limit", 50_000),
+            token_used=budget_data.get("token_used", 0),
+            time_limit_s=budget_data.get("time_limit_s", 300.0),
+            max_steps=budget_data.get("max_steps", 20),
+        )
+        # Restore mutable budget fields from data
+        if reset_budget_clock:
+            # Resume: reset start_time so budget time is not immediately exhausted
+            budget.start_time = time.time()
+        else:
+            budget.start_time = budget_data.get("start_time", time.time())
+        budget.steps_taken = budget_data.get("steps_taken", 0)
+
+        board = cls(
+            objective=objective,
+            budget=budget,
+            echo=echo,
+            recorder=recorder,
+            snapshotter=snapshotter,
+        )
+
+        # Restore tasks
+        for tdata in data.get("tasks", []):
+            task = TaskNode.from_dict(tdata)
+            board.tasks[task.task_id] = task
+
+        # Restore agents
+        for aid, adata in data.get("agents", {}).items():
+            agent = AgentState(
+                agent_id=adata.get("agent_id", aid),
+                agent_type=adata.get("agent_type", "coder"),
+                status=AgentStatus(adata.get("status", "idle")),
+                current_task=adata.get("current_task"),
+                output_so_far=adata.get("output_so_far", ""),
+                files_claimed=list(adata.get("files_claimed", [])),
+                files_verified=list(adata.get("files_verified", [])),
+                start_time=adata.get("start_time", 0.0),
+                end_time=adata.get("end_time", 0.0),
+                token_used=adata.get("token_used", 0),
+                retry_count=adata.get("retry_count", 0),
+                steps_used=adata.get("steps_used", 0),
+                consecutive_tool_failures=adata.get("consecutive_tool_failures", 0),
+                consecutive_empty_responses=adata.get("consecutive_empty_responses", 0),
+                api_error_count=adata.get("api_error_count", 0),
+                last_artifact_time=adata.get("last_artifact_time", 0.0),
+                fallback_attempts=adata.get("fallback_attempts", 0),
+                health_status=adata.get("health_status", "healthy"),
+                tool_call_counts=dict(adata.get("tool_call_counts", {})),
+                llm_call_count=adata.get("llm_call_count", 0),
+                total_llm_latency_ms=adata.get("total_llm_latency_ms", 0.0),
+                first_artifact_time=adata.get("first_artifact_time", 0.0),
+                error_types=list(adata.get("error_types", [])),
+            )
+            board.agents[aid] = agent
+
+        # Restore artifacts
+        for path, adata in data.get("artifacts", {}).items():
+            board.artifacts[path] = ArtifactRecord(
+                path=adata.get("path", path),
+                status=adata.get("status", "claimed"),
+                claimed_by=adata.get("claimed_by", ""),
+                verified_at=adata.get("verified_at", 0.0),
+            )
+
+        # Restore events
+        for edata in data.get("events", []):
+            board.events.append(Event(
+                ts=edata.get("ts", 0.0),
+                event_type=edata.get("type", ""),
+                task_id=edata.get("task_id"),
+                agent_id=edata.get("agent_id"),
+                message=edata.get("message", ""),
+                payload=edata.get("payload", {}),
+            ))
+
+        # Restore human questions and messages
+        board._human_questions = list(data.get("human_questions", []))
+        board._pending_messages = list(data.get("pending_messages", []))
+        board._final_summary = data.get("final_summary", "")
+
+        return board
 
     # -- snapshot for LLM ----------------------------------------------------
 
