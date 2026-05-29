@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from openagents_orchestration.patterns.corecoder import CoreCoderPattern
 
 
@@ -18,7 +16,7 @@ You are the Director — an orchestrator that coordinates multiple AI agents to 
    - What files have been produced
    - How much budget remains
    - `pending_messages` — if > 0, call `check_messages` to read them
-   - `unanswered_human_questions` — if > 0, call `check_messages` for replies
+   - `unanswered_human_questions` — if > 0, DO NOT spawn new agents; call `check_messages` and wait for human replies
    - If show_state or agent output mentions a file path, artifact, or patch target,
      inspect it with `read_file` before choosing a fallback
 
@@ -34,7 +32,7 @@ You are the Director — an orchestrator that coordinates multiple AI agents to 
    - Ready (dependencies met) and independent of each other
    - Then spawn them together using `spawn_agent` with `task_ids: ["t1", "t2", ...]`
 
-3. **弹性 fallback — 目标是完成任务，不是省钱。** 看到任务失败时：
+3. **弹性 fallback — 目标是完成任务，不是省钱.** 看到任务失败时：
    - 先看 show_state 中的 agent 产出（artifacts）和资源消耗（steps_used, token_used）
    - 再用 `read_file` 检查相关文件、产物或失败上下文，确认当前项目进度
    - 结合 spawn_agent 返回的 `[recommendation: ...]` 和 StateBoard 的观察建议
@@ -48,7 +46,13 @@ You are the Director — an orchestrator that coordinates multiple AI agents to 
 
 4. **Delegate, don't do.** Use `spawn_agent` for real work. Use local tools (read_file, bash) only for quick verification (< 30s). Do NOT write code yourself.
 
-5. **Know when to stop.** Call `finalize` when:
+5. **Leverage the Observer.** The Observer resident is watching the system.
+   - Every 3-5 steps, use `send_message` to ask the observer to check status
+   - If the observer reports critical issues, prioritize addressing them
+   - If the observer says "all clear", continue normal scheduling
+   - The observer's alerts appear in your `check_messages` as `[CRITICAL]`/`[WARNING]`/`[INFO]`
+
+6. **Know when to stop.** Call `finalize` when:
    - All tasks are completed
    - Or remaining tasks are non-critical and cannot be fixed
    - Include an honest summary: what worked, what failed, what needs human help
@@ -103,27 +107,25 @@ When assigning a task, consider whether a skill can do the job faster/cheaper th
 
 
 class DirectorPattern(CoreCoderPattern):
-    """CoreCoderPattern with Director-specific system prompt."""
+    """CoreCoderPattern with Director-specific system prompt and lifecycle hook."""
 
-    def compose_system_prompt(self, base_prompt: str) -> str:
+    _PRINCIPLES = DIRECTOR_PRINCIPLES
+
+    async def _should_continue_step(self, step: int) -> bool:
+        """Director stops looping when the objective is achieved or budget is gone."""
         ctx = self.context
-        fragments: list[str] = []
-        base = (base_prompt or "").strip()
-        if base:
-            fragments.append(base)
-        fragments.append(DIRECTOR_PRINCIPLES.strip())
-        if ctx is not None:
-            from openagents_orchestration.prompts import (
-                gather_runtime_context,
-                build_runtime_fragment,
-            )
-            runtime_kwargs = gather_runtime_context(ctx)
-            runtime_fragment = build_runtime_fragment(**runtime_kwargs)
-            if runtime_fragment.strip():
-                fragments.append(runtime_fragment.strip())
-            fragments.extend(
-                fragment.strip()
-                for fragment in getattr(ctx, "system_prompt_fragments", [])
-                if isinstance(fragment, str) and fragment.strip()
-            )
-        return "\n\n".join(f for f in fragments if f)
+        if ctx is None or ctx.deps is None:
+            return True
+        board = getattr(ctx.deps, "state_board", None)
+        if board is None:
+            return True
+        # finalize called — objective is done
+        if board._final_summary:
+            return False
+        # Nothing left to do
+        if not board.has_actionable():
+            return False
+        # Global budget exhausted
+        if board.budget.exhausted:
+            return False
+        return True

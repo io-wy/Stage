@@ -35,7 +35,7 @@
       "pattern": {
         "impl": "openagents_orchestration.patterns.director.DirectorPattern",
         "config": {
-          "max_steps": 20,
+          "max_steps": 100,
           "max_tokens": 4096,
           "temperature": 0.2
         }
@@ -455,6 +455,81 @@
       "runtime": {
         "max_steps": 15,
         "step_timeout_ms": 300000
+      }
+    },
+    {
+      "id": "observer",
+      "name": "Observer Agent",
+      "memory": {
+        "type": "window_buffer",
+        "config": {
+          "window_size": 8
+        }
+      },
+      "pattern": {
+        "impl": "openagents_orchestration.patterns.corecoder.CoreCoderPattern",
+        "config": {
+          "max_steps": 5,
+          "max_tokens": 2048,
+          "temperature": 0.1
+        }
+      },
+      "context_assembler": {
+        "impl": "openagents_orchestration.context.CompressingContextAssembler",
+        "config": {
+          "max_input_tokens": 8000,
+          "reserve_for_response": 2048,
+          "snip_threshold": 0.5,
+          "summarize_threshold": 0.7,
+          "hard_collapse_threshold": 0.9
+        }
+      },
+      "llm": {
+        "provider": "${LLM_PROVIDER:-openai_compatible}",
+        "api_base": "${LLM_API_BASE}",
+        "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+        "model": "${LLM_MODEL}",
+        "temperature": 0.1,
+        "max_tokens": 2048,
+        "timeout_ms": 60000
+      },
+      "tools": [
+        {
+          "id": "inspect_state",
+          "impl": "openagents_orchestration.tools.inspect_state.InspectStateTool"
+        },
+        {
+          "id": "analyze_event_pattern",
+          "impl": "openagents_orchestration.tools.analyze_event_pattern.AnalyzeEventPatternTool"
+        },
+        {
+          "id": "diagnose_agent",
+          "impl": "openagents_orchestration.tools.diagnose_agent.DiagnoseAgentTool"
+        },
+        {
+          "id": "predict_budget",
+          "impl": "openagents_orchestration.tools.predict_budget.PredictBudgetTool"
+        },
+        {
+          "id": "send_alert",
+          "impl": "openagents_orchestration.tools.send_alert.SendAlertTool"
+        },
+        {
+          "id": "verify_alert_effectiveness",
+          "impl": "openagents_orchestration.tools.verify_alert_effectiveness.VerifyAlertEffectivenessTool"
+        },
+        {
+          "id": "send_message",
+          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+        },
+        {
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+        }
+      ],
+      "runtime": {
+        "max_steps": 5,
+        "step_timeout_ms": 120000
       }
     },
     {
