@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -32,17 +33,38 @@ from openagents.plugins.builtin.events.async_event_bus import AsyncEventBus
 from openagents.plugins.loader import LoadedAgentPlugins, load_agent_plugins
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.health_monitor import HealthMonitor
 from openagents_orchestration.resident import ResidentAgent
 from openagents_orchestration.utils.runtime_compat import (
     apply_sdk_patches,
     extract_result_error_message,
     is_retryable_llm_error,
+    patch_tool_capabilities,
     run_result_error_kwargs,
 )
 from openagents_orchestration.state_board import Budget, StateBoard
+from openagents_orchestration.persistence import EventRecorder, StateSnapshotter, SessionResumer
 
 apply_sdk_patches()
+patch_tool_capabilities()
+
+
+class _AgentScopedEventBus:
+    """Wraps the global event bus to inject agent_id into every SDK emit."""
+
+    def __init__(self, inner: Any, agent_id: str):
+        self._inner = inner
+        self._agent_id = agent_id
+
+    async def emit(self, event_name: str, **payload: Any) -> Any:
+        payload["agent_id"] = self._agent_id
+        return await self._inner.emit(event_name, **payload)
+
+    def subscribe(self, event_name: str, handler: Any) -> None:
+        return self._inner.subscribe(event_name, handler)
+
+    @property
+    def history(self) -> list[Any]:
+        return self._inner.history
 
 
 @dataclass
@@ -91,7 +113,12 @@ class OrchestratorRunner:
         report = await runner.run("Build a FastAPI TODO API")
     """
 
-    def __init__(self, config_path: str | Path):
+    def __init__(
+        self,
+        config_path: str | Path,
+        *,
+        persist_dir: str | None = None,
+    ):
         self._config_path = Path(config_path)
         self._config = load_config(self._config_path)
         self._agents_by_id = {a.id: a for a in self._config.agents}
@@ -106,7 +133,15 @@ class OrchestratorRunner:
             self._event_bus = AsyncEventBus()
         self._state_board: StateBoard | None = None
         self._deps: RunnerDeps | None = None
-        self._health_monitor: HealthMonitor | None = None
+        self._spawn_sem = asyncio.Semaphore(3)
+        self._observer_resident_id: str | None = None
+        # Persistence layer
+        self._persist_dir = Path(persist_dir) if persist_dir else None
+        self._session_id: str | None = None
+        self._recorder: EventRecorder | None = None
+        self._snapshotter: StateSnapshotter | None = None
+        self._resumer: SessionResumer | None = None
+        self._session_dir: Path | None = None
 
     @property
     def state_board(self) -> StateBoard | None:
@@ -114,65 +149,144 @@ class OrchestratorRunner:
 
     # -- public API ----------------------------------------------------------
 
-    async def run(self, objective: str) -> Any:
+    async def run(
+        self,
+        objective: str,
+        *,
+        session_id: str | None = None,
+        resume: bool = False,
+    ) -> Any:
         """Run full orchestration for an objective.
+
+        Args:
+            objective: The high-level goal.
+            session_id: Optional session ID for persistence. If not provided,
+                a new UUID is generated.
+            resume: If True and a persisted session with ``session_id`` exists,
+                load it and continue from the saved state.
 
         Returns DeliveryReport.
         """
         import sys
-        print(f"\n[Orchestrator] Starting: {objective}", file=sys.stderr, flush=True)
 
+        self._session_id = session_id or f"session-{uuid.uuid4().hex[:8]}"
+        print(f"\n[Orchestrator] Starting: {objective}", file=sys.stderr, flush=True)
+        print(f"[Orchestrator] Session: {self._session_id}", file=sys.stderr, flush=True)
+
+        # Initialize persistence layer
+        if self._persist_dir is not None:
+            self._session_dir = self._persist_dir / self._session_id
+            self._session_dir.mkdir(parents=True, exist_ok=True)
+            self._recorder = EventRecorder(self._session_dir, self._session_id)
+            self._snapshotter = StateSnapshotter(self._session_dir / "snapshots")
+            self._resumer = SessionResumer(self._persist_dir)
+            print(
+                f"[Orchestrator] Persistence: {self._session_dir}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        # -- resume path -------------------------------------------------------
+        if resume and self._resumer is not None:
+            loaded = self._resumer.load(self._session_id)
+            if loaded.snapshot is not None:
+                print(
+                    "[Orchestrator] Resuming from snapshot...",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                self._state_board = StateBoard.from_dict(
+                    loaded.snapshot,
+                    recorder=self._recorder,
+                    snapshotter=self._snapshotter,
+                )
+                # Replay events after snapshot
+                if loaded.events_after:
+                    from openagents_orchestration.persistence import EventReplayer
+                    EventReplayer().replay(self._state_board, loaded.events_after)
+                    print(
+                        f"[Orchestrator] Replayed {len(loaded.events_after)} event(s)",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                print(
+                    f"[Orchestrator] Resumed: {self._state_board.progress_summary()}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                # Skip decomposition — tasks already loaded
+                return await self._continue_run(objective)
+
+        # -- fresh run path ----------------------------------------------------
         # 1. Initial decomposition
         print("[Orchestrator] Decomposing objective into tasks...", file=sys.stderr, flush=True)
         task_graph = await self._initial_decompose(objective)
         print(f"[Orchestrator] Decomposed into {len(task_graph.tasks)} task(s)", file=sys.stderr, flush=True)
 
-        # 2. StateBoard
+        # 2. StateBoard (with persistence hooks)
         self._state_board = StateBoard(
             objective=objective,
             budget=Budget(
-                token_limit=50_000,
-                time_limit_s=600.0,
-                max_steps=20,
+                token_limit=200_000,
+                time_limit_s=1200.0,
+                max_steps=100,
             ),
+            recorder=self._recorder,
+            snapshotter=self._snapshotter,
         )
         self._state_board.add_tasks(task_graph)
 
-        # 3. Start HealthMonitor
-        self._health_monitor = HealthMonitor(self._state_board)
-        await self._health_monitor.start()
+        return await self._continue_run(objective)
 
-        # 4. Deps for tools
+    async def _continue_run(self, objective: str) -> Any:
+        """Continue orchestration from an initialized StateBoard."""
+        import sys
+
+        if self._state_board is None:
+            raise RuntimeError("StateBoard was not initialized")
+
+        # 1. Bridge SDK event bus → StateBoard (for behavioral profiling)
+        self._bridge_sdk_events()
+
+        # 2. Spawn observer resident
+        await self._spawn_observer_resident()
+
+        # 3. Deps for tools
         self._deps = RunnerDeps(
             state_board=self._state_board,
             runner_delegate=self.run_agent,
             runner=self,
         )
 
-        # 4. Build director input
+        # 4. Run director
         snapshot = self._state_board.snapshot()
         director_input = (
             f"# Objective\n{objective}\n\n"
-            f"# Initial Plan\n"
+            f"# Current State\n"
             f"{json.dumps(snapshot['tasks'], indent=2)}\n\n"
-            f"Begin execution. Start by calling show_state, then decide which "
+            f"Start orchestration. Call show_state first, then decide which "
             f"agents to spawn. Ready tasks: {snapshot['signals']['ready_to_run']}"
         )
 
-        # 5. Run director
         print("[Orchestrator] Launching Director...", file=sys.stderr, flush=True)
         try:
             await self._run_director(director_input)
         except Exception as exc:
             print(f"[Orchestrator] Director failed: {exc}", file=sys.stderr, flush=True)
-            if self._state_board is not None:
-                self._state_board.log_event(
-                    "orchestrator.error", message=f"Director failed: {exc}"
-                )
+            self._state_board.log_event(
+                "orchestrator.error", message=f"Director failed: {exc}"
+            )
 
-        # 6. Return report
-        if self._state_board is None:
-            raise RuntimeError("StateBoard was not initialized")
+        # Auto-finalize if director exited without a proper finalize
+        if not self._state_board._final_summary:
+            summary = (
+                f"[Auto-finalized] Director exited without finalize. "
+                f"Progress: {self._state_board.progress_summary()}"
+            )
+            self._state_board._final_summary = summary
+            self._state_board.log_event("orchestrator.auto_finalized", message=summary)
+
+        # 5. Return report
         elapsed = round(time.time() - self._state_board.budget.start_time, 1)
         print(
             f"[Orchestrator] Finished in {elapsed}s. "
@@ -182,6 +296,80 @@ class OrchestratorRunner:
             flush=True,
         )
         return self._state_board.to_report()
+
+    # -- SDK event bus bridge ------------------------------------------------
+
+    def _bridge_sdk_events(self) -> None:
+        """Forward SDK AsyncEventBus events to StateBoard for behavioral profiling."""
+        if self._state_board is None:
+            return
+
+        async def on_sdk_event(runtime_event: RuntimeEvent) -> None:
+            name = runtime_event.name
+            payload = dict(runtime_event.payload)
+            agent_id = payload.get("agent_id", "unknown")
+
+            if name in ("llm.succeeded", "llm.failed"):
+                metrics = payload.get("_metrics")
+                if metrics and self._state_board is not None:
+                    agent = self._state_board.get_agent(agent_id)
+                    if agent:
+                        agent.llm_call_count += 1
+                        agent.total_llm_latency_ms += getattr(metrics, "latency_ms", 0)
+                        agent.token_used += getattr(metrics, "input_tokens", 0) + getattr(metrics, "output_tokens", 0)
+
+                    self._state_board.log_event(
+                        f"sdk.{name}",
+                        agent_id=agent_id,
+                        message=f"latency={getattr(metrics, 'latency_ms', 0):.0f}ms, "
+                                f"tokens={getattr(metrics, 'input_tokens', 0)}+{getattr(metrics, 'output_tokens', 0)}",
+                        latency_ms=round(getattr(metrics, "latency_ms", 0), 1),
+                        input_tokens=getattr(metrics, "input_tokens", 0),
+                        output_tokens=getattr(metrics, "output_tokens", 0),
+                    )
+
+            elif name in ("tool.called", "tool.succeeded", "tool.failed"):
+                tool_id = payload.get("tool_id", "unknown")
+                if self._state_board is not None:
+                    agent = self._state_board.get_agent(agent_id)
+                    if agent:
+                        agent.tool_call_counts[tool_id] = agent.tool_call_counts.get(tool_id, 0) + 1
+                        if tool_id in ("write_file", "edit_file") and agent.first_artifact_time == 0:
+                            agent.first_artifact_time = time.time()
+
+                    self._state_board.log_event(
+                        f"sdk.{name}",
+                        agent_id=agent_id,
+                        message=f"tool={tool_id}",
+                        tool_id=tool_id,
+                    )
+
+        self._event_bus.subscribe("*", on_sdk_event)
+
+    async def _spawn_observer_resident(self) -> None:
+        """Spawn the observer resident agent for continuous monitoring."""
+        if self._state_board is None:
+            return
+        try:
+            if "observer" not in self._agents_by_id:
+                print("[Orchestrator] Observer agent not configured, skipping.", file=sys.stderr, flush=True)
+                return
+
+            resident_id = f"observer-{uuid.uuid4().hex[:6]}"
+
+            resident = ResidentAgent(
+                resident_id=resident_id,
+                agent_type="observer",
+                runner=self,
+                board=self._state_board,
+            )
+            await resident.start()
+            self._residents[resident_id] = resident
+            self._observer_resident_id = resident_id
+            self._state_board.register_resident(resident.state)
+            print(f"[Orchestrator] Observer resident spawned: {resident_id}", file=sys.stderr, flush=True)
+        except Exception as exc:
+            print(f"[Orchestrator] Failed to spawn observer: {exc}", file=sys.stderr, flush=True)
 
     async def run_agent(self, agent_type: str, input_text: str, agent_id: str | None = None) -> str:
         """Spawn a tactical agent. Called by spawn_agent tool.
@@ -200,7 +388,8 @@ class OrchestratorRunner:
             file=sys.stderr,
             flush=True,
         )
-        result = await self._run_single(agent_id, agent_type, input_text)
+        async with self._spawn_sem:
+            result = await self._run_single(agent_id, agent_type, input_text)
 
         # Extract metrics and record to StateBoard (even on failure)
         tokens = result.usage.total_tokens if result.usage else 0
@@ -257,11 +446,13 @@ class OrchestratorRunner:
         if self._state_board is None:
             raise RuntimeError("StateBoard not initialized")
         resident_id = f"{agent_type}-resident-{uuid.uuid4().hex[:6]}"
+        persist_dir = self._session_dir if self._session_dir is not None else None
         resident = ResidentAgent(
             resident_id=resident_id,
             agent_type=agent_type,
             runner=self,
             board=self._state_board,
+            persist_dir=persist_dir,
         )
         self._residents[resident_id] = resident
         await resident.start()
@@ -464,8 +655,9 @@ class OrchestratorRunner:
             session_artifacts = await self._sessions.list_artifacts(request.session_id)
             assembly_metadata = {}
 
-        # Setup pattern
+        # Setup pattern with agent-scoped event bus (injects agent_id into SDK events)
         pattern = bundle.plugins.pattern
+        scoped_bus = _AgentScopedEventBus(self._event_bus, agent_id)
         await pattern.setup(
             agent_id=agent_id,
             session_id=request.session_id,
@@ -474,7 +666,7 @@ class OrchestratorRunner:
             tools=bundle.plugins.tools,
             llm_client=bundle.llm_client,
             llm_options=bundle.agent.llm,
-            event_bus=self._event_bus,
+            event_bus=scoped_bus,
             transcript=transcript,
             session_artifacts=session_artifacts,
             assembly_metadata=assembly_metadata,
@@ -639,9 +831,13 @@ class OrchestratorRunner:
         print("\n".join(lines), file=sys.stderr, flush=True)
 
     async def close(self) -> None:
-        # Stop health monitor
-        if self._health_monitor is not None:
-            await self._health_monitor.stop()
+        # Save final snapshot before shutting down
+        if self._state_board is not None and self._snapshotter is not None:
+            seq = self._recorder._seq if self._recorder is not None else 0
+            self._snapshotter.force_snapshot(self._state_board, seq=seq)
+        # Flush remaining events
+        if self._recorder is not None:
+            self._recorder.close()
         # Stop all residents
         for resident in list(self._residents.values()):
             await resident.stop()
