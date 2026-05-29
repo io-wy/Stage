@@ -16,6 +16,10 @@ from typing import Any
 from openagents.errors.exceptions import PermanentToolError, RetryableToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
+# Maximum number of parallel agent spawns in batch mode.
+_BATCH_PARALLEL_LIMIT = 3
+_batch_semaphore = asyncio.Semaphore(_BATCH_PARALLEL_LIMIT)
+
 from openagents_orchestration.models.task import TaskStatus
 from openagents_orchestration.state_board import AgentStatus
 
@@ -236,10 +240,11 @@ class SpawnAgentTool(ToolPlugin):
             )
 
         async def _spawn_one(tid: str) -> dict[str, Any]:
-            try:
-                return await self._spawn_single(tid, board, runner_delegate, context)
-            except Exception as exc:
-                return {"task_id": tid, "status": "failed", "error": str(exc)}
+            async with _batch_semaphore:
+                try:
+                    return await self._spawn_single(tid, board, runner_delegate, context)
+                except Exception as exc:
+                    return {"task_id": tid, "status": "failed", "error": str(exc)}
 
         results = await asyncio.gather(*[_spawn_one(tid) for tid in task_ids])
         succeeded = sum(1 for r in results if r.get("status") == "completed")

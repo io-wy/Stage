@@ -86,3 +86,47 @@ def extract_result_error_message(result: Any) -> str:
         return str(exc)
 
     return "Agent failed"
+
+
+def apply_sdk_patches() -> None:
+    """Patch older SDK/provider quirks at import time."""
+    try:
+        from openagents.llm.providers import openai_compatible as provider
+    except Exception:
+        return
+
+    original = getattr(provider, "_parse_tool_calls", None)
+    if original is None or getattr(original, "__oa_patched__", False):
+        return
+
+    def _safe_parse_tool_calls(payload: Any) -> list[Any]:
+        if payload is None:
+            payload = []
+        return original(payload)
+
+    _safe_parse_tool_calls.__oa_patched__ = True  # type: ignore[attr-defined]
+    provider._parse_tool_calls = _safe_parse_tool_calls
+
+
+def is_retryable_llm_error(exc: BaseException) -> bool:
+    """Best-effort classifier for flaky upstream/provider failures."""
+    text = str(exc).lower()
+    name = exc.__class__.__name__.lower()
+    signals = (
+        "server disconnected",
+        "remoteprotocolerror",
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection aborted",
+        "temporarily unavailable",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+        "http 502",
+        "http 503",
+        "http 504",
+        "rate limit",
+        "too many requests",
+    )
+    return any(signal in text or signal in name for signal in signals)

@@ -161,9 +161,16 @@ class StateBoard:
         if task_id not in self.tasks:
             return
         task = self.tasks[task_id]
+        changed: list[str] = []
         for key, value in fields.items():
             if hasattr(task, key):
+                old = getattr(task, key)
+                if old != value:
+                    changed.append(f"{key}={value}")
                 setattr(task, key, value)
+        if changed:
+            status = fields.get("status", task.status.value)
+            self.log_event(f"task.{status}", task_id=task_id, message=", ".join(changed))
 
     def get_task(self, task_id: str) -> TaskNode | None:
         return self.tasks.get(task_id)
@@ -199,9 +206,16 @@ class StateBoard:
         if agent_id not in self.agents:
             return
         agent = self.agents[agent_id]
+        changed: list[str] = []
         for key, value in fields.items():
             if hasattr(agent, key):
+                old = getattr(agent, key)
+                if old != value:
+                    changed.append(f"{key}={value}")
                 setattr(agent, key, value)
+        if changed:
+            status = fields.get("status", agent.status.value)
+            self.log_event(f"agent.{status}", agent_id=agent_id, message=", ".join(changed))
 
     def get_agent(self, agent_id: str) -> AgentState | None:
         return self.agents.get(agent_id)
@@ -236,6 +250,8 @@ class StateBoard:
                 status="claimed",
                 claimed_by=task_id,
             )
+        if paths:
+            self.log_event("artifact.claimed", message=f"{len(paths)} artifact(s) by {task_id}: {paths}")
 
     def verify_artifact(self, path: str, exists: bool = True) -> None:
         rec = self.artifacts.get(path)
@@ -244,6 +260,7 @@ class StateBoard:
             return
         rec.status = "verified" if exists else "missing"
         rec.verified_at = time.time()
+        self.log_event(f"artifact.{rec.status}", message=path)
 
     # -- event log -----------------------------------------------------------
 
@@ -291,10 +308,16 @@ class StateBoard:
     # -- budget --------------------------------------------------------------
 
     def add_tokens(self, n: int) -> None:
+        before = self.budget.token_used
         self.budget.token_used += n
+        if n > 0:
+            self.log_event("budget.tokens", message=f"+{n} (was {before}, now {self.budget.token_used})")
 
     def add_steps(self, n: int) -> None:
+        before = self.budget.steps_taken
         self.budget.steps_taken += n
+        if n > 0:
+            self.log_event("budget.steps", message=f"+{n} (was {before}, now {self.budget.steps_taken})")
 
     def increment_step(self) -> None:
         self.budget.steps_taken += 1
@@ -472,6 +495,7 @@ class StateBoard:
         ready = self.tasks_ready()
         blocked = self.tasks_blocked()
         terminal = completed + failed + skipped
+        unanswered = [q for q in self._human_questions if q["answer"] is None]
         return {
             "total_tasks": len(self.tasks),
             "completed_tasks": completed,
@@ -482,6 +506,7 @@ class StateBoard:
             "blocked_tasks": len(blocked),
             "terminal_tasks": terminal,
             "all_done": self.all_terminal(),
+            "waiting_for_human": len(unanswered),
         }
 
     # -- snapshot for LLM ----------------------------------------------------
@@ -517,10 +542,10 @@ class StateBoard:
         # Resident summary
         resident_lines = [r.to_dict() for r in self.residents.values()]
 
-        # Recent events (last 10)
+        # Recent events (last 20)
         recent_events = [
             {"type": e.event_type, "msg": e.message}
-            for e in self.events[-10:]
+            for e in self.events[-20:]
         ]
 
         # Key signals
@@ -542,6 +567,8 @@ class StateBoard:
                 "blocked": [t.task_id for t in blocked],
                 "running": [t.task_id for t in running],
                 "needs_human": self.needs_human(),
+                "pending_messages": len(self._pending_messages),
+                "unanswered_human_questions": len(unanswered),
                 "waiting_for_human": [
                     {"id": q["id"], "question": q["question"][:100]}
                     for q in unanswered

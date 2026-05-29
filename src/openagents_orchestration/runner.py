@@ -9,6 +9,7 @@ Extends CoreCoderLocalRunner patterns to support:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -34,10 +35,14 @@ from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.health_monitor import HealthMonitor
 from openagents_orchestration.resident import ResidentAgent
 from openagents_orchestration.utils.runtime_compat import (
+    apply_sdk_patches,
     extract_result_error_message,
+    is_retryable_llm_error,
     run_result_error_kwargs,
 )
 from openagents_orchestration.state_board import Budget, StateBoard
+
+apply_sdk_patches()
 
 
 @dataclass
@@ -341,12 +346,24 @@ class OrchestratorRunner:
             f'"dependencies": [], "expected_artifacts": ["file.py"]}}'
         )
 
-        response = await llm.generate(
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=4096,
-            tools=None,
-        )
+        response = None
+        last_exc: BaseException | None = None
+        for attempt in range(3):
+            try:
+                response = await llm.generate(
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.2,
+                    max_tokens=4096,
+                    tools=None,
+                )
+                break
+            except BaseException as exc:
+                last_exc = exc
+                if attempt == 2 or not is_retryable_llm_error(exc):
+                    raise
+                await asyncio.sleep(1.5 * (attempt + 1))
+        if response is None and last_exc is not None:
+            raise last_exc
         text = response.output_text or ""
         # Track decomposer token usage
         if self._state_board is not None and response.usage is not None:

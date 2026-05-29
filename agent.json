@@ -110,6 +110,10 @@
         {
           "id": "stop_resident",
           "impl": "openagents_orchestration.tools.stop_resident.StopResidentTool"
+        },
+        {
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
         }
       ],
       "runtime": {

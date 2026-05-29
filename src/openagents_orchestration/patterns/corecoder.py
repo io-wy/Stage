@@ -24,6 +24,7 @@ reproduce its event emissions (``tool.called``, ``tool.succeeded``,
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -33,7 +34,10 @@ from openagents.errors.exceptions import ModelRetryError, ToolError
 from openagents.interfaces.pattern import PatternPlugin, unwrap_tool_result
 
 from openagents_orchestration.prompts import CORE_PRINCIPLES, build_runtime_fragment, gather_runtime_context
-from openagents_orchestration.utils.runtime_compat import error_details_payload
+from openagents_orchestration.utils.runtime_compat import (
+    error_details_payload,
+    is_retryable_llm_error,
+)
 
 try:
     from openagents.interfaces.diagnostics import LLMCallMetrics
@@ -386,13 +390,25 @@ class CoreCoderPattern(PatternPlugin):
         await self.emit("llm.called", model=model)
         started = time.monotonic()
         try:
-            response = await ctx.llm_client.generate(
-                messages=messages,
-                model=model,
-                temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                tools=tools,
-            )
+            response = None
+            last_exc: BaseException | None = None
+            for attempt in range(3):
+                try:
+                    response = await ctx.llm_client.generate(
+                        messages=messages,
+                        model=model,
+                        temperature=self._temperature,
+                        max_tokens=self._max_tokens,
+                        tools=tools,
+                    )
+                    break
+                except BaseException as exc:
+                    last_exc = exc
+                    if attempt == 2 or not is_retryable_llm_error(exc):
+                        raise
+                    await asyncio.sleep(1.5 * (attempt + 1))
+            if response is None and last_exc is not None:
+                raise last_exc
         except BaseException as exc:
             latency_ms = (time.monotonic() - started) * 1000.0
             ctx.state["__api_error_count__"] = ctx.state.get("__api_error_count__", 0) + 1
