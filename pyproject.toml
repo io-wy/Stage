@@ -6,6 +6,13 @@ requires-python = ">=3.11"
 dependencies = [
     "io-openagent-sdk",
     "pydantic>=2.0",
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+    "pydantic-settings",
+    "passlib[bcrypt]",
+    "python-jose[cryptography]",
+    "python-multipart",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "httpx>=0.26",

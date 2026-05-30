@@ -8,6 +8,7 @@ and clears them from the queue.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from openagents.errors.exceptions import PermanentToolError
@@ -39,6 +40,49 @@ class CheckMessagesTool(ToolPlugin):
             },
         }
 
+    def _read_inbox(self, board: Any) -> list[dict[str, Any]]:
+        """Read external messages from inbox file and inject into mailbox."""
+        # Find inbox file in persist directory
+        inbox_messages: list[dict[str, Any]] = []
+        recorder = getattr(board, "_recorder", None)
+        if recorder is None:
+            return inbox_messages
+
+        persist_dir = getattr(recorder, "_session_dir", None)
+        if persist_dir is None:
+            return inbox_messages
+
+        inbox_file = Path(persist_dir) / "inbox.jsonl"
+        if not inbox_file.exists():
+            return inbox_messages
+
+        try:
+            text = inbox_file.read_text(encoding="utf-8").strip()
+            if not text:
+                return inbox_messages
+            for line in text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                    inbox_messages.append(msg)
+                except json.JSONDecodeError:
+                    continue
+            # Clear inbox after reading
+            inbox_file.write_text("", encoding="utf-8")
+            # Inject into StateBoard mailbox
+            for msg in inbox_messages:
+                board.send_mail(
+                    from_id=msg.get("from", "human"),
+                    to_id=msg.get("to", "director"),
+                    content=msg.get("content", ""),
+                )
+        except Exception:
+            pass
+
+        return inbox_messages
+
     async def invoke(self, params: dict[str, Any], context: Any) -> dict[str, Any]:
         deps = getattr(context, "deps", None)
         board = getattr(deps, "state_board", None) if deps else None
@@ -46,6 +90,9 @@ class CheckMessagesTool(ToolPlugin):
             raise PermanentToolError("StateBoard not available", tool_name=self.name)
 
         agent_id = getattr(context, "agent_id", "unknown")
+
+        # First: inject external inbox messages
+        self._read_inbox(board)
 
         # Collect messages addressed to this agent via mailbox API
         matching = board.messages_for(agent_id)

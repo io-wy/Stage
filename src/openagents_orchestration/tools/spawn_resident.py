@@ -53,6 +53,20 @@ class SpawnResidentTool(ToolPlugin):
         if runner is None:
             raise PermanentToolError("Runner not available", tool_name=self.name)
 
+        # Check current resident count
+        board = getattr(deps, "state_board", None) if deps else None
+        if board is not None:
+            active = sum(
+                1 for r in board.list_residents()
+                if getattr(r, "status", "") in ("idle", "busy")
+            )
+            if active >= 2:
+                raise PermanentToolError(
+                    f"Max concurrent residents (2) reached. "
+                    f"Currently active: {active}. Stop one first.",
+                    tool_name=self.name,
+                )
+
         try:
             resident_id = await runner.start_resident(agent_type)
         except Exception as exc:

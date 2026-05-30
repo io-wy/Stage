@@ -122,11 +122,23 @@ class DirectorPattern(CoreCoderPattern):
         # finalize called — objective is done
         if board._final_summary:
             return False
-        # Nothing left to do
-        if not board.has_actionable():
-            return False
         # Global budget exhausted
         if board.budget.exhausted:
+            return False
+        # All tasks are terminal but finalize not called yet — give Director
+        # a few extra rounds to call finalize before forcing auto-finalize.
+        if board.all_terminal():
+            terminal_step = ctx.state.get("__terminal_since_step__")
+            if terminal_step is None:
+                ctx.state["__terminal_since_step__"] = step
+                return True
+            if step - terminal_step < 4:
+                return True
+            return False
+        # Reset terminal tracker when tasks are still in progress
+        ctx.state.pop("__terminal_since_step__", None)
+        # Nothing left to do
+        if not board.has_actionable():
             return False
         return True
 
@@ -135,10 +147,13 @@ class DirectorPattern(CoreCoderPattern):
 
         Only accept text when finalize has already been called.
         """
+        import sys
         ctx = self.context
         if ctx is None or ctx.deps is None:
             return True
         board = getattr(ctx.deps, "state_board", None)
         if board is None:
             return True
-        return bool(board._final_summary)
+        accepted = bool(board._final_summary)
+        print(f"[HOOK] _should_accept_text_response: accepted={accepted}, text_preview={text[:80]!r}", file=sys.stderr, flush=True)
+        return accepted

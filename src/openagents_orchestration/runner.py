@@ -155,6 +155,7 @@ class OrchestratorRunner:
         *,
         session_id: str | None = None,
         resume: bool = False,
+        budget: Budget | None = None,
     ) -> Any:
         """Run full orchestration for an objective.
 
@@ -164,6 +165,7 @@ class OrchestratorRunner:
                 a new UUID is generated.
             resume: If True and a persisted session with ``session_id`` exists,
                 load it and continue from the saved state.
+            budget: Optional custom budget. Defaults to 500k tokens, 1800s, 100 steps.
 
         Returns DeliveryReport.
         """
@@ -226,9 +228,9 @@ class OrchestratorRunner:
         # 2. StateBoard (with persistence hooks)
         self._state_board = StateBoard(
             objective=objective,
-            budget=Budget(
-                token_limit=200_000,
-                time_limit_s=1200.0,
+            budget=budget or Budget(
+                token_limit=500_000,
+                time_limit_s=1800.0,
                 max_steps=100,
             ),
             recorder=self._recorder,
@@ -279,10 +281,31 @@ class OrchestratorRunner:
 
         # Auto-finalize if director exited without a proper finalize
         if not self._state_board._final_summary:
+            budget = self._state_board.budget
+            progress = self._state_board.progress_summary()
+            if budget.exhausted:
+                reason = "Budget exhausted"
+                if budget.token_remaining <= 0:
+                    reason += f" (tokens {budget.token_used}/{budget.token_limit})"
+                elif budget.time_remaining_s <= 0:
+                    reason += f" (time elapsed {round(time.time() - budget.start_time, 0)}s / {budget.time_limit_s}s)"
+                elif budget.steps_taken >= budget.max_steps:
+                    reason += f" (steps {budget.steps_taken}/{budget.max_steps})"
+            else:
+                reason = "Director exited without finalize"
             summary = (
-                f"[Auto-finalized] Director exited without finalize. "
-                f"Progress: {self._state_board.progress_summary()}"
+                f"[{reason}] Orchestration stopped. "
+                f"Completed: {progress['completed_tasks']}/{progress['total_tasks']}, "
+                f"Failed: {progress['failed_tasks']}, "
+                f"Skipped: {progress['skipped_tasks']}. "
+                f"Token used: {budget.token_used}/{budget.token_limit}."
             )
+            if progress['failed_tasks'] > 0:
+                failed_ids = [
+                    t.task_id for t in self._state_board.tasks.values()
+                    if t.status == TaskStatus.FAILED
+                ]
+                summary += f" Failed tasks: {', '.join(failed_ids)}."
             self._state_board._final_summary = summary
             self._state_board.log_event("orchestrator.auto_finalized", message=summary)
 
@@ -404,6 +427,25 @@ class OrchestratorRunner:
             msg = extract_result_error_message(result)
             print(f"[Orchestrator] {agent_type} ({agent_id}) FAILED: {msg}", file=sys.stderr, flush=True)
             raise RuntimeError(msg)
+
+        # Mark task as completed on success
+        if self._state_board is not None:
+            # Extract task_id from agent_id (format: agent_type-task_id, e.g. coder-t1)
+            task_id = agent_id.replace(f"{agent_type}-", "", 1) if agent_id.startswith(f"{agent_type}-") else agent_id
+            task = self._state_board.get_task(task_id)
+            if task is not None and task.status != TaskStatus.COMPLETED:
+                self._state_board.update_task(
+                    task_id,
+                    status=TaskStatus.COMPLETED,
+                    result_output=str(result.final_output or "")[:2000],
+                )
+                # Verify and record artifacts
+                for art in result.artifacts:
+                    art_path = getattr(art, "path", str(art)) if hasattr(art, "path") else str(art)
+                    if art_path:
+                        self._state_board.verify_artifact(art_path, exists=True)
+                        self._state_board.claim_artifact(task_id, [art_path])
+
         # Print execution summary + monitor thresholds
         tokens = result.usage.total_tokens if result.usage else 0
         steps = result.metadata.get("steps_used", "?") if result.metadata else "?"
@@ -442,9 +484,21 @@ class OrchestratorRunner:
         """Start a persistent resident agent.
 
         Returns the resident_id.
+        Raises RuntimeError if max concurrent residents reached.
         """
         if self._state_board is None:
             raise RuntimeError("StateBoard not initialized")
+        # Limit concurrent residents to prevent token explosion
+        MAX_CONCURRENT_RESIDENTS = 2
+        active_residents = sum(
+            1 for r in self._residents.values()
+            if r.state.status in ("idle", "busy")
+        )
+        if active_residents >= MAX_CONCURRENT_RESIDENTS:
+            raise RuntimeError(
+                f"Max concurrent residents ({MAX_CONCURRENT_RESIDENTS}) reached. "
+                f"Stop an existing resident before starting a new one."
+            )
         resident_id = f"{agent_type}-resident-{uuid.uuid4().hex[:6]}"
         persist_dir = self._session_dir if self._session_dir is not None else None
         resident = ResidentAgent(

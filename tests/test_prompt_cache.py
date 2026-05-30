@@ -109,11 +109,15 @@ class TestDirectorShouldContinueStep:
             def has_actionable(self):
                 return True
 
+            def all_terminal(self):
+                return False
+
         class FakeDeps:
             state_board = FakeBoard()
 
         class FakeCtx:
             deps = FakeDeps()
+            state = {}
 
         pattern.context = FakeCtx()
         assert await pattern._should_continue_step(5) is True
@@ -125,17 +129,22 @@ class TestDirectorShouldContinueStep:
         class FakeBoard:
             _final_summary = "done"
 
+            def all_terminal(self):
+                return True
+
         class FakeDeps:
             state_board = FakeBoard()
 
         class FakeCtx:
             deps = FakeDeps()
+            state = {}
 
         pattern.context = FakeCtx()
         assert await pattern._should_continue_step(5) is False
 
     @pytest.mark.asyncio
-    async def test_returns_false_when_no_actionable_tasks(self):
+    async def test_returns_true_when_all_terminal_but_not_finalized(self):
+        """All tasks terminal but no finalize yet — give Director 3 extra rounds."""
         pattern = DirectorPattern()
 
         class FakeBudget:
@@ -148,14 +157,25 @@ class TestDirectorShouldContinueStep:
             def has_actionable(self):
                 return False
 
+            def all_terminal(self):
+                return True
+
         class FakeDeps:
             state_board = FakeBoard()
 
         class FakeCtx:
             deps = FakeDeps()
+            state = {}
 
         pattern.context = FakeCtx()
-        assert await pattern._should_continue_step(5) is False
+        # First call — starts terminal grace period
+        assert await pattern._should_continue_step(5) is True
+        # Second call — still within grace period
+        assert await pattern._should_continue_step(6) is True
+        # Third call — still within grace period
+        assert await pattern._should_continue_step(7) is True
+        # Fourth call — grace period exhausted
+        assert await pattern._should_continue_step(8) is False
 
     @pytest.mark.asyncio
     async def test_returns_false_when_budget_exhausted(self):
@@ -171,11 +191,15 @@ class TestDirectorShouldContinueStep:
             def has_actionable(self):
                 return True
 
+            def all_terminal(self):
+                return False
+
         class FakeDeps:
             state_board = FakeBoard()
 
         class FakeCtx:
             deps = FakeDeps()
+            state = {}
 
         pattern.context = FakeCtx()
         assert await pattern._should_continue_step(5) is False
