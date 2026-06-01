@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.models.task import TaskGraph, TaskNode
 
 
 class TestTaskGraph:

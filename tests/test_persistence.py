@@ -5,12 +5,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from openagents_orchestration.persistence.event_recorder import EventRecorder
-from openagents_orchestration.persistence.state_snapshotter import StateSnapshotter
 from openagents_orchestration.persistence.session_resumer import SessionResumer
-from openagents_orchestration.state_board import StateBoard, Budget
+from openagents_orchestration.persistence.state_snapshotter import StateSnapshotter
+from openagents_orchestration.state_board import Budget, StateBoard
 
 
 class TestEventRecorder:

@@ -6,17 +6,18 @@ that can be serialized into an LLM-readable snapshot for decision-making.
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 
 
-class AgentStatus(str, Enum):
+class AgentStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     STALLED = "stalled"
@@ -195,10 +196,8 @@ class StateBoard:
                 # Coerce string status to TaskStatus enum
                 if key == "status" and isinstance(value, str):
                     from openagents_orchestration.models.task import TaskStatus
-                    try:
+                    with contextlib.suppress(ValueError):
                         value = TaskStatus(value)
-                    except ValueError:
-                        pass
                 if old != value:
                     changed.append(f"{key}={value}")
                 setattr(task, key, value)
@@ -260,10 +259,8 @@ class StateBoard:
                 old = getattr(agent, key)
                 # Coerce string status to AgentStatus enum
                 if key == "status" and isinstance(value, str):
-                    try:
+                    with contextlib.suppress(ValueError):
                         value = AgentStatus(value)
-                    except ValueError:
-                        pass
                 if old != value:
                     changed.append(f"{key}={value}")
                 setattr(agent, key, value)
@@ -369,10 +366,8 @@ class StateBoard:
         self.events.append(evt)
         # Notify observers (fire-and-forget, errors must not propagate)
         for obs in self._observers:
-            try:
+            with contextlib.suppress(Exception):
                 obs(evt)
-            except Exception:
-                pass
         # Persist to JSONL if recorder is attached
         if self._recorder is not None:
             self._recorder.append(
@@ -654,7 +649,6 @@ class StateBoard:
 
         Includes everything needed to reconstruct this StateBoard.
         """
-        from openagents_orchestration.models.task import TaskGraph
 
         return {
             "objective": self.objective,
@@ -690,7 +684,7 @@ class StateBoard:
         reset_budget_clock: bool = True,
     ) -> StateBoard:
         """Reconstruct a StateBoard from a full state dict."""
-        from openagents_orchestration.models.task import TaskNode, TaskStatus
+        from openagents_orchestration.models.task import TaskNode
 
         objective = data.get("objective", "")
         budget_data = data.get("budget", {})

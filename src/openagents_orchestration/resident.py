@@ -8,6 +8,7 @@ via send_message.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -105,10 +106,8 @@ class ResidentAgent:
         self._board.update_resident(self.resident_id, status="stopped")
         if self._task is not None:
             self._task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-            except asyncio.CancelledError:
-                pass
         self._board.log_event(
             "resident.stopped",
             agent_id=self.resident_id,
@@ -135,7 +134,7 @@ class ResidentAgent:
                     self._inbox.get(),
                     timeout=self._max_idle_s,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Idle timeout — auto-stop to save resources
                 self._board.log_event(
                     "resident.idle_timeout",

@@ -6,6 +6,7 @@ Automatically selects the right encoding based on model name.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -85,9 +86,6 @@ class TokenCounter:
 
 
 # ---- helper (mirrors context._content_to_text) ---------------------------
-
-import json
-
 
 def _content_to_text(content: Any) -> str:
     if content is None:

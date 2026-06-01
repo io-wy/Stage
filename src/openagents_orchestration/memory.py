@@ -23,7 +23,6 @@ from typing import Any
 
 from openagents.interfaces.memory import MemoryPlugin
 
-
 _DEFAULT_DIR = ".agent_memory"
 _MAX_SUMMARIES = 10
 _MAX_DIRTY_INJECTED = 8

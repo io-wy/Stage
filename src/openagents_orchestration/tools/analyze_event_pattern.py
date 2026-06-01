@@ -211,7 +211,7 @@ class AnalyzeEventPatternTool(ToolPlugin):
             return "无LLM延迟数据"
 
         latencies.sort(key=lambda x: x["ts"])
-        values = [l["latency_ms"] for l in latencies]
+        values = [item["latency_ms"] for item in latencies]
 
         avg = sum(values) / len(values)
         max_v = max(values)
@@ -228,7 +228,7 @@ class AnalyzeEventPatternTool(ToolPlugin):
         else:
             trend = "stable"
 
-        outliers = [l for l in latencies if l["latency_ms"] > avg * 2]
+        outliers = [item for item in latencies if item["latency_ms"] > avg * 2]
 
         return json.dumps({
             "total_calls": len(latencies),

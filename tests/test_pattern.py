@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
-from openagents_orchestration.patterns.director import DIRECTOR_PRINCIPLES, DirectorPattern
+from openagents_orchestration.patterns.director import (
+    DIRECTOR_PRINCIPLES,
+    DirectorPattern,
+)
 
 
 class TestDirectorPattern:

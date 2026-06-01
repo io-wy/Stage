@@ -21,7 +21,7 @@ class _CompatErrorDetails:
     module: str
 
     @classmethod
-    def from_exception(cls, exc: BaseException) -> "_CompatErrorDetails":
+    def from_exception(cls, exc: BaseException) -> _CompatErrorDetails:
         return cls(
             message=str(exc) or exc.__class__.__name__,
             error_type=exc.__class__.__name__,

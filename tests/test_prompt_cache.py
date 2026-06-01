@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 
 from openagents_orchestration.patterns.corecoder import (
+    _SYSTEM_PROMPT_BOUNDARY,
     CoreCoderPattern,
     _split_system_prompt,
-    _SYSTEM_PROMPT_BOUNDARY,
 )
 from openagents_orchestration.patterns.director import DirectorPattern
 

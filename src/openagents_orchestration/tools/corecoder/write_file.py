@@ -46,7 +46,7 @@ class WriteFileTool(ToolPlugin):
         }
 
     async def invoke(
-        self, params: dict[str, Any], context: "RunContext[Any] | None"
+        self, params: dict[str, Any], context: RunContext[Any] | None
     ) -> dict[str, Any]:
         file_path = str(params.get("file_path", "")).strip()
         if not file_path:

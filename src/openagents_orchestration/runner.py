@@ -33,7 +33,13 @@ from openagents.plugins.builtin.events.async_event_bus import AsyncEventBus
 from openagents.plugins.loader import LoadedAgentPlugins, load_agent_plugins
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.persistence import (
+    EventRecorder,
+    SessionResumer,
+    StateSnapshotter,
+)
 from openagents_orchestration.resident import ResidentAgent
+from openagents_orchestration.state_board import Budget, StateBoard
 from openagents_orchestration.utils.runtime_compat import (
     apply_sdk_patches,
     extract_result_error_message,
@@ -41,8 +47,6 @@ from openagents_orchestration.utils.runtime_compat import (
     patch_tool_capabilities,
     run_result_error_kwargs,
 )
-from openagents_orchestration.state_board import Budget, StateBoard
-from openagents_orchestration.persistence import EventRecorder, StateSnapshotter, SessionResumer
 
 apply_sdk_patches()
 patch_tool_capabilities()
@@ -632,7 +636,7 @@ class OrchestratorRunner:
 
     def _build_agents_info(self) -> str:
         lines = []
-        for aid, agent in self._agents_by_id.items():
+        for aid, _agent in self._agents_by_id.items():
             if aid == "director":
                 continue
             lines.append(f"- {aid}: tactical agent")

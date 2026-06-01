@@ -47,10 +47,7 @@ class ShowStateTool(ToolPlugin):
         section = params.get("section")
         snapshot = board.snapshot()
 
-        if section and section in snapshot:
-            payload = snapshot[section]
-        else:
-            payload = snapshot
+        payload = snapshot[section] if section and section in snapshot else snapshot
 
         # Append fallback suggestions for failed tasks
         failed_tasks = payload.get("tasks", []) if isinstance(payload, dict) else []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 import urllib.error
 import urllib.parse
@@ -142,14 +143,12 @@ class WebSearchTool(ToolPlugin):
         except urllib.error.URLError as exc:
             raise ToolError(f"Search failed: {exc.reason}", tool_name=self.name) from exc
         except TimeoutError:
-            raise ToolError("Search timed out", tool_name=self.name)
+            raise ToolError("Search timed out", tool_name=self.name) from None
 
         extractor = _ResultExtractor()
-        try:
+        with contextlib.suppress(Exception):
             extractor.feed(html)
-        except Exception:
-            # Malformed HTML — try regex fallback
-            pass
+        # Malformed HTML — extractor will try regex fallback
 
         results = extractor.get_results()[:max_results]
 

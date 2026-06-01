@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.state_board import StateBoard
+from openagents_orchestration.models.task import TaskGraph, TaskNode
 
 
 class TestPlanPhase:
@@ -59,9 +58,8 @@ class TestPlanPhase:
             "phased_run.OrchestratorRunner._initial_decompose",
             new_callable=AsyncMock,
             return_value=mock_graph,
-        ):
-            with pytest.raises(ValueError, match="circular"):
-                await cmd_plan("test", plan_file)
+        ), pytest.raises(ValueError, match="circular"):
+            await cmd_plan("test", plan_file)
 
 
 class TestReviewPlanPhase:

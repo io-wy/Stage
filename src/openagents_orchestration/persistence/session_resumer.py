@@ -13,8 +13,7 @@ loop from the recovered state.
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -122,10 +121,8 @@ class SessionResumer:
             events_file = session_dir / "events.jsonl"
             meta["has_events"] = events_file.exists()
             if events_file.exists():
-                try:
+                with contextlib.suppress(OSError):
                     meta["events_size"] = events_file.stat().st_size
-                except OSError:
-                    pass
             results.append(meta)
         return results
 

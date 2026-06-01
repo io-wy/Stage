@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.state_board import AgentStatus, Budget, StateBoard
+from openagents_orchestration.state_board import Budget, StateBoard
 from openagents_orchestration.tools.check_messages import CheckMessagesTool
 from openagents_orchestration.tools.finalize import FinalizeTool
 from openagents_orchestration.tools.replan import ReplanTool
@@ -67,8 +66,10 @@ class TestSpawnAgentFullChain:
             agent_id="director",
         )
 
+        from openagents.errors.exceptions import RetryableToolError
+
         tool = SpawnAgentTool()
-        with pytest.raises(Exception):
+        with pytest.raises(RetryableToolError):
             await tool.invoke({"task_id": "t1"}, ctx)
 
         assert board.get_task("t1").status == TaskStatus.FAILED

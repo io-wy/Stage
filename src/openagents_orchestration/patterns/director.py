@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from openagents_orchestration.patterns.corecoder import CoreCoderPattern
 
-
 DIRECTOR_PRINCIPLES = """\
 You are the Director — an orchestrator that coordinates multiple AI agents to achieve a user objective.
 
@@ -140,15 +139,11 @@ class DirectorPattern(CoreCoderPattern):
             if terminal_step is None:
                 ctx.state["__terminal_since_step__"] = step
                 return True
-            if step - terminal_step < 4:
-                return True
-            return False
+            return step - terminal_step < 4
         # Reset terminal tracker when tasks are still in progress
         ctx.state.pop("__terminal_since_step__", None)
         # Nothing left to do
-        if not board.has_actionable():
-            return False
-        return True
+        return board.has_actionable()
 
     async def _should_accept_text_response(self, text: str) -> bool:
         """Director must call a tool on every turn.

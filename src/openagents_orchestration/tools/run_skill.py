@@ -6,6 +6,7 @@ and invokes their `run_openagent_skill(payload)` entrypoint.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import inspect
 import sys
@@ -122,10 +123,8 @@ class RunSkillTool(ToolPlugin):
             ) from exc
         finally:
             if added:
-                try:
+                with contextlib.suppress(ValueError):
                     sys.path.remove(str(src_root))
-                except ValueError:
-                    pass
 
         return {
             "skill_name": skill_name,

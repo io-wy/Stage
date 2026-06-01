@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
 
 from openagents_orchestration.health_monitor import HealthMonitor
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.state_board import AgentStatus, StateBoard
 
 
@@ -121,6 +121,3 @@ class TestHealthMonitor:
         await monitor.start()
         await asyncio.sleep(0.15)
         await monitor.stop()
-
-
-import asyncio

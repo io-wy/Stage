@@ -21,7 +21,6 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)"), "recursive delete on home/root"),
     (re.compile(r"\brm\s+(-\w*)?-rf\s"), "force recursive delete"),
@@ -81,7 +80,7 @@ class BashTool(ToolPlugin):
         }
 
     async def invoke(
-        self, params: dict[str, Any], context: "RunContext[Any] | None"
+        self, params: dict[str, Any], context: RunContext[Any] | None
     ) -> dict[str, Any]:
         command = str(params.get("command", "")).strip()
         if not command:
@@ -162,7 +161,7 @@ def _check_dangerous(cmd: str) -> str | None:
     return None
 
 
-def _get_cwd(context: "RunContext[Any] | None") -> str:
+def _get_cwd(context: RunContext[Any] | None) -> str:
     if context is not None:
         cached = context.scratch.get("bash_cwd")
         if isinstance(cached, str) and os.path.isdir(cached):
@@ -170,7 +169,7 @@ def _get_cwd(context: "RunContext[Any] | None") -> str:
     return os.getcwd()
 
 
-def _update_cwd(context: "RunContext[Any] | None", command: str, current_cwd: str) -> None:
+def _update_cwd(context: RunContext[Any] | None, command: str, current_cwd: str) -> None:
     if context is None:
         return
     parts = command.split("&&")

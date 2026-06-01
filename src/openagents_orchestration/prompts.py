@@ -19,7 +19,6 @@ from typing import Any
 
 from openagents.interfaces.run_context import RunContext
 
-
 CORE_PRINCIPLES = """\
 You are CoreCoder, a faithful Python re-implementation of Claude Code's coding loop.
 
@@ -130,7 +129,7 @@ def _git_status_line(cwd: str) -> str | None:
     return f"branch={branch_name}, dirty=[{'; '.join(sample)}{suffix}]"
 
 
-def gather_runtime_context(ctx: "RunContext[Any]") -> dict[str, Any]:
+def gather_runtime_context(ctx: RunContext[Any]) -> dict[str, Any]:
     """Pull the bits of state used by :func:`build_runtime_fragment`.
 
     Returns a dict so callers can pass kwargs straight in.

@@ -139,13 +139,11 @@ class VerifyAlertEffectivenessTool(ToolPlugin):
 
                 # Check behavioral improvements
                 tool_counts = getattr(agent, "tool_call_counts", {})
-                reads = tool_counts.get("read_file", 0)
                 writes = tool_counts.get("write_file", 0)
 
                 # If alert was about excessive reading, check if writing started
-                if "wandering" in evt.message or "read" in evt.message.lower():
-                    if writes > 0:
-                        improved = True
+                if ("wandering" in evt.message or "read" in evt.message.lower()) and writes > 0:
+                    improved = True
 
                 # Check if latency improved
                 avg_lat = agent.total_llm_latency_ms / max(agent.llm_call_count, 1) if agent.llm_call_count else 0

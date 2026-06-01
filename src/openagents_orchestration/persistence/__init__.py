@@ -8,9 +8,12 @@ SessionResumer — load session from persisted state.
 from __future__ import annotations
 
 from openagents_orchestration.persistence.event_recorder import EventRecorder
-from openagents_orchestration.persistence.state_snapshotter import StateSnapshotter
-from openagents_orchestration.persistence.session_resumer import SessionResumer, ResumeResult
 from openagents_orchestration.persistence.event_replayer import EventReplayer
+from openagents_orchestration.persistence.session_resumer import (
+    ResumeResult,
+    SessionResumer,
+)
+from openagents_orchestration.persistence.state_snapshotter import StateSnapshotter
 
 __all__ = [
     "EventRecorder",

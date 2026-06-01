@@ -49,10 +49,7 @@ class PredictBudgetTool(ToolPlugin):
         if dim in ("token", "all"):
             token_rate = board.budget.token_used / max(elapsed, 1)
             remaining = board.budget.token_remaining
-            if token_rate > 0:
-                eta_token_s = remaining / token_rate
-            else:
-                eta_token_s = float("inf")
+            eta_token_s = remaining / token_rate if token_rate > 0 else float("inf")
 
             predictions["token"] = {
                 "current": board.budget.token_used,

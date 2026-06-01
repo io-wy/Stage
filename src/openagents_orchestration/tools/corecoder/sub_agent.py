@@ -25,7 +25,6 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-
 _DEFAULT_MAX_OUTPUT = 5_000
 
 
@@ -71,7 +70,7 @@ class SubAgentTool(ToolPlugin):
         }
 
     async def invoke(
-        self, params: dict[str, Any], context: "RunContext[Any] | None"
+        self, params: dict[str, Any], context: RunContext[Any] | None
     ) -> dict[str, Any]:
         task = str(params.get("task", "")).strip()
         if not task:
@@ -136,7 +135,7 @@ class SubAgentTool(ToolPlugin):
         return self._runtime
 
 
-def _extract_runner(context: "RunContext[Any] | None") -> Any | None:
+def _extract_runner(context: RunContext[Any] | None) -> Any | None:
     if context is None:
         return None
     deps = getattr(context, "deps", None)

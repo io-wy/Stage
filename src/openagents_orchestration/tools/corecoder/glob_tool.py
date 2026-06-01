@@ -14,7 +14,6 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-
 _MAX_RESULTS = 100
 
 
@@ -52,7 +51,7 @@ class GlobTool(ToolPlugin):
         }
 
     async def invoke(
-        self, params: dict[str, Any], context: "RunContext[Any] | None"
+        self, params: dict[str, Any], context: RunContext[Any] | None
     ) -> dict[str, Any]:
         pattern = str(params.get("pattern", "")).strip()
         if not pattern:

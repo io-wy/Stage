@@ -17,7 +17,6 @@ from openagents.errors.exceptions import ModelRetryError, ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-
 _MAX_DIFF_CHARS = 3000
 
 
@@ -56,7 +55,7 @@ class EditFileTool(ToolPlugin):
         }
 
     async def invoke(
-        self, params: dict[str, Any], context: "RunContext[Any] | None"
+        self, params: dict[str, Any], context: RunContext[Any] | None
     ) -> dict[str, Any]:
         file_path = str(params.get("file_path", "")).strip()
         old_string = params.get("old_string")

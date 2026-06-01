@@ -7,9 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.resident import ResidentAgent, ResidentState
-from openagents_orchestration.state_board import Budget, StateBoard
+from openagents_orchestration.state_board import StateBoard
 
 
 class MockRunner:

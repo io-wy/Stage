@@ -15,7 +15,6 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-
 _SKIP_DIRS = frozenset(
     {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"}
 )
@@ -59,7 +58,7 @@ class GrepTool(ToolPlugin):
         }
 
     async def invoke(
-        self, params: dict[str, Any], context: "RunContext[Any] | None"
+        self, params: dict[str, Any], context: RunContext[Any] | None
     ) -> dict[str, Any]:
         pattern = str(params.get("pattern", "")).strip()
         if not pattern:

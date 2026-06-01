@@ -15,7 +15,6 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-
 _DEFAULT_LIMIT = 2000
 _MAX_LIMIT = 5000
 
@@ -60,7 +59,7 @@ class ReadFileTool(ToolPlugin):
         }
 
     async def invoke(
-        self, params: dict[str, Any], context: "RunContext[Any] | None"
+        self, params: dict[str, Any], context: RunContext[Any] | None
     ) -> dict[str, Any]:
         file_path = str(params.get("file_path", "")).strip()
         if not file_path:

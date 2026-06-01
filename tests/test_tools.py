@@ -9,10 +9,10 @@ import pytest
 from openagents_orchestration.models.task import TaskGraph, TaskNode
 from openagents_orchestration.state_board import StateBoard
 from openagents_orchestration.tools.ask_human import AskHumanTool
+from openagents_orchestration.tools.check_messages import CheckMessagesTool
 from openagents_orchestration.tools.finalize import FinalizeTool
 from openagents_orchestration.tools.replan import ReplanTool
 from openagents_orchestration.tools.send_message import SendMessageTool
-from openagents_orchestration.tools.check_messages import CheckMessagesTool
 from openagents_orchestration.tools.show_state import ShowStateTool
 from openagents_orchestration.tools.spawn_agent import SpawnAgentTool
 
@@ -53,9 +53,11 @@ class TestFinalizeTool:
         assert board._final_summary == "All done"
 
     def test_invoke_missing_summary(self):
+        from openagents.errors.exceptions import PermanentToolError
+
         tool = FinalizeTool()
         ctx = MockContext(deps=MockContext(state_board=StateBoard("obj")))
-        with pytest.raises(Exception):
+        with pytest.raises(PermanentToolError):
             asyncio.run(tool.invoke({}, ctx))
 
 

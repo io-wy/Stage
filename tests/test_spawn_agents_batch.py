@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode
 from openagents_orchestration.state_board import StateBoard

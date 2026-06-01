@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from openagents_orchestration.token_counter import TokenCounter
 
 
