@@ -168,14 +168,16 @@ class TestDirectorShouldContinueStep:
             state = {}
 
         pattern.context = FakeCtx()
-        # First call — starts terminal grace period
+        # First call — detects terminal state, starts grace period
         assert await pattern._should_continue_step(5) is True
-        # Second call — still within grace period
+        # Extra round 1
         assert await pattern._should_continue_step(6) is True
-        # Third call — still within grace period
+        # Extra round 2
         assert await pattern._should_continue_step(7) is True
-        # Fourth call — grace period exhausted
-        assert await pattern._should_continue_step(8) is False
+        # Extra round 3
+        assert await pattern._should_continue_step(8) is True
+        # Grace period exhausted
+        assert await pattern._should_continue_step(9) is False
 
     @pytest.mark.asyncio
     async def test_returns_false_when_budget_exhausted(self):
