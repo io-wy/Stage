@@ -12,7 +12,7 @@ Director 统筹全局，Agent 各尽其能。
 
 ## 亮点
 
-waiting for eplain (or you can read the repo)
+waiting for explain (or you can read the repo)
 - For single Agent: Context, Tool, Pattern, Skill
 - For multi Agent: Fallback, Communication, Duty, SubAgent
 
