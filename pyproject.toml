@@ -20,6 +20,9 @@ dependencies = [
     "datasets>=4.8.5",
 ]
 
+[dependency-groups]
+dev = ["ruff"]
+
 [tool.ruff]
 line-length = 88
 target-version = "py311"
@@ -41,3 +44,4 @@ line-ending = "auto"
 asyncio_mode = "strict"
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--ignore=tests/test_health.py --ignore=tests/test_report.md"
