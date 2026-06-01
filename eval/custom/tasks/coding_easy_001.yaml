@@ -1,0 +1,64 @@
+id: coding-easy-001
+category: coding
+difficulty: easy
+
+description: |
+  Write a function `is_palindrome(s: str) -> bool` in `src/solution.py`
+  that returns True if the given string is a palindrome (reads the same forwards and backwards).
+
+  Also write tests in `tests/test_solution.py`.
+
+  Requirements:
+  - Handle empty strings (return True)
+  - Case-insensitive comparison
+  - Ignore non-alphanumeric characters
+
+initial_files:
+  src/solution.py: |
+    def is_palindrome(s: str) -> bool:
+        """Return True if s is a palindrome, ignoring case and non-alphanumeric chars."""
+        # TODO: implement this function
+
+  tests/test_solution.py: |
+    from src.solution import is_palindrome
+
+    def test_basic_palindrome():
+        assert is_palindrome("racecar") is True
+
+    def test_not_palindrome():
+        assert is_palindrome("hello") is False
+
+    def test_empty_string():
+        assert is_palindrome("") is True
+
+    def test_case_insensitive():
+        assert is_palindrome("RaceCar") is True
+
+    def test_ignore_non_alnum():
+        assert is_palindrome("A man, a plan, a canal: Panama") is True
+
+initial_dirs:
+  - src
+  - tests
+
+verification:
+  - type: file_exists
+    path: src/solution.py
+  - type: file_exists
+    path: tests/test_solution.py
+  - type: test_pass
+    command: "PYTHONPATH=src python -m pytest tests/test_solution.py -q"
+    timeout: 30
+
+expected_graph:
+  tasks:
+    - id: implement
+      role: coder
+      dependencies: []
+    - id: test
+      role: tester
+      dependencies: [implement]
+
+max_steps: 50
+max_tokens: 200000
+timeout_sec: 300

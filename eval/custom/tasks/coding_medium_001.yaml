@@ -1,0 +1,71 @@
+id: coding-medium-001
+category: coding
+difficulty: medium
+
+description: |
+  Build a simple CLI tool in `src/todo.py` that manages a todo list stored in `data/todos.json`.
+
+  The tool must support:
+  - `add <task>`: add a new todo item
+  - `list`: show all todos with their IDs
+  - `done <id>`: mark a todo as completed
+  - `delete <id>`: remove a todo
+
+  Requirements:
+  - Data persists in JSON format
+  - Each todo has: id, text, done (bool), created_at (ISO timestamp)
+  - IDs are auto-incrementing integers
+  - The file should be executable: `python src/todo.py add "Buy milk"`
+
+initial_files:
+  src/todo.py: |
+    #!/usr/bin/env python3
+    """Simple CLI todo manager."""
+    import sys
+
+    def main():
+        pass
+
+    if __name__ == "__main__":
+        main()
+
+  data/.gitkeep: ""
+
+initial_dirs:
+  - src
+  - data
+
+verification:
+  - type: file_exists
+    path: src/todo.py
+  - type: exec
+    command: "cd src && python todo.py add 'Test task 1'"
+    timeout: 10
+  - type: exec
+    command: "cd src && python todo.py list"
+    timeout: 10
+  - type: exec
+    command: "cd src && python todo.py done 1"
+    timeout: 10
+  - type: exec
+    command: "cd src && python todo.py list"
+    timeout: 10
+  - type: exec
+    command: "cd src && python -c \"import json; d=json.load(open('data/todos.json')); assert len(d)==1 and d[0]['text']=='Test task 1' and d[0]['done']==True\""
+    timeout: 10
+
+expected_graph:
+  tasks:
+    - id: design
+      role: coder
+      dependencies: []
+    - id: implement
+      role: coder
+      dependencies: [design]
+    - id: test
+      role: tester
+      dependencies: [implement]
+
+max_steps: 15
+max_tokens: 25000
+timeout_sec: 180

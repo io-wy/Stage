@@ -47,6 +47,8 @@ class BashTool(ToolPlugin):
     description = (
         "Execute a shell command. Returns stdout, stderr, and exit code. "
         "Use for tests, builds, git operations, package installs. "
+        "For creating or modifying files, prefer write_file or edit_file over bash "
+        "redirections (e.g., cat > file, heredocs). "
         "Dangerous patterns (rm -rf /, fork bombs, curl|bash, etc.) are blocked."
     )
     durable_idempotent = False

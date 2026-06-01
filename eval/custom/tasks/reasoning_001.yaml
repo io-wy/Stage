@@ -1,0 +1,50 @@
+id: reasoning-001
+category: reasoning
+difficulty: medium
+
+description: |
+  Solve the following multi-step problem and write your answer to `output/answer.txt`.
+
+  Problem:
+  You have three containers: A (12L), B (8L), and C (5L).
+  A is full of water, B and C are empty.
+  Your goal is to measure exactly 6L in container B.
+  You can only pour water between containers until either the source is empty or the destination is full.
+
+  Write the sequence of steps (e.g., "Pour A -> B") to achieve exactly 6L in B.
+  Also explain why your solution works in `output/explanation.txt`.
+
+initial_dirs:
+  - output
+
+verification:
+  - type: file_exists
+    path: output/answer.txt
+  - type: file_contains
+    path: output/answer.txt
+    patterns:
+      - "A"
+      - "B"
+  - type: file_exists
+    path: output/explanation.txt
+  - type: file_contains
+    path: output/explanation.txt
+    patterns:
+      - "6"
+      - "L"
+
+expected_graph:
+  tasks:
+    - id: analyze
+      role: coder
+      dependencies: []
+    - id: solve
+      role: coder
+      dependencies: [analyze]
+    - id: write
+      role: coder
+      dependencies: [solve]
+
+max_steps: 10
+max_tokens: 15000
+timeout_sec: 120

@@ -175,6 +175,42 @@ class SpawnAgentTool(ToolPlugin):
                 tool_name=self.name,
             ) from last_exc
 
+        # ---- coder hallucination guard ----
+        # If expected artifacts still contain TODO/placeholder/pass, force a retry
+        # regardless of what the coder claimed. The coder may hallucinate that a
+        # file is "already implemented" when it only contains a skeleton.
+        if task.agent_type == "coder" and result_text:
+            for art_path in (task.expected_artifacts or []):
+                if os.path.exists(art_path):
+                    content = Path(art_path).read_text()
+                    if any(k in content for k in ("TODO", "placeholder", "pass\n", "# TODO")):
+                        board.log_event(
+                            "agent.hallucination_detected",
+                            task_id=task_id,
+                            agent_id=agent_id,
+                            message=f"File {art_path} still contains placeholder, forcing retry",
+                        )
+                        import sys
+                        print(
+                            f"[Orchestrator] Hallucination detected for {agent_id}: "
+                            f"{art_path} still contains placeholder. Forcing retry.",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        correction = (
+                            f"PREVIOUS ATTEMPT FAILED. The file {art_path} still contains "
+                            f"TODO/placeholder/pass. You MUST use write_file or edit_file "
+                            f"to replace it with actual implementation.\n\n"
+                            f"Current content:\n```\n{content}\n```\n\n"
+                            f"Now write the complete implementation."
+                        )
+                        result_text = await runner_delegate(
+                            agent_type=task.agent_type,
+                            input_text=correction,
+                            agent_id=f"{agent_id}-retry",
+                        )
+                        break
+
         artifacts = self._extract_artifacts(result_text)
         board.claim_artifact(task_id, artifacts)
 
@@ -331,6 +367,30 @@ class SpawnAgentTool(ToolPlugin):
             "You have the check_messages tool. Call it every 3-5 turns to see "
             "if the director or other agents have sent you messages."
         )
+
+        # Coder-specific hard constraint
+        if task.agent_type == "coder":
+            parts.append(
+                "\n# CRITICAL: File modification rule\n"
+                "You MUST use write_file or edit_file to persist any code changes. "
+                "Running code inside bash (e.g., python - <<'PY' ... PY) does NOT "
+                "modify files on disk. If a file contains TODO, placeholder, or pass, "
+                "you MUST replace it with real implementation via write_file/edit_file. "
+                "Do NOT report completion until you have confirmed the file on disk "
+                "contains your actual code (use read_file to double-check)."
+            )
+
+        # Reviewer-specific: concrete code review
+        if task.agent_type == "reviewer":
+            parts.append(
+                "\n# CRITICAL: Concrete code review rule\n"
+                "You MUST use read_file to read the FULL content of every file you review. "
+                "In your final output, quote the ACTUAL CODE you read line-by-line. "
+                "Do NOT summarize or paraphrase — show the exact code and then analyze it. "
+                "If a file is empty, contains only a signature/docstring, or contains "
+                "TODO/placeholder/pass, state this explicitly. Do NOT assume missing "
+                "implementation exists."
+            )
 
         return "\n\n".join(parts)
 

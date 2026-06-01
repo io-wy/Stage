@@ -21,7 +21,8 @@ class WriteFileTool(ToolPlugin):
 
     name = "write_file"
     description = (
-        "Write content to a file, overwriting any existing content. "
+        "Write a complete file, always replacing the entire existing content. "
+        "You must provide the FULL file content, not just the changed lines. "
         "Creates parent directories. Returns line count."
     )
     durable_idempotent = False  # writes are not safe to replay blindly

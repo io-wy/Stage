@@ -19,6 +19,13 @@ __pycache__/
 .claude/persist/
 tmp/
 output_phased/
+examples/
+
+# Eval artifacts
+.eval_cache/
+.eval_work/
+eval_*.log
+eval_report_*.json
 
 # Package build
 *.egg-info/

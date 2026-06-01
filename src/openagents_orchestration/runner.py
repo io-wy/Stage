@@ -156,6 +156,7 @@ class OrchestratorRunner:
         session_id: str | None = None,
         resume: bool = False,
         budget: Budget | None = None,
+        work_dir: str | Path | None = None,
     ) -> Any:
         """Run full orchestration for an objective.
 
@@ -166,79 +167,87 @@ class OrchestratorRunner:
             resume: If True and a persisted session with ``session_id`` exists,
                 load it and continue from the saved state.
             budget: Optional custom budget. Defaults to 500k tokens, 1800s, 100 steps.
+            work_dir: Optional working directory. All spawned agents run inside
+                this directory so relative paths resolve correctly.
 
         Returns DeliveryReport.
         """
+        import contextlib
         import sys
 
         self._session_id = session_id or f"session-{uuid.uuid4().hex[:8]}"
         print(f"\n[Orchestrator] Starting: {objective}", file=sys.stderr, flush=True)
         print(f"[Orchestrator] Session: {self._session_id}", file=sys.stderr, flush=True)
+        if work_dir:
+            print(f"[Orchestrator] Work dir: {work_dir}", file=sys.stderr, flush=True)
 
-        # Initialize persistence layer
-        if self._persist_dir is not None:
-            self._session_dir = self._persist_dir / self._session_id
-            self._session_dir.mkdir(parents=True, exist_ok=True)
-            self._recorder = EventRecorder(self._session_dir, self._session_id)
-            self._snapshotter = StateSnapshotter(self._session_dir / "snapshots")
-            self._resumer = SessionResumer(self._persist_dir)
-            print(
-                f"[Orchestrator] Persistence: {self._session_dir}",
-                file=sys.stderr,
-                flush=True,
-            )
-
-        # -- resume path -------------------------------------------------------
-        if resume and self._resumer is not None:
-            loaded = self._resumer.load(self._session_id)
-            if loaded.snapshot is not None:
+        # Change to work_dir if provided; restore on exit
+        cm = contextlib.chdir(work_dir) if work_dir else contextlib.nullcontext()
+        with cm:
+            # Initialize persistence layer
+            if self._persist_dir is not None:
+                self._session_dir = self._persist_dir / self._session_id
+                self._session_dir.mkdir(parents=True, exist_ok=True)
+                self._recorder = EventRecorder(self._session_dir, self._session_id)
+                self._snapshotter = StateSnapshotter(self._session_dir / "snapshots")
+                self._resumer = SessionResumer(self._persist_dir)
                 print(
-                    "[Orchestrator] Resuming from snapshot...",
+                    f"[Orchestrator] Persistence: {self._session_dir}",
                     file=sys.stderr,
                     flush=True,
                 )
-                self._state_board = StateBoard.from_dict(
-                    loaded.snapshot,
-                    recorder=self._recorder,
-                    snapshotter=self._snapshotter,
-                )
-                # Replay events after snapshot
-                if loaded.events_after:
-                    from openagents_orchestration.persistence import EventReplayer
-                    EventReplayer().replay(self._state_board, loaded.events_after)
+
+            # -- resume path -------------------------------------------------------
+            if resume and self._resumer is not None:
+                loaded = self._resumer.load(self._session_id)
+                if loaded.snapshot is not None:
                     print(
-                        f"[Orchestrator] Replayed {len(loaded.events_after)} event(s)",
+                        "[Orchestrator] Resuming from snapshot...",
                         file=sys.stderr,
                         flush=True,
                     )
-                print(
-                    f"[Orchestrator] Resumed: {self._state_board.progress_summary()}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                # Skip decomposition — tasks already loaded
-                return await self._continue_run(objective)
+                    self._state_board = StateBoard.from_dict(
+                        loaded.snapshot,
+                        recorder=self._recorder,
+                        snapshotter=self._snapshotter,
+                    )
+                    # Replay events after snapshot
+                    if loaded.events_after:
+                        from openagents_orchestration.persistence import EventReplayer
+                        EventReplayer().replay(self._state_board, loaded.events_after)
+                        print(
+                            f"[Orchestrator] Replayed {len(loaded.events_after)} event(s)",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    print(
+                        f"[Orchestrator] Resumed: {self._state_board.progress_summary()}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    # Skip decomposition — tasks already loaded
+                    return await self._continue_run(objective)
 
-        # -- fresh run path ----------------------------------------------------
-        # 1. Initial decomposition
-        print("[Orchestrator] Decomposing objective into tasks...", file=sys.stderr, flush=True)
-        task_graph = await self._initial_decompose(objective)
-        print(f"[Orchestrator] Decomposed into {len(task_graph.tasks)} task(s)", file=sys.stderr, flush=True)
+            # -- fresh run path ----------------------------------------------------
+            # 1. Initial decomposition
+            print("[Orchestrator] Decomposing objective into tasks...", file=sys.stderr, flush=True)
+            task_graph = await self._initial_decompose(objective)
+            print(f"[Orchestrator] Decomposed into {len(task_graph.tasks)} task(s)", file=sys.stderr, flush=True)
 
-        # 2. StateBoard (with persistence hooks)
-        self._state_board = StateBoard(
-            objective=objective,
-            budget=budget or Budget(
-                token_limit=500_000,
-                time_limit_s=1800.0,
-                max_steps=100,
-            ),
-            recorder=self._recorder,
-            snapshotter=self._snapshotter,
-        )
-        self._state_board.add_tasks(task_graph)
+            # 2. StateBoard (with persistence hooks)
+            self._state_board = StateBoard(
+                objective=objective,
+                budget=budget or Budget(
+                    token_limit=500_000,
+                    time_limit_s=1800.0,
+                    max_steps=100,
+                ),
+                recorder=self._recorder,
+                snapshotter=self._snapshotter,
+            )
+            self._state_board.add_tasks(task_graph)
 
-        return await self._continue_run(objective)
+            return await self._continue_run(objective)
 
     async def _continue_run(self, objective: str) -> Any:
         """Continue orchestration from an initialized StateBoard."""
@@ -415,13 +424,14 @@ class OrchestratorRunner:
             result = await self._run_single(agent_id, agent_type, input_text)
 
         # Extract metrics and record to StateBoard (even on failure)
+        # NOTE: steps are already added inside _run_single (runner.py:803);
+        # do NOT double-count here.
         tokens = result.usage.total_tokens if result.usage else 0
         steps = result.metadata.get("steps_used", 0) if result.metadata else 0
         if self._state_board is not None:
             self._state_board.update_agent(
                 agent_id, token_used=tokens, steps_used=steps
             )
-            self._state_board.add_steps(steps)
 
         if result.stop_reason == StopReason.FAILED:
             msg = extract_result_error_message(result)
@@ -439,11 +449,16 @@ class OrchestratorRunner:
                     status=TaskStatus.COMPLETED,
                     result_output=str(result.final_output or "")[:2000],
                 )
-                # Verify and record artifacts
+                # Verify and record artifacts (strict: must exist and be non-empty)
                 for art in result.artifacts:
                     art_path = getattr(art, "path", str(art)) if hasattr(art, "path") else str(art)
                     if art_path:
-                        self._state_board.verify_artifact(art_path, exists=True)
+                        full_path = Path(art_path)
+                        if not full_path.is_absolute():
+                            # Try to resolve relative to current working context
+                            full_path = Path.cwd() / art_path
+                        exists = full_path.exists() and full_path.stat().st_size > 0
+                        self._state_board.verify_artifact(str(art_path), exists=exists)
                         self._state_board.claim_artifact(task_id, [art_path])
 
         # Print execution summary + monitor thresholds
