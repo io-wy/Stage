@@ -19,6 +19,8 @@ from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 from openagents_orchestration.models.task import TaskStatus
 from openagents_orchestration.state_board import AgentStatus
+from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
+from prompts.corrections import build_hallucination_correction
 
 
 class SpawnAgentTool(ToolPlugin):
@@ -198,13 +200,7 @@ class SpawnAgentTool(ToolPlugin):
                             file=sys.stderr,
                             flush=True,
                         )
-                        correction = (
-                            f"PREVIOUS ATTEMPT FAILED. The file {art_path} still contains "
-                            f"TODO/placeholder/pass. You MUST use write_file or edit_file "
-                            f"to replace it with actual implementation.\n\n"
-                            f"Current content:\n```\n{content}\n```\n\n"
-                            f"Now write the complete implementation."
-                        )
+                        correction = build_hallucination_correction(art_path, content)
                         result_text = await runner_delegate(
                             agent_type=task.agent_type,
                             input_text=correction,
@@ -369,29 +365,11 @@ class SpawnAgentTool(ToolPlugin):
             "if the director or other agents have sent you messages."
         )
 
-        # Coder-specific hard constraint
+        # Agent-specific hard constraints
         if task.agent_type == "coder":
-            parts.append(
-                "\n# CRITICAL: File modification rule\n"
-                "You MUST use write_file or edit_file to persist any code changes. "
-                "Running code inside bash (e.g., python - <<'PY' ... PY) does NOT "
-                "modify files on disk. If a file contains TODO, placeholder, or pass, "
-                "you MUST replace it with real implementation via write_file/edit_file. "
-                "Do NOT report completion until you have confirmed the file on disk "
-                "contains your actual code (use read_file to double-check)."
-            )
-
-        # Reviewer-specific: concrete code review
+            parts.append(CODER_CONSTRAINT)
         if task.agent_type == "reviewer":
-            parts.append(
-                "\n# CRITICAL: Concrete code review rule\n"
-                "You MUST use read_file to read the FULL content of every file you review. "
-                "In your final output, quote the ACTUAL CODE you read line-by-line. "
-                "Do NOT summarize or paraphrase — show the exact code and then analyze it. "
-                "If a file is empty, contains only a signature/docstring, or contains "
-                "TODO/placeholder/pass, state this explicitly. Do NOT assume missing "
-                "implementation exists."
-            )
+            parts.append(REVIEWER_CONSTRAINT)
 
         return "\n\n".join(parts)
 

@@ -9,6 +9,7 @@ from openagents.errors.exceptions import PermanentToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from prompts.corrections import build_replan_prompt
 
 
 class ReplanTool(ToolPlugin):
@@ -218,23 +219,11 @@ class ReplanTool(ToolPlugin):
     @staticmethod
     def _build_replan_prompt(board: Any, old_task: Any, reason: str) -> str:
         snapshot = board.snapshot()
-        return (
-            f"The following task failed and needs to be broken into smaller sub-tasks.\n\n"
-            f"Original task: {old_task.description}\n"
-            f"Failure reason: {reason}\n"
-            f"Input context: {old_task.input_context}\n\n"
-            f"Current plan:\n"
-            f"{json.dumps(snapshot['tasks'], indent=2)}\n\n"
-            f"Please output a JSON array of replacement sub-tasks:\n"
-            f'[{{"task_id": "t_new_1", "description": "...", '
-            f'"input_context": "detailed instructions", '
-            f'"agent_type": "coder", "expected_artifacts": ["file.py"]}}]\n\n'
-            f"Rules:\n"
-            f"1. Each sub-task should be small enough to complete in ~5 minutes\n"
-            f"2. agent_type must be one of: coder, reviewer, tester, researcher\n"
-            f"3. Include expected output files\n"
-            f"4. task_id must be unique (use t_new_1, t_new_2, ...)\n"
-            f"5. Output strict JSON only, no markdown fences"
+        return build_replan_prompt(
+            description=old_task.description,
+            reason=reason,
+            input_context=old_task.input_context,
+            plan=snapshot.get("tasks", []),
         )
 
     @staticmethod

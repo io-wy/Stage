@@ -1,26 +1,30 @@
-"""Compatibility shim — re-exports from the centralized prompts package.
+"""System prompt composition for the orchestrator.
 
-Prompts live in src/prompts/ for easy editing and version control.
-This module exists so existing imports like::
-
-    from openagents_orchestration.prompts import CORE_PRINCIPLES
-
-continue to work without change.
+All prompts are centralized here for easy tuning and version control.
+Each submodule groups prompts by role or lifecycle phase.
 """
 
 from __future__ import annotations
 
-# Re-export everything the old single-file module provided
 from prompts.core import CORE_PRINCIPLES
 from prompts.director import DIRECTOR_PRINCIPLES
-from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
+from prompts.agent_constraints import (
+    CODER_CONSTRAINT,
+    REVIEWER_CONSTRAINT,
+)
 from prompts.corrections import (
     REPLAN_PROMPT_TEMPLATE,
     build_hallucination_correction,
     build_replan_prompt,
 )
-from prompts.dynamic import build_runtime_fragment, gather_runtime_context
-from prompts.decompose import build_decompose_prompt, build_agents_info
+from prompts.dynamic import (
+    build_runtime_fragment,
+    gather_runtime_context,
+)
+from prompts.decompose import (
+    build_decompose_prompt,
+    build_agents_info,
+)
 
 __all__ = [
     "CORE_PRINCIPLES",

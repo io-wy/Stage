@@ -91,14 +91,18 @@ Your task:
                 instance = inst
                 break
 
-        # 准备工作目录 + 代码仓库
+        # 准备工作目录
         ws = WorkDirSetup(self.work_dir, task.task_id)
         work_path = ws.setup(task)
 
+        # repo 放在独立缓存目录（按实例隔离），避免被 WorkDirSetup.cleanup() 删除
+        repo_cache = self.work_dir / "_repo_cache" / task.task_id
+        repo_cache.mkdir(parents=True, exist_ok=True)
+
         start = time.monotonic()
         try:
-            # clone repo
-            repo_dir = setup_repo(instance, work_path) if instance else work_path / "repo"
+            # clone repo（复用缓存）
+            repo_dir = setup_repo(instance, repo_cache) if instance else work_path / "repo"
 
             # 构建给导演的 objective，包含 repo 上下文
             objective = task.description

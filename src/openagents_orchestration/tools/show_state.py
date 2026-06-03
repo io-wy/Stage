@@ -49,18 +49,22 @@ class ShowStateTool(ToolPlugin):
 
         payload = snapshot[section] if section and section in snapshot else snapshot
 
+        # Append suggested tools based on current state
+        suggested_tools = board.suggest_tools()
+        if suggested_tools:
+            payload["suggested_next_tools"] = suggested_tools
+
         # Append fallback suggestions for failed tasks
         failed_tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
+        extra_lines: list[str] = []
         if isinstance(failed_tasks, list):
-            suggestions = []
             for task in failed_tasks:
                 if task.get("status") == "failed":
                     suggestion = board.suggest_fallback(task["id"])
                     if suggestion:
-                        suggestions.append(suggestion)
-            if suggestions:
-                # Convert payload dict to string, append suggestions, return as text
-                text = json.dumps(payload, indent=2, ensure_ascii=False)
-                return text + "\n" + "\n".join(suggestions)
+                        extra_lines.append(suggestion)
 
-        return json.dumps(payload, indent=2, ensure_ascii=False)
+        text = json.dumps(payload, indent=2, ensure_ascii=False)
+        if extra_lines:
+            text += "\n" + "\n".join(extra_lines)
+        return text

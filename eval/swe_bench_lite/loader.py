@@ -82,19 +82,37 @@ def load_swe_bench_lite(
 
 
 def clone_repo(repo_url: str, commit_hash: str, dest: Path) -> Path:
-    """克隆指定 commit 的代码仓库."""
+    """克隆或复用指定 commit 的代码仓库."""
     # 转换为 https URL (处理 github.com/owner/repo 格式)
     if not repo_url.startswith("http"):
         repo_url = f"https://github.com/{repo_url}.git"
 
-    if dest.exists():
-        import shutil
-        shutil.rmtree(dest)
+    # 如果目录已存在且是有效 git 仓库，尝试复用
+    git_dir = dest / ".git"
+    if dest.exists() and git_dir.exists():
+        try:
+            # 尝试 checkout 到目标 commit
+            subprocess.run(
+                ["git", "checkout", commit_hash],
+                cwd=dest,
+                check=True,
+                capture_output=True,
+            )
+            return dest
+        except subprocess.CalledProcessError:
+            # 可能是 shallow clone 或不包含目标 commit，重新 clone
+            import shutil
 
+            shutil.rmtree(dest)
+
+    # 完整 clone（shallow clone 无法 checkout 任意历史 commit）
+    # 传递 HTTP_PROXY/HTTPS_PROXY 环境变量（如果配置了代理）
+    env = dict(os.environ)
     subprocess.run(
-        ["git", "clone", "--depth", "1", repo_url, str(dest)],
+        ["git", "clone", repo_url, str(dest)],
         check=True,
         capture_output=True,
+        env=env,
     )
 
     # checkout 到 issue 前的 commit

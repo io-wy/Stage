@@ -209,6 +209,18 @@
           "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
         },
         {
+          "id": "todo_write",
+          "impl": "openagents_orchestration.tools.corecoder.todo.TodoWriteTool"
+        },
+        {
+          "id": "todo_read",
+          "impl": "openagents_orchestration.tools.corecoder.todo.TodoReadTool"
+        },
+        {
+          "id": "apply_patch",
+          "impl": "openagents_orchestration.tools.corecoder.apply_patch.ApplyPatchTool"
+        },
+        {
           "id": "run_skill",
           "impl": "openagents_orchestration.tools.run_skill.RunSkillTool"
         }
@@ -294,6 +306,14 @@
           "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
         },
         {
+          "id": "todo_write",
+          "impl": "openagents_orchestration.tools.corecoder.todo.TodoWriteTool"
+        },
+        {
+          "id": "todo_read",
+          "impl": "openagents_orchestration.tools.corecoder.todo.TodoReadTool"
+        },
+        {
           "id": "run_skill",
           "impl": "openagents_orchestration.tools.run_skill.RunSkillTool"
         }
@@ -367,6 +387,14 @@
         {
           "id": "check_messages",
           "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+        },
+        {
+          "id": "todo_write",
+          "impl": "openagents_orchestration.tools.corecoder.todo.TodoWriteTool"
+        },
+        {
+          "id": "todo_read",
+          "impl": "openagents_orchestration.tools.corecoder.todo.TodoReadTool"
         },
         {
           "id": "run_skill",

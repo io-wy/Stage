@@ -34,11 +34,8 @@ from openagents.errors.exceptions import ModelRetryError, ToolError
 from openagents.interfaces.capabilities import PATTERN_EXECUTE
 from openagents.interfaces.pattern import PatternPlugin, unwrap_tool_result
 
-from openagents_orchestration.prompts import (
-    CORE_PRINCIPLES,
-    build_runtime_fragment,
-    gather_runtime_context,
-)
+from prompts.core import CORE_PRINCIPLES
+from prompts.dynamic import build_runtime_fragment, gather_runtime_context
 from openagents_orchestration.utils.runtime_compat import (
     error_details_payload,
     is_retryable_llm_error,

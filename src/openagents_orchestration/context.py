@@ -99,8 +99,9 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
         ratio = after_layer1 / self._budget if self._budget else 0.0
 
         # ---- Layer 2: LLM summarize older half (>= 70%) -------------------
+        summarize_tokens = 0
         if ratio >= self._cfg.summarize_threshold:
-            transcript = await self._summarize_old_half(llm_client, transcript)
+            transcript, summarize_tokens = await self._summarize_old_half(llm_client, transcript)
             layers_fired.append("summarize")
 
         after_layer2 = self._count_total(transcript)
@@ -128,6 +129,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
                 "tokens_before": original_tokens,
                 "tokens_after": final_tokens,
                 "layers_fired": layers_fired,
+                "summarize_tokens": summarize_tokens,
                 "omitted_artifacts": omitted_artifacts,
                 "token_counter": self._counter.name,
             },
@@ -181,18 +183,18 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
 
     async def _summarize_old_half(
         self, llm_client: Any, transcript: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], int]:
         keep_recent = self._cfg.keep_recent_messages_for_summary
         if len(transcript) <= keep_recent + 1:
-            return transcript
+            return transcript, 0
 
         head_kept = transcript[: self._cfg.keep_first_messages]
         middle = transcript[self._cfg.keep_first_messages : -keep_recent]
         tail = transcript[-keep_recent:]
         if not middle:
-            return transcript
+            return transcript, 0
 
-        summary_text = await self._render_summary(llm_client, middle)
+        summary_text, tokens_used = await self._render_summary(llm_client, middle)
         summary_msg = {
             "role": "system",
             "content": (
@@ -200,14 +202,19 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
                 f"summarized]\n{summary_text}"
             ),
         }
-        return head_kept + [summary_msg] + tail
+        return head_kept + [summary_msg] + tail, tokens_used
 
     async def _render_summary(
         self, llm_client: Any, msgs: list[dict[str, Any]]
-    ) -> str:
+    ) -> tuple[str, int]:
+        """Render a summary of the conversation history.
+
+        Returns (summary_text, tokens_used). tokens_used is the actual LLM
+        token consumption from the API response (0 if heuristic fallback).
+        """
         rendered = "\n\n".join(_render_message_for_summary(m) for m in msgs)
         if llm_client is None:
-            return _heuristic_summary(rendered, max_words=self._cfg.summary_max_words)
+            return _heuristic_summary(rendered, max_words=self._cfg.summary_max_words), 0
 
         prompt = (
             f"Summarize the following coding-agent conversation history into "
@@ -219,6 +226,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
             "fabricate information.\n\n=== HISTORY START ===\n"
             f"{rendered}\n=== HISTORY END ==="
         )
+        tokens_used = 0
         try:
             response = await llm_client.generate(
                 messages=[
@@ -234,12 +242,14 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
             )
             text = (response.output_text or "").strip()
             if text:
-                return text
+                if response.usage is not None:
+                    tokens_used = getattr(response.usage, "total_tokens", 0) or 0
+                return text, tokens_used
         except (asyncio.CancelledError, KeyboardInterrupt):
             raise
         except Exception:  # pragma: no cover - LLM error → graceful degradation
             pass
-        return _heuristic_summary(rendered, max_words=self._cfg.summary_max_words)
+        return _heuristic_summary(rendered, max_words=self._cfg.summary_max_words), 0
 
     # ---- Layer 3: hard collapse ------------------------------------------
 
