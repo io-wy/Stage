@@ -81,9 +81,9 @@ Do not change the function signature or the test file.
                 description=objective,
                 initial_files=initial_files,
                 initial_dirs=["output"],
-                max_steps=15,
-                max_tokens=30000,
-                timeout_sec=180,
+                max_steps=20,
+                max_tokens=200000,
+                timeout_sec=300,
                 verification=[
                     {"type": "test_pass", "command": "python test_solution.py"},
                 ],

@@ -71,7 +71,7 @@ class SendAlertTool(ToolPlugin):
         if board is None:
             raise PermanentToolError("StateBoard not available", tool_name=self.name)
 
-        from_agent = getattr(context, "agent_id", "observer")
+        from_agent = getattr(context, "agent_id", "monitor")
 
         # Generate fingerprint for deduplication
         fingerprint = self._fingerprint(message, data)

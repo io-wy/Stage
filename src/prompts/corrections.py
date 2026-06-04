@@ -38,7 +38,7 @@ Please output a JSON array of replacement sub-tasks:
 
 Rules:
 1. Each sub-task should be small enough to complete in ~5 minutes
-2. agent_type must be one of: coder, reviewer, tester, researcher
+2. agent_type must be one of: coder, reviewer, researcher, monitor
 3. Include expected output files
 4. task_id must be unique (use t_new_1, t_new_2, ...)
 5. Output strict JSON only, no markdown fences

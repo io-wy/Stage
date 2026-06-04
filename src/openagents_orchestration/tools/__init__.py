@@ -1,6 +1,12 @@
 """Orchestrator tools — Director scheduling + agent communication."""
 
 from openagents_orchestration.tools.analyze_event_pattern import AnalyzeEventPatternTool
+from openagents_orchestration.tools.github import (
+    GitHubCITool,
+    GitHubIssueTool,
+    GitHubPRTool,
+    GitHubRepoTool,
+)
 from openagents_orchestration.tools.ask_human import AskHumanTool
 from openagents_orchestration.tools.diagnose_agent import DiagnoseAgentTool
 from openagents_orchestration.tools.finalize import FinalizeTool
@@ -21,6 +27,10 @@ from openagents_orchestration.tools.verify_alert_effectiveness import (
 
 __all__ = [
     "AnalyzeEventPatternTool",
+    "GitHubCITool",
+    "GitHubIssueTool",
+    "GitHubPRTool",
+    "GitHubRepoTool",
     "AskHumanTool",
     "DiagnoseAgentTool",
     "FinalizeTool",

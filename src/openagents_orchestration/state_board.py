@@ -109,15 +109,22 @@ class Budget:
 
     @property
     def token_remaining(self) -> int:
+        if self.token_limit < 0:
+            return 2**63 - 1
         return max(0, self.token_limit - self.token_used)
 
     @property
     def time_remaining_s(self) -> float:
+        if self.time_limit_s < 0:
+            return 2**63 - 1.0
         return max(0.0, self.time_limit_s - (time.time() - self.start_time))
 
     @property
     def exhausted(self) -> bool:
-        return self.token_remaining <= 0 or self.time_remaining_s <= 0 or self.steps_taken >= self.max_steps
+        token_exhausted = self.token_limit >= 0 and self.token_used >= self.token_limit
+        time_exhausted = self.time_limit_s >= 0 and self.time_remaining_s <= 0
+        steps_exhausted = self.max_steps >= 0 and self.steps_taken >= self.max_steps
+        return token_exhausted or time_exhausted or steps_exhausted
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -507,6 +514,47 @@ class StateBoard:
             + "\n".join(f"- {p}" for p in parts)
             + "\n注意：以上是基于状态的观察供你参考，最终决定权在你。"
         )
+
+    def suggest_tools(self) -> list[str]:
+        """根据当前全局状态推荐下一步最可能需要的工具。"""
+        suggestions: list[str] = []
+
+        # 高优先级：需要 human 回复
+        unanswered = [q for q in self._human_questions if q["answer"] is None]
+        if unanswered:
+            suggestions.append("check_messages")
+            return suggestions
+
+        # 高优先级：pending messages
+        if self._pending_messages:
+            suggestions.append("check_messages")
+
+        # 有 failed 任务 → 先看原因再决定
+        failed = [t for t in self.tasks.values() if t.status == TaskStatus.FAILED]
+        if failed:
+            suggestions.extend(["read_file", "replan", "spawn_resident"])
+
+        # 有 ready 的 pending 任务 → 调度
+        ready = self.tasks_ready()
+        if ready:
+            suggestions.append("spawn_agent")
+            if len(ready) > 1:
+                suggestions.append("spawn_agent(batch)")
+
+        # 预算紧张
+        if self.budget.exhausted or self.budget.time_remaining_s < 120:
+            suggestions.extend(["ask_human", "finalize"])
+
+        # 全部完成
+        if self.all_terminal():
+            suggestions.append("finalize")
+
+        # 有 running 任务 → 等待，但可用 observer 工具
+        running = [t for t in self.tasks.values() if t.status == TaskStatus.RUNNING]
+        if running and not suggestions:
+            suggestions.append("show_state")
+
+        return suggestions
 
     # -- mailbox API ---------------------------------------------------------
 

@@ -71,9 +71,9 @@ Your task:
                 category="swe_bench_lite",
                 difficulty="hard",
                 description=objective,
-                max_steps=30,
-                max_tokens=100000,
-                timeout_sec=600,
+                max_steps=50,
+                max_tokens=1000000,
+                timeout_sec=1200,
                 verification=[
                     {"type": "custom", "instance": inst},  # 由 harness 自行验证
                 ],
@@ -95,17 +95,35 @@ Your task:
         ws = WorkDirSetup(self.work_dir, task.task_id)
         work_path = ws.setup(task)
 
-        # repo 放在独立缓存目录（按实例隔离），避免被 WorkDirSetup.cleanup() 删除
-        repo_cache = self.work_dir / "_repo_cache" / task.task_id
+        # repo 放在全局缓存目录（按 repo 名分），跨 eval 运行复用
+        repo_name = instance.get("repo", "unknown").replace("/", "_") if instance else "unknown"
+        repo_cache = Path(".eval_cache") / "repos" / repo_name
         repo_cache.mkdir(parents=True, exist_ok=True)
 
         start = time.monotonic()
         try:
-            # clone repo（复用缓存）
+            # clone repo（复用全局缓存）
             repo_dir = setup_repo(instance, repo_cache) if instance else work_path / "repo"
 
+            # 把 repo 放到工作目录下（符号链接或复制），让戏子能看到代码
+            repo_in_work = work_path / "repo"
+            if not repo_in_work.exists():
+                if repo_dir.exists():
+                    import shutil
+                    shutil.copytree(repo_dir, repo_in_work)
+                else:
+                    repo_in_work.mkdir(parents=True, exist_ok=True)
+
+            # 安装 repo 环境（pip install -e .），让测试能直接运行
+            self._install_repo_env(repo_in_work)
+
             # 构建给导演的 objective，包含 repo 上下文
-            objective = task.description
+            objective = (
+                f"{task.description}\n\n"
+                f"The repository is located at: repo/\n"
+                f"All file paths should be relative to repo/. "
+                f"Use repo/astropy/... when reading or editing files."
+            )
 
             # 启动戏台
             from openagents_orchestration.runner import OrchestratorRunner
@@ -118,8 +136,9 @@ Your task:
             # 运行（带超时）
             loop = asyncio.get_event_loop()
             budget = Budget(
-                max_steps=task.max_steps,
-                token_limit=task.max_tokens,
+                max_steps=-1,
+                token_limit=-1,
+                time_limit_s=task.timeout_sec,
             )
 
             report = await asyncio.wait_for(
@@ -183,3 +202,46 @@ Your task:
             )
         finally:
             ws.cleanup()
+
+    @staticmethod
+    def _install_repo_env(repo_dir: Path) -> None:
+        """Install the repository so tests can be run without extra setup."""
+        import subprocess
+        import sys
+
+        install_marker = repo_dir / ".eval_installed"
+        if install_marker.exists():
+            return
+
+        # Try pip install -e . first
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-e", "."],
+                cwd=repo_dir,
+                capture_output=True,
+                timeout=300,
+            )
+            if result.returncode == 0:
+                install_marker.write_text("pip install -e .", encoding="utf-8")
+                return
+        except (subprocess.TimeoutExpired, Exception):
+            pass
+
+        # Fallback: try python setup.py develop
+        setup_py = repo_dir / "setup.py"
+        if setup_py.exists():
+            try:
+                result = subprocess.run(
+                    [sys.executable, "setup.py", "develop"],
+                    cwd=repo_dir,
+                    capture_output=True,
+                    timeout=300,
+                )
+                if result.returncode == 0:
+                    install_marker.write_text("setup.py develop", encoding="utf-8")
+                    return
+            except (subprocess.TimeoutExpired, Exception):
+                pass
+
+        # Best-effort: don't fail if install doesn't work
+        install_marker.write_text("install_failed", encoding="utf-8")

@@ -105,11 +105,11 @@ def clone_repo(repo_url: str, commit_hash: str, dest: Path) -> Path:
 
             shutil.rmtree(dest)
 
-    # 完整 clone（shallow clone 无法 checkout 任意历史 commit）
-    # 传递 HTTP_PROXY/HTTPS_PROXY 环境变量（如果配置了代理）
+    # 使用 partial clone (--filter=blob:none) 加速大仓库下载：
+    # 只下载 commit 历史，文件内容按需获取，支持 checkout 任意历史 commit
     env = dict(os.environ)
     subprocess.run(
-        ["git", "clone", repo_url, str(dest)],
+        ["git", "clone", "--filter=blob:none", repo_url, str(dest)],
         check=True,
         capture_output=True,
         env=env,

@@ -20,10 +20,13 @@ def apply_patch(repo_dir: Path, patch_content: str | None) -> bool:
     patch_file.write_text(patch_content, encoding="utf-8")
 
     result = subprocess.run(
-        ["git", "apply", str(patch_file)],
+        ["git", "apply", patch_file.name],
         cwd=repo_dir,
         capture_output=True,
     )
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")[:500]
+        print(f"[verify] git apply failed: {stderr}", file=__import__("sys").stderr)
     patch_file.unlink(missing_ok=True)
     return result.returncode == 0
 

@@ -32,7 +32,10 @@ from openagents.llm.registry import create_llm_client
 from openagents.plugins.builtin.events.async_event_bus import AsyncEventBus
 from openagents.plugins.loader import LoadedAgentPlugins, load_agent_plugins
 
+from openagents_orchestration.intent_classifier import IntentClassifier, IntentResult
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.utils.structured_generate import structured_generate
+from pydantic import BaseModel, Field
 from openagents_orchestration.persistence import (
     EventRecorder,
     SessionResumer,
@@ -138,7 +141,7 @@ class OrchestratorRunner:
         self._state_board: StateBoard | None = None
         self._deps: RunnerDeps | None = None
         self._spawn_sem = asyncio.Semaphore(3)
-        self._observer_resident_id: str | None = None
+        self._monitor_resident_id: str | None = None
         # Persistence layer
         self._persist_dir = Path(persist_dir) if persist_dir else None
         self._session_id: str | None = None
@@ -233,12 +236,21 @@ class OrchestratorRunner:
                     return await self._continue_run(objective)
 
             # -- fresh run path ----------------------------------------------------
-            # 1. Initial decomposition
+            # 1. Intent classification
+            print("[Orchestrator] Classifying intent...", file=sys.stderr, flush=True)
+            intent = await self._classify_intent(objective)
+            print(
+                f"[Orchestrator] Intent: {intent.task_type}/{intent.complexity}, "
+                f"ext={intent.external}, conf={intent.confidence:.2f}",
+                file=sys.stderr, flush=True,
+            )
+
+            # 2. Initial decomposition (intent-guided)
             print("[Orchestrator] Decomposing objective into tasks...", file=sys.stderr, flush=True)
             task_graph = await self._initial_decompose(objective)
             print(f"[Orchestrator] Decomposed into {len(task_graph.tasks)} task(s)", file=sys.stderr, flush=True)
 
-            # 2. StateBoard (with persistence hooks)
+            # 3. StateBoard (with persistence hooks)
             self._state_board = StateBoard(
                 objective=objective,
                 budget=budget or Budget(
@@ -251,9 +263,9 @@ class OrchestratorRunner:
             )
             self._state_board.add_tasks(task_graph)
 
-            return await self._continue_run(objective)
+            return await self._continue_run(objective, intent=intent)
 
-    async def _continue_run(self, objective: str) -> Any:
+    async def _continue_run(self, objective: str, *, intent: IntentResult | None = None) -> Any:
         """Continue orchestration from an initialized StateBoard."""
         import sys
 
@@ -264,7 +276,7 @@ class OrchestratorRunner:
         self._bridge_sdk_events()
 
         # 2. Spawn observer resident
-        await self._spawn_observer_resident()
+        await self._spawn_monitor_resident()
 
         # 3. Deps for tools
         self._deps = RunnerDeps(
@@ -275,8 +287,19 @@ class OrchestratorRunner:
 
         # 4. Run director
         snapshot = self._state_board.snapshot()
+        intent_section = ""
+        if intent is not None:
+            intent_section = (
+                f"# Task Intent\n"
+                f"- Type: {intent.task_type}\n"
+                f"- Complexity: {intent.complexity}\n"
+                f"- External integrations: {intent.external or 'none'}\n"
+                f"- Priority: {intent.priority}\n"
+                f"- Reason: {intent.reason}\n\n"
+            )
         director_input = (
             f"# Objective\n{objective}\n\n"
+            f"{intent_section}"
             f"# Current State\n"
             f"{json.dumps(snapshot['tasks'], indent=2)}\n\n"
             f"Start orchestration. Call show_state first, then decide which "
@@ -382,30 +405,30 @@ class OrchestratorRunner:
 
         self._event_bus.subscribe("*", on_sdk_event)
 
-    async def _spawn_observer_resident(self) -> None:
-        """Spawn the observer resident agent for continuous monitoring."""
+    async def _spawn_monitor_resident(self) -> None:
+        """Spawn the monitor resident agent for continuous monitoring."""
         if self._state_board is None:
             return
         try:
-            if "observer" not in self._agents_by_id:
-                print("[Orchestrator] Observer agent not configured, skipping.", file=sys.stderr, flush=True)
+            if "monitor" not in self._agents_by_id:
+                print("[Orchestrator] Monitor agent not configured, skipping.", file=sys.stderr, flush=True)
                 return
 
-            resident_id = f"observer-{uuid.uuid4().hex[:6]}"
+            resident_id = f"monitor-{uuid.uuid4().hex[:6]}"
 
             resident = ResidentAgent(
                 resident_id=resident_id,
-                agent_type="observer",
+                agent_type="monitor",
                 runner=self,
                 board=self._state_board,
             )
             await resident.start()
             self._residents[resident_id] = resident
-            self._observer_resident_id = resident_id
+            self._monitor_resident_id = resident_id
             self._state_board.register_resident(resident.state)
-            print(f"[Orchestrator] Observer resident spawned: {resident_id}", file=sys.stderr, flush=True)
+            print(f"[Orchestrator] Monitor resident spawned: {resident_id}", file=sys.stderr, flush=True)
         except Exception as exc:
-            print(f"[Orchestrator] Failed to spawn observer: {exc}", file=sys.stderr, flush=True)
+            print(f"[Orchestrator] Failed to spawn monitor: {exc}", file=sys.stderr, flush=True)
 
     async def run_agent(self, agent_type: str, input_text: str, agent_id: str | None = None) -> str:
         """Spawn a tactical agent. Called by spawn_agent tool.
@@ -471,11 +494,14 @@ class OrchestratorRunner:
         tool_calls = result.metadata.get("tool_calls_used", "?") if result.metadata else "?"
         output_preview = str(result.final_output or "")[:200].replace("\n", " ")
 
-        # Threshold warnings
+        # Threshold warnings (skipped when budget is unlimited)
         warnings: list[str] = []
-        if isinstance(steps, int) and steps >= 15:
+        budget = self._state_board.budget if self._state_board else None
+        steps_limited = budget is None or budget.max_steps >= 0
+        tokens_limited = budget is None or budget.token_limit >= 0
+        if isinstance(steps, int) and steps >= 25 and steps_limited:
             warnings.append(f"HIGH_STEP_COUNT({steps})")
-        if tokens > 50000:
+        if tokens > 200000 and tokens_limited:
             warnings.append(f"HIGH_TOKEN({tokens})")
         warning_str = f" [{' | '.join(warnings)}]" if warnings else ""
 
@@ -578,8 +604,21 @@ class OrchestratorRunner:
 
     # -- internals -----------------------------------------------------------
 
+    async def _classify_intent(self, objective: str) -> IntentResult:
+        """Classify task intent before decomposition."""
+        director_agent = self._agents_by_id.get("director")
+        if director_agent is None or director_agent.llm is None:
+            return IntentResult(
+                task_type="unknown", complexity="medium",
+                external=[], priority="normal",
+                confidence=0.0, reason="No director LLM configured", source="fallback",
+            )
+        llm = create_llm_client(director_agent.llm)
+        classifier = IntentClassifier(llm_client=llm)
+        return await classifier.classify(objective)
+
     async def _initial_decompose(self, objective: str) -> TaskGraph:
-        """Use the director's LLM to decompose the objective into a TaskGraph."""
+        """Use structured generation to decompose the objective into a TaskGraph."""
         director_agent = self._agents_by_id.get("director")
         if director_agent is None or director_agent.llm is None:
             raise ConfigError("Director agent not configured")
@@ -587,59 +626,73 @@ class OrchestratorRunner:
         llm = create_llm_client(director_agent.llm)
         agents_info = self._build_agents_info()
 
-        prompt = (
-            f"Decompose the following objective into a structured task graph.\n\n"
-            f"Objective: {objective}\n\n"
+        class _TaskSchema(BaseModel):
+            task_id: str
+            description: str
+            input_context: str = ""
+            agent_type: str = "coder"
+            dependencies: list[str] = Field(default_factory=list)
+            expected_artifacts: list[str] = Field(default_factory=list)
+
+        class _GraphSchema(BaseModel):
+            tasks: list[_TaskSchema]
+
+        system_prompt = (
+            "You are a task decomposer. Break down the objective into a structured task graph.\n\n"
             f"Available agent types:\n{agents_info}\n\n"
-            f"Rules:\n"
-            f"1. Each task has a unique task_id (t1, t2, ...)\n"
-            f"2. List dependencies explicitly\n"
-            f"3. EACH TASK SHOULD HAVE AT MOST 3-5 expected_artifacts (files). "
-            f"If a task needs more than 5 files, SPLIT IT into smaller subtasks.\n"
-            f"4. For project scaffold/init tasks, split into granular subtasks: "
-            f"   - t1: project structure + config files (pyproject.toml, requirements.txt)\n"
-            f"   - t2: core module files (config, database, security)\n"
-            f"   - t3: models and schemas\n"
-            f"   - t4: API routes and services\n"
-            f"5. Keep the graph shallow (2-4 layers)\n"
-            f"6. input_context: detailed instructions for the agent\n"
-            f"7. coder agents have a step budget of ~30 steps. A task creating 10+ files will fail.\n\n"
-            f'Output strict JSON: {{"tasks": [...]}}\n'
-            f'Each task: {{"task_id": "t1", "description": "...", '
-            f'"input_context": "...", "agent_type": "coder", '
-            f'"dependencies": [], "expected_artifacts": ["file.py"]}}'
+            "Rules:\n"
+            "1. Each task has a unique task_id (t1, t2, ...)\n"
+            "2. List dependencies explicitly\n"
+            "3. EACH TASK SHOULD HAVE AT MOST 3-5 expected_artifacts. Split large tasks.\n"
+            "4. Keep the graph shallow (2-4 layers)\n"
+            "5. input_context: detailed instructions for the agent\n"
+            "6. coder agents have a step budget of ~30 steps."
         )
 
-        response = None
-        last_exc: BaseException | None = None
-        for attempt in range(3):
-            try:
-                response = await llm.generate(
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.2,
-                    max_tokens=4096,
-                    tools=None,
-                )
-                break
-            except BaseException as exc:
-                last_exc = exc
-                if attempt == 2 or not is_retryable_llm_error(exc):
-                    raise
-                await asyncio.sleep(1.5 * (attempt + 1))
-        if response is None and last_exc is not None:
-            raise last_exc
-        text = response.output_text or ""
-        # Track decomposer token usage
-        if self._state_board is not None and response.usage is not None:
-            self._state_board.add_tokens(response.usage.total_tokens)
-        return self._parse_task_graph(text, objective)
+        try:
+            result, usage = await structured_generate(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Objective: {objective}"},
+                ],
+                response_model=_GraphSchema,
+                llm_client=llm,
+                temperature=0.2,
+                max_tokens=4096,
+            )
+            if self._state_board is not None and usage is not None:
+                self._state_board.add_usage(usage)
+        except Exception as exc:
+            raise RuntimeError(f"Task decomposition failed: {exc}") from exc
+
+        tasks = []
+        for item in result.tasks:
+            tasks.append(TaskNode(
+                task_id=str(item.task_id),
+                description=str(item.description),
+                agent_type=str(item.agent_type),
+                dependencies=list(item.dependencies),
+                expected_artifacts=list(item.expected_artifacts),
+                input_context=str(item.input_context),
+            ))
+        graph = TaskGraph(objective=objective, tasks=tasks)
+        graph.validate()
+        return graph
 
     def _build_agents_info(self) -> str:
+        descriptions = {
+            "coder": "writes and edits code files",
+            "reviewer": "reviews code for quality, security, correctness; writes and runs tests",
+            "researcher": "researches topics via web search and analysis",
+            "github_agent": "GitHub operations: PRs, issues, CI, code review, repo management",
+            "monitor": "monitors orchestration state, detects anomalies, watches system health and performance",
+        }
         lines = []
         for aid, _agent in self._agents_by_id.items():
             if aid == "director":
                 continue
-            lines.append(f"- {aid}: tactical agent")
+            desc = descriptions.get(aid, "tactical agent")
+            lines.append(f"- {aid}: {desc}")
         return "\n".join(lines) or "- coder: writes code"
 
     @staticmethod

@@ -26,7 +26,7 @@ class TestTaskGraph:
             tasks=[
                 TaskNode("t1", "A", "coder"),
                 TaskNode("t2", "B", "coder", dependencies=["t1"]),
-                TaskNode("t3", "C", "tester", dependencies=["t1"]),
+                TaskNode("t3", "C", "reviewer", dependencies=["t1"]),
                 TaskNode("t4", "D", "coder", dependencies=["t2", "t3"]),
             ],
         )

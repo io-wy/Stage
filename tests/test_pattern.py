@@ -49,4 +49,4 @@ class TestDirectorPattern:
         assert "Know when to stop" in principles
         assert "coder" in principles
         assert "reviewer" in principles
-        assert "tester" in principles
+        assert "monitor" in principles

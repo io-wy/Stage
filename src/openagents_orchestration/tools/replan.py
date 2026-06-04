@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from openagents.errors.exceptions import PermanentToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
+from pydantic import BaseModel, Field
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.utils.structured_generate import structured_generate
 from prompts.corrections import build_replan_prompt
+
+
+class _ReplanTaskSchema(BaseModel):
+    task_id: str
+    description: str
+    agent_type: str = "coder"
+    dependencies: list[str] = Field(default_factory=list)
+    expected_artifacts: list[str] = Field(default_factory=list)
+    input_context: str = ""
+
+
+class _ReplanOutputSchema(BaseModel):
+    tasks: list[_ReplanTaskSchema]
 
 
 class ReplanTool(ToolPlugin):
@@ -78,21 +92,24 @@ class ReplanTool(ToolPlugin):
         prompt = self._build_replan_prompt(board, old_task, reason)
 
         try:
-            response = await llm_client.generate(
-                messages=[{"role": "user", "content": prompt}],
+            result, _ = await structured_generate(
+                messages=[
+                    {"role": "system", "content": "You are a task re-decomposer. Break down the failed task into smaller sub-tasks."},
+                    {"role": "user", "content": prompt},
+                ],
+                response_model=_ReplanOutputSchema,
+                llm_client=llm_client,
                 temperature=0.2,
                 max_tokens=2048,
-                tools=None,
             )
-            text = response.output_text or ""
         except Exception as exc:
             raise PermanentToolError(
                 f"LLM replan failed: {exc}", tool_name=self.name
             ) from exc
 
-        # Parse new sub-tasks from JSON
+        # Convert schema output to TaskNode list
         try:
-            new_tasks = self._parse_tasks(text, old_task)
+            new_tasks = self._tasks_from_schema(result.tasks, old_task)
         except ValueError as exc:
             raise PermanentToolError(
                 f"Failed to parse replan output: {exc}", tool_name=self.name
@@ -227,10 +244,32 @@ class ReplanTool(ToolPlugin):
         )
 
     @staticmethod
+    def _tasks_from_schema(tasks: list[_ReplanTaskSchema], old_task: Any) -> list[TaskNode]:
+        """Convert structured schema output to TaskNode list."""
+        result: list[TaskNode] = []
+        for i, item in enumerate(tasks):
+            tid = str(item.task_id or f"{old_task.task_id}_sub_{i}")
+            desc = str(item.description or "")
+            if not desc:
+                continue
+            result.append(
+                TaskNode(
+                    task_id=tid,
+                    description=desc,
+                    agent_type=str(item.agent_type or old_task.agent_type),
+                    dependencies=list(item.dependencies),
+                    expected_artifacts=list(item.expected_artifacts),
+                    input_context=str(item.input_context or ""),
+                )
+            )
+        return result
+
+    @staticmethod
     def _parse_tasks(text: str, old_task: Any) -> list[TaskNode]:
-        """Extract TaskNode list from LLM JSON output."""
+        """Extract TaskNode list from raw LLM JSON output (legacy fallback)."""
+        import json
+
         text = text.strip()
-        # Try to extract JSON array
         bracket = text.find("[")
         if bracket == -1:
             raise ValueError("No JSON array found in response")
