@@ -30,6 +30,8 @@ python phased_run.py plan "objective" -o plan.json
 python phased_run.py step plan.json
 ```
 
+协作模式说明：默认 `run.py` 使用 `--collaborative-mode auto`，仅在适合的多 coder 图上启用 resident coder/reviewer 的实现→评审→修复闭环；需要强制 Director 调度时使用 `--collaborative-mode off`，需要显式压测协作闭环时使用 `--collaborative-mode on`。
+
 ## 测试
 
 ```bash

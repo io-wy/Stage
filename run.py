@@ -35,6 +35,11 @@ Budget options:
   --max-steps    Max director steps (default: 100)
   --time-limit   Time limit in seconds (default: 1800)
 
+Execution mode:
+  --collaborative-mode auto|on|off
+                auto uses resident coder/reviewer loops for suitable graphs;
+                off forces Director scheduling.
+
 Examples:
   uv run python run.py "Write a hello world script"
   uv run python run.py "Build FastAPI app" --token-limit 1M --max-steps 200
@@ -59,6 +64,12 @@ Examples:
         default=1800.0,
         help="Time limit in seconds (default: 1800)",
     )
+    parser.add_argument(
+        "--collaborative-mode",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Resident collaboration mode (default: auto)",
+    )
     args = parser.parse_args()
 
     objective = " ".join(args.objective)
@@ -82,6 +93,7 @@ Examples:
     runner = OrchestratorRunner(
         Path(__file__).parent / "agent.json",
         persist_dir=str(persist_dir),
+        collaborative_mode=args.collaborative_mode,
     )
 
     budget = Budget(

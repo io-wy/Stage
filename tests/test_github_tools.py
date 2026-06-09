@@ -8,10 +8,11 @@ import subprocess
 from unittest.mock import patch
 
 import pytest
+from openagents.errors.exceptions import ToolError
 
-from openagents_orchestration.tools.github.pr import GitHubPRTool
-from openagents_orchestration.tools.github.issue import GitHubIssueTool
 from openagents_orchestration.tools.github.ci import GitHubCITool
+from openagents_orchestration.tools.github.issue import GitHubIssueTool
+from openagents_orchestration.tools.github.pr import GitHubPRTool
 from openagents_orchestration.tools.github.repo import GitHubRepoTool
 
 
@@ -47,7 +48,7 @@ class TestGitHubPRTool:
 
     def test_invoke_missing_repo(self):
         tool = GitHubPRTool()
-        with pytest.raises(Exception):
+        with pytest.raises(ToolError):
             asyncio.run(tool.invoke({"action": "get"}, None))
 
     @patch("shutil.which", return_value="/usr/bin/gh")

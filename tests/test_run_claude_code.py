@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from openagents.errors.exceptions import PermanentToolError, ToolError
+
 from openagents_orchestration.tools.corecoder.run_claude_code import RunClaudeCodeTool
 
 
@@ -100,7 +99,7 @@ class TestRunClaudeCodeTool:
         )
 
         tool = RunClaudeCodeTool()
-        result = asyncio.run(
+        asyncio.run(
             tool.invoke(
                 {
                     "instruction": "do something",
@@ -125,7 +124,7 @@ class TestRunClaudeCodeTool:
         )
 
         tool = RunClaudeCodeTool()
-        result = asyncio.run(
+        asyncio.run(
             tool.invoke(
                 {"instruction": "do something", "skip_permissions": True},
                 None,

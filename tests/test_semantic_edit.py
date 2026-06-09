@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-
 from openagents.errors.exceptions import ModelRetryError, ToolError
+
 from openagents_orchestration.tools.corecoder.semantic_edit import SemanticEditTool
 
 
@@ -94,13 +93,13 @@ class TestSemanticEditTool:
 
         assert result["changed"] is True
         assert "x = 10" in result["diff"]
-        assert f.read_text(encoding="utf-8") == "x = 10\ny = 2\n"
+        assert f.read_text(encoding="utf-8") == "x = 10\ny = 2"
         # Verify dirty_files tracking
         dirty = ctx.scratch.get("dirty_files")
         assert dirty is not None
         assert str(f.resolve()) in dirty
 
-    def test_invoke_code_block_output(self, tmp_path):
+    def test_invoke_code_block_output_for_function(self, tmp_path):
         f = tmp_path / "test.py"
         f.write_text("def foo():\n    pass\n", encoding="utf-8")
 

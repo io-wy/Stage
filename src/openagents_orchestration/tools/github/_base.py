@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 import subprocess
 from typing import Any
 
 from openagents.errors.exceptions import ToolError
-
 
 _GH_NOT_FOUND_MSG = (
     "GitHub CLI (`gh`) is not installed or not in PATH. "
@@ -104,10 +104,8 @@ def _run_gh(
     # Try to parse JSON output
     parsed = None
     if stdout.strip():
-        try:
+        with contextlib.suppress(json.JSONDecodeError):
             parsed = json.loads(stdout)
-        except json.JSONDecodeError:
-            pass
 
     return {
         "success": proc.returncode == 0,

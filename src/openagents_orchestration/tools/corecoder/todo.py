@@ -7,7 +7,6 @@ multi-step work without external state.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from openagents.errors.exceptions import ToolError

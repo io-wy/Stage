@@ -87,11 +87,11 @@ class TestApplyPatchTool:
         import os
 
         patch = (
-            f"--- a/new.py\n"
-            f"+++ b/new.py\n"
-            f"@@ -0,0 +1,2 @@\n"
-            f"+def foo():\n"
-            f"+    pass\n"
+            "--- a/new.py\n"
+            "+++ b/new.py\n"
+            "@@ -0,0 +1,2 @@\n"
+            "+def foo():\n"
+            "+    pass\n"
         )
         tool = ApplyPatchTool()
         ctx = MockContext()
@@ -132,11 +132,11 @@ class TestApplyPatchTool:
         f.write_text("a = 1\n")
 
         patch = (
-            f"--- a/bad.py\n"
-            f"+++ b/bad.py\n"
-            f"@@ -1,1 +1,1 @@\n"
-            f"-this does not exist\n"
-            f"+replaced\n"
+            "--- a/bad.py\n"
+            "+++ b/bad.py\n"
+            "@@ -1,1 +1,1 @@\n"
+            "-this does not exist\n"
+            "+replaced\n"
         )
         tool = ApplyPatchTool()
         ctx = MockContext()
