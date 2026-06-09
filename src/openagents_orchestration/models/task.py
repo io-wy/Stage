@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from enum import StrEnum
+from time import time
 from typing import Any
 
 
@@ -14,6 +15,8 @@ class TaskStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     SKIPPED = "skipped"
+    REVIEW = "review"           # 代码已提交，等待 review
+    FIX_NEEDED = "fix_needed"   # review 发现问题，需要修复
 
 
 @dataclass
@@ -35,9 +38,31 @@ class TaskNode:
     result_output: str = ""
     actual_artifacts: list[str] = field(default_factory=list)
 
+    # Iterative execution history (for coder -> review -> fix loops)
+    iteration_history: list[dict[str, Any]] = field(default_factory=list)
+    assigned_agent: str = ""  # resident_id or agent_id bound to this task
+
     def is_ready(self, completed_ids: set[str]) -> bool:
         """True when all dependencies are in completed_ids."""
         return set(self.dependencies).issubset(completed_ids)
+
+    def is_terminal(self) -> bool:
+        """True when task is in a terminal state."""
+        return self.status in {
+            TaskStatus.COMPLETED,
+            TaskStatus.FAILED,
+            TaskStatus.SKIPPED,
+        }
+
+    def record_iteration(self, agent_id: str, action: str, output: str = "", artifacts: list[str] | None = None) -> None:
+        """Record one iteration step in the task's execution history."""
+        self.iteration_history.append({
+            "agent_id": agent_id,
+            "action": action,
+            "output": output[:500],
+            "artifacts": artifacts or [],
+            "ts": time(),
+        })
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -53,11 +78,13 @@ class TaskNode:
             "input_context": self.input_context,
             "result_output": self.result_output,
             "actual_artifacts": self.actual_artifacts,
+            "iteration_history": self.iteration_history,
+            "assigned_agent": self.assigned_agent,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskNode:
-        return cls(
+        node = cls(
             task_id=data["task_id"],
             description=data["description"],
             agent_type=data["agent_type"],
@@ -71,6 +98,9 @@ class TaskNode:
             result_output=data.get("result_output", ""),
             actual_artifacts=list(data.get("actual_artifacts", [])),
         )
+        node.iteration_history = list(data.get("iteration_history", []))
+        node.assigned_agent = data.get("assigned_agent", "")
+        return node
 
 
 @dataclass

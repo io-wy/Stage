@@ -18,6 +18,7 @@ from openagents.errors.exceptions import PermanentToolError, RetryableToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 from openagents_orchestration.models.task import TaskStatus
+from openagents_orchestration.reporting import summarize_agent_run
 from openagents_orchestration.state_board import AgentStatus
 from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
 from prompts.corrections import build_hallucination_correction
@@ -166,6 +167,23 @@ class SpawnAgentTool(ToolPlugin):
 
             enriched_error = f"{error_msg}  [recommendation: {recommendation}]"
             board.update_task(task_id, status=TaskStatus.FAILED, error=enriched_error)
+            summary = summarize_agent_run(
+                agent_id=agent_id,
+                task_id=task_id,
+                status="failed",
+                error=enriched_error,
+                artifacts=task.actual_artifacts or task.expected_artifacts,
+                retry_count=agent_state.retry_count if agent_state else 0,
+                steps_used=agent_state.steps_used if agent_state else 0,
+                token_used=agent_state.token_used if agent_state else 0,
+            )
+            board.log_event(
+                "agent.run_summary",
+                task_id=task_id,
+                agent_id=agent_id,
+                message=f"failed: {summary['failure_type']}",
+                summary=summary,
+            )
             board.log_event(
                 "agent.failed",
                 task_id=task_id,
@@ -204,7 +222,7 @@ class SpawnAgentTool(ToolPlugin):
                         result_text = await runner_delegate(
                             agent_type=task.agent_type,
                             input_text=correction,
-                            agent_id=f"{agent_id}-retry",
+                            agent_id=agent_id,
                         )
                         break
 
@@ -225,6 +243,24 @@ class SpawnAgentTool(ToolPlugin):
             status=TaskStatus.COMPLETED,
             result_output=result_text,
             actual_artifacts=verified,
+        )
+        agent_state = board.get_agent(agent_id)
+        summary = summarize_agent_run(
+            agent_id=agent_id,
+            task_id=task_id,
+            status="completed",
+            output=result_text,
+            artifacts=verified,
+            retry_count=agent_state.retry_count if agent_state else 0,
+            steps_used=agent_state.steps_used if agent_state else 0,
+            token_used=agent_state.token_used if agent_state else 0,
+        )
+        board.log_event(
+            "agent.run_summary",
+            task_id=task_id,
+            agent_id=agent_id,
+            message="completed",
+            summary=summary,
         )
         board.log_event(
             "agent.completed",
@@ -291,7 +327,29 @@ class SpawnAgentTool(ToolPlugin):
         msg = str(exc).lower()
         return any(
             keyword in msg
-            for keyword in ("timeout", "connection", "rate limit", "429", "too many requests")
+            for keyword in (
+                "server disconnected",
+                "remoteprotocolerror",
+                "connection reset",
+                "connection aborted",
+                "temporarily unavailable",
+                "timeout",
+                "connection",
+                "rate limit",
+                "429",
+                "too many requests",
+                "http 500",
+                "http 502",
+                "http 503",
+                "http 504",
+                "http 520",
+                "http 522",
+                "http 524",
+                "bad gateway",
+                "service unavailable",
+                "gateway timeout",
+                "web server is returning an unknown error",
+            )
         )
 
     @staticmethod
@@ -301,12 +359,31 @@ class SpawnAgentTool(ToolPlugin):
 
         if "spawn resident" in msg or "resident coder" in msg:
             return "spawn resident — agent is stuck in a loop, use persistent resident"
+        if any(signal in msg for signal in ("server disconnected", "remoteprotocolerror", "connection reset", "connection aborted", "temporarily unavailable")):
+            return "retry — upstream connection dropped, likely transient"
         if "timeout" in msg:
             return "retry — timeout, likely transient"
         if "connection" in msg:
             return "retry — network error, likely transient"
         if "rate limit" in msg or "429" in msg or "too many requests" in msg:
             return "retry — rate limited, wait and retry"
+        if any(
+            signal in msg
+            for signal in (
+                "http 500",
+                "http 502",
+                "http 503",
+                "http 504",
+                "http 520",
+                "http 522",
+                "http 524",
+                "bad gateway",
+                "service unavailable",
+                "gateway timeout",
+                "web server is returning an unknown error",
+            )
+        ):
+            return "retry — upstream API/server error, likely transient"
         if "no such file" in msg or "file not found" in msg:
             return "replan — path/file error, task may be mis-specified"
         if "permission" in msg or "denied" in msg:

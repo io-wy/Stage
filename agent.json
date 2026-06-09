@@ -84,6 +84,14 @@
           "impl": "openagents_orchestration.tools.replan.ReplanTool"
         },
         {
+          "id": "recover_task",
+          "impl": "openagents_orchestration.tools.recover_task.RecoverTaskTool"
+        },
+        {
+          "id": "correct_task_status",
+          "impl": "openagents_orchestration.tools.correct_task_status.CorrectTaskStatusTool"
+        },
+        {
           "id": "finalize",
           "impl": "openagents_orchestration.tools.finalize.FinalizeTool"
         },

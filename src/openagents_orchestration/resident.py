@@ -36,10 +36,13 @@ class ResidentState:
             "resident_id": self.resident_id,
             "agent_type": self.agent_type,
             "status": self.status,
+            "latest_output": self.latest_output,
             "latest_task": self.latest_task,
             "token_used": self.token_used,
             "message_count": self.message_count,
             "error_count": self.error_count,
+            "start_time": self.start_time,
+            "last_active": self.last_active,
             "uptime_s": round(time.time() - self.start_time, 1),
             "idle_s": round(time.time() - self.last_active, 1),
         }
@@ -61,12 +64,14 @@ class ResidentAgent:
         board: Any,
         max_idle_s: float = 300.0,
         persist_dir: Path | None = None,
+        run_budget: Any | None = None,
     ):
         self.resident_id = resident_id
         self.agent_type = agent_type
         self._runner = runner
         self._board = board
         self._max_idle_s = max_idle_s
+        self._run_budget = run_budget
         self._inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._task: asyncio.Task[Any] | None = None
         self._active = False
@@ -77,9 +82,34 @@ class ResidentAgent:
         else:
             self._persist_path = Path(f".residents/{resident_id}.json")
 
+        # Task binding for iterative work (new)
+        self._bound_task_id: str | None = None
+        self._auto_verify: bool = False  # run tests after code changes
+
     @property
     def state(self) -> ResidentState:
         return self._state
+
+    # -- task binding (iterative work) ---------------------------------------
+
+    def bind_task(self, task_id: str, *, auto_verify: bool = False) -> None:
+        """Bind this resident to a task for iterative work."""
+        self._bound_task_id = task_id
+        self._auto_verify = auto_verify
+        self._state.latest_task = task_id
+        if self._board is not None:
+            self._board.bind_agent_to_task(self.resident_id, task_id)
+
+    def unbind_task(self) -> None:
+        """Unbind from current task."""
+        if self._bound_task_id and self._board is not None:
+            self._board.unbind_agent_from_task(self._bound_task_id)
+        self._bound_task_id = None
+        self._auto_verify = False
+
+    @property
+    def bound_task_id(self) -> str | None:
+        return self._bound_task_id
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -104,7 +134,8 @@ class ResidentAgent:
         self._active = False
         self._state.status = "stopped"
         self._board.update_resident(self.resident_id, status="stopped")
-        if self._task is not None:
+        current = asyncio.current_task()
+        if self._task is not None and self._task is not current:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
@@ -141,7 +172,14 @@ class ResidentAgent:
                     agent_id=self.resident_id,
                     message=f"Idle for {self._max_idle_s}s, auto-stopping",
                 )
-                await self.stop()
+                self._active = False
+                self._state.status = "stopped"
+                self._board.update_resident(self.resident_id, status="stopped")
+                self._board.log_event(
+                    "resident.stopped",
+                    agent_id=self.resident_id,
+                    message=f"Resident {self.agent_type} stopped",
+                )
                 break
 
             self._state.status = "busy"
@@ -200,6 +238,7 @@ class ResidentAgent:
             agent_type=self.agent_type,
             input_text=input_text,
             transcript=list(self._transcript),
+            budget=self._run_budget,
         )
 
         # Update persistent transcript from result metadata
@@ -216,6 +255,11 @@ class ResidentAgent:
             self._board.update_resident(
                 self.resident_id, token_used=self._state.token_used
             )
+
+        stop_reason = getattr(result, "stop_reason", None)
+        if stop_reason is not None and getattr(stop_reason, "value", stop_reason) == "failed":
+            error = getattr(result, "error", None) or getattr(result, "error_message", None) or "resident run failed"
+            raise RuntimeError(str(error))
 
         final_output = str(getattr(result, "final_output", "") or "")
 

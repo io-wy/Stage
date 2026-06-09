@@ -77,6 +77,48 @@ class TestStateBoard:
         board.verify_artifact("file.py", exists=True)
         assert board.artifacts["file.py"].status == "verified"
 
+
+    def test_claim_artifact_does_not_downgrade_verified_record(self):
+        board = StateBoard("obj")
+        board.verify_artifact("file.py", exists=True)
+        board.claim_artifact("t1", ["file.py"])
+
+        assert board.artifacts["file.py"].status == "verified"
+        assert board.artifacts["file.py"].claimed_by == "t1"
+
+    def test_review_and_fix_needed_are_actionable(self):
+        board = StateBoard("obj")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "task 1", "coder")],
+        ))
+
+        board.update_task("t1", status=TaskStatus.REVIEW)
+        assert board.has_actionable()
+
+        board.update_task("t1", status=TaskStatus.FIX_NEEDED)
+        assert board.has_actionable()
+        assert not board.all_terminal()
+
+    def test_roundtrip_preserves_budget_threads_context_and_residents(self):
+        board = StateBoard("obj", budget=Budget(token_limit=1000, time_limit_s=1800, max_steps=99))
+        board.budget.start_time = 123.0
+        board.add_error_log("t1", "needs fix")
+        thread = board.get_or_create_thread("task-api-auth", ["coder-api-auth", "reviewer-api-auth"])
+        thread.add_message("coder-api-auth", "TASK_REVIEW_READY[api-auth]: tests passed = 1", task_id="api-auth")
+
+        from openagents_orchestration.resident import ResidentState
+        board.register_resident(ResidentState(resident_id="coder-api-auth", agent_type="coder", latest_output="done"))
+
+        restored = StateBoard.from_dict(board.to_dict(), reset_budget_clock=False)
+
+        assert restored.budget.time_limit_s == 1800
+        assert restored.budget.start_time == 123.0
+        assert "task-api-auth" in restored.conversation_threads
+        assert restored.conversation_threads["task-api-auth"].messages[0]["content"].startswith("TASK_REVIEW_READY")
+        assert restored.get_project_context()["recent_errors"][0]["error"] == "needs fix"
+        assert restored.get_resident("coder-api-auth").latest_output == "done"
+
     def test_budget(self):
         budget = Budget(token_limit=1000, max_steps=5)
         assert budget.token_remaining == 1000

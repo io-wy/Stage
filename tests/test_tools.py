@@ -72,6 +72,20 @@ class TestSendMessageTool:
         assert len(board._pending_messages) == 1
 
 
+
+    def test_thread_routing_preserves_hyphenated_task_ids(self):
+        board = StateBoard("obj")
+        board.get_or_create_thread("task-api-auth", ["coder-api-auth", "reviewer-api-auth"])
+        ctx = MockContext(deps=MockContext(state_board=board), agent_id="coder-api-auth")
+
+        tool = SendMessageTool()
+        asyncio.run(tool.invoke({"to_agent": "reviewer-api-auth", "message": "TASK_REVIEW_READY[api-auth]: tests passed = 1"}, ctx))
+
+        thread = board.conversation_threads["task-api-auth"]
+        assert len(thread.messages) == 1
+        assert thread.messages[0]["task_id"] == "api-auth"
+
+
 class TestSpawnAgentTool:
     def test_schema(self):
         tool = SpawnAgentTool()

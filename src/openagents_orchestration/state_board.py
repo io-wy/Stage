@@ -131,6 +131,8 @@ class Budget:
             "token_used": self.token_used,
             "token_limit": self.token_limit,
             "token_remaining": self.token_remaining,
+            "time_limit_s": self.time_limit_s,
+            "start_time": self.start_time,
             "time_remaining_s": round(self.time_remaining_s, 1),
             "steps_taken": self.steps_taken,
             "max_steps": self.max_steps,
@@ -150,8 +152,47 @@ class Event:
     payload: dict[str, Any] = field(default_factory=dict)
 
 
+class AgentConversationThread:
+    """A conversation thread between two or more agents.
+
+    Unlike _pending_messages (fire-and-forget mailbox), threads maintain
+    ordered history and support direct @mentions without Director as router.
+    """
+
+    def __init__(self, thread_id: str, participants: list[str]):
+        self.thread_id = thread_id
+        self.participants = set(participants)
+        self.messages: list[dict[str, Any]] = []
+
+    def add_message(self, from_id: str, content: str, *, task_id: str = "") -> None:
+        self.messages.append({
+            "from": from_id,
+            "content": content,
+            "ts": time.time(),
+            "task_id": task_id,
+        })
+
+    def messages_for(self, recipient: str, *, since: float = 0.0) -> list[dict[str, Any]]:
+        return [
+            m for m in self.messages
+            if m["ts"] >= since and (m["from"] != recipient or len(self.participants) == 2)
+        ]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "thread_id": self.thread_id,
+            "participants": list(self.participants),
+            "messages": self.messages,
+        }
+
+
 class StateBoard:
-    """Global state panel — the single source of truth for the Director."""
+    """Global state panel — shared project context for all agents.
+
+    Evolved from Director-exclusive whiteboard to collaborative workspace.
+    All agents read/write project state directly; Director only intervenes
+    on exceptions or global resource decisions.
+    """
 
     def __init__(
         self,
@@ -176,6 +217,15 @@ class StateBoard:
         self._recorder = recorder
         self._snapshotter = snapshotter
         self._observers: list[Any] = []  # event bus subscribers
+
+        # Collaborative infrastructure (new)
+        self.conversation_threads: dict[str, AgentConversationThread] = {}
+        self.project_context: dict[str, Any] = {
+            "test_reports": [],      # latest pytest output per module
+            "error_logs": [],        # structured errors from agent runs
+            "code_changes": [],      # diff-like summary of recent edits
+            "shared_notes": {},      # key findings agents want to persist
+        }
 
     # -- task management -----------------------------------------------------
 
@@ -338,6 +388,12 @@ class StateBoard:
 
     def claim_artifact(self, task_id: str, paths: list[str]) -> None:
         for path in paths:
+            existing = self.artifacts.get(path)
+            if existing is not None:
+                existing.claimed_by = task_id
+                if existing.status != "verified":
+                    existing.status = "claimed"
+                continue
             self.artifacts[path] = ArtifactRecord(
                 path=path,
                 status="claimed",
@@ -435,6 +491,11 @@ class StateBoard:
         self.budget.steps_taken += n
         if n > 0:
             self.log_event("budget.steps", message=f"+{n} (was {before}, now {self.budget.steps_taken})", n=n)
+
+    def add_usage(self, usage: Any) -> None:
+        total_tokens = getattr(usage, "total_tokens", 0) or 0
+        if total_tokens:
+            self.add_tokens(int(total_tokens))
 
     def increment_step(self) -> None:
         self.budget.steps_taken += 1
@@ -599,6 +660,107 @@ class StateBoard:
             )
         return cleared
 
+    # -- collaborative conversation threads ----------------------------------
+
+    def get_or_create_thread(self, thread_id: str, participants: list[str]) -> AgentConversationThread:
+        """Get existing thread or create a new one between participants."""
+        if thread_id not in self.conversation_threads:
+            self.conversation_threads[thread_id] = AgentConversationThread(thread_id, participants)
+            self.log_event(
+                "thread.created",
+                message=f"Thread {thread_id}: {', '.join(participants)}",
+            )
+        return self.conversation_threads[thread_id]
+
+    def send_thread_message(self, thread_id: str, from_id: str, content: str, *, task_id: str = "") -> None:
+        """Send a message in a conversation thread."""
+        thread = self.conversation_threads.get(thread_id)
+        if thread is None:
+            # Auto-create a direct-message thread
+            thread = self.get_or_create_thread(thread_id, [from_id, thread_id])
+        thread.add_message(from_id, content, task_id=task_id)
+        self.log_event(
+            "thread.message",
+            agent_id=from_id,
+            message=f"[{thread_id}] {content[:100]}",
+            thread_id=thread_id,
+        )
+
+    def thread_messages(self, thread_id: str, *, since: float = 0.0) -> list[dict[str, Any]]:
+        """Get messages from a thread since a given timestamp."""
+        thread = self.conversation_threads.get(thread_id)
+        if thread is None:
+            return []
+        return thread.messages_for("*", since=since)
+
+    def bind_agent_to_task(self, agent_id: str, task_id: str) -> None:
+        """Bind a resident agent to a task for iterative work."""
+        task = self.tasks.get(task_id)
+        if task is not None:
+            task.assigned_agent = agent_id
+            self.log_event(
+                "task.bound",
+                task_id=task_id,
+                agent_id=agent_id,
+                message=f"Task {task_id} bound to {agent_id}",
+            )
+
+    def unbind_agent_from_task(self, task_id: str) -> None:
+        """Unbind agent from a task (task completed or failed)."""
+        task = self.tasks.get(task_id)
+        if task is not None and task.assigned_agent:
+            old = task.assigned_agent
+            task.assigned_agent = ""
+            self.log_event(
+                "task.unbound",
+                task_id=task_id,
+                agent_id=old,
+                message=f"Task {task_id} unbound from {old}",
+            )
+
+    # -- project context (shared knowledge) ----------------------------------
+
+    def add_test_report(self, module: str, result: str, passed: int, failed: int) -> None:
+        """Add a test report to shared project context."""
+        self.project_context["test_reports"].append({
+            "module": module,
+            "result": result[:2000],
+            "passed": passed,
+            "failed": failed,
+            "ts": time.time(),
+        })
+        self.log_event(
+            "project.test_report",
+            message=f"{module}: {passed} passed, {failed} failed",
+        )
+
+    def add_error_log(self, source: str, error: str, traceback: str = "") -> None:
+        """Add an error to shared project context."""
+        self.project_context["error_logs"].append({
+            "source": source,
+            "error": error[:500],
+            "traceback": traceback[:2000],
+            "ts": time.time(),
+        })
+
+    def add_code_change(self, file_path: str, description: str, agent_id: str = "") -> None:
+        """Record a code change in project context."""
+        self.project_context["code_changes"].append({
+            "file": file_path,
+            "description": description[:500],
+            "agent_id": agent_id,
+            "ts": time.time(),
+        })
+
+    def get_project_context(self) -> dict[str, Any]:
+        """Return the shared project context for all agents."""
+        return {
+            "latest_test_report": self.project_context["test_reports"][-1] if self.project_context["test_reports"] else None,
+            "recent_errors": self.project_context["error_logs"][-5:],
+            "recent_changes": self.project_context["code_changes"][-10:],
+            "shared_notes": self.project_context["shared_notes"],
+        }
+
     # -- human questions -----------------------------------------------------
 
     def ask_human(self, question: str, *, options: str = "", from_agent: str = "") -> str:
@@ -651,12 +813,16 @@ class StateBoard:
             return False
         if self._final_summary:
             return False
-        pending = any(t.status == TaskStatus.PENDING for t in self.tasks.values())
-        running = any(t.status == TaskStatus.RUNNING for t in self.tasks.values())
-        return pending or running
+        actionable = {
+            TaskStatus.PENDING,
+            TaskStatus.RUNNING,
+            TaskStatus.REVIEW,
+            TaskStatus.FIX_NEEDED,
+        }
+        return any(t.status in actionable for t in self.tasks.values())
 
     def all_terminal(self) -> bool:
-        """True when every task is in a terminal state."""
+        """True when every task is in a terminal state (not in progress or review)."""
         terminal = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED}
         return all(t.status in terminal for t in self.tasks.values())
 
@@ -718,6 +884,11 @@ class StateBoard:
             ],
             "human_questions": list(self._human_questions),
             "pending_messages": list(self._pending_messages),
+            "conversation_threads": {
+                tid: thread.to_dict()
+                for tid, thread in self.conversation_threads.items()
+            },
+            "project_context": dict(self.project_context),
             "final_summary": self._final_summary,
         }
 
@@ -792,6 +963,25 @@ class StateBoard:
             )
             board.agents[aid] = agent
 
+        # Restore residents
+        try:
+            from openagents_orchestration.resident import ResidentState
+            for rid, rdata in data.get("residents", {}).items():
+                board.residents[rid] = ResidentState(
+                    resident_id=rdata.get("resident_id", rid),
+                    agent_type=rdata.get("agent_type", "coder"),
+                    status=rdata.get("status", "idle"),
+                    latest_output=rdata.get("latest_output", ""),
+                    latest_task=rdata.get("latest_task", ""),
+                    token_used=rdata.get("token_used", 0),
+                    message_count=rdata.get("message_count", 0),
+                    error_count=rdata.get("error_count", 0),
+                    start_time=rdata.get("start_time", time.time()),
+                    last_active=rdata.get("last_active", time.time()),
+                )
+        except Exception:
+            pass
+
         # Restore artifacts
         for path, adata in data.get("artifacts", {}).items():
             board.artifacts[path] = ArtifactRecord(
@@ -812,9 +1002,17 @@ class StateBoard:
                 payload=edata.get("payload", {}),
             ))
 
-        # Restore human questions and messages
+        # Restore human questions, messages, and collaborative context
         board._human_questions = list(data.get("human_questions", []))
         board._pending_messages = list(data.get("pending_messages", []))
+        for tid, tdata in data.get("conversation_threads", {}).items():
+            participants = list(tdata.get("participants", []))
+            thread = AgentConversationThread(tdata.get("thread_id", tid), participants)
+            thread.messages = list(tdata.get("messages", []))
+            board.conversation_threads[tid] = thread
+        if "project_context" in data:
+            restored_context = dict(data.get("project_context") or {})
+            board.project_context.update(restored_context)
         board._final_summary = data.get("final_summary", "")
 
         return board
