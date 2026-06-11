@@ -14,14 +14,7 @@ from typing import Any
 from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
-
-
-def _infer_task_id(agent_id: str) -> str:
-    """Extract task id from agent_id (e.g. coder-t1 -> t1)."""
-    for prefix in ("coder-", "reviewer-", "researcher-", "github_agent-", "monitor-", "director-"):
-        if agent_id.startswith(prefix):
-            return agent_id[len(prefix):]
-    return agent_id
+from openagents_orchestration.artifact_store import infer_task_id
 
 
 class WriteFileTool(ToolPlugin):
@@ -77,7 +70,7 @@ class WriteFileTool(ToolPlugin):
             store = getattr(getattr(context, "deps", None), "artifact_store", None)
             if store is not None:
                 agent_id = getattr(context, "agent_id", "")
-                task_id = _infer_task_id(agent_id)
+                task_id = infer_task_id(agent_id)
                 try:
                     await store.put(task_id, str(path), content)
                 except Exception:

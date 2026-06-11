@@ -98,7 +98,7 @@ class CheckMessagesTool(ToolPlugin):
         matrix_transport = getattr(deps, "matrix_transport", None)
         if matrix_transport is not None and matrix_transport.enabled:
             try:
-                mx_messages = await matrix_transport.receive()
+                mx_messages = await matrix_transport.receive(agent_id=agent_id)
                 for mx in mx_messages:
                     board.send_mail(
                         from_id=mx.get("sender", "matrix"),

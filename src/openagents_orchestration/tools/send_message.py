@@ -97,9 +97,12 @@ class SendMessageTool(ToolPlugin):
                 room_id = await matrix_transport.create_room(
                     name=room_name,
                     invite=[],
+                    agent_id=from_agent,
                 )
                 if room_id:
-                    await matrix_transport.send(room_id, f"[{from_agent}] {message}")
+                    await matrix_transport.send(
+                        room_id, f"[{from_agent}] {message}", agent_id=from_agent
+                    )
             except Exception as exc:
                 board.log_event(
                     "matrix.send_error",

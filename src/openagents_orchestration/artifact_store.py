@@ -15,6 +15,14 @@ from pathlib import Path
 from typing import Any
 
 
+def infer_task_id(agent_id: str) -> str:
+    """Extract task id from agent_id (e.g. coder-t1 -> t1)."""
+    for prefix in ("coder-", "reviewer-", "researcher-", "github_agent-", "monitor-", "director-", "team_leader-"):
+        if agent_id.startswith(prefix):
+            return agent_id[len(prefix):]
+    return agent_id
+
+
 class ArtifactStore(ABC):
     """Abstract interface for storing and retrieving agent artifacts."""
 

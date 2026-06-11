@@ -764,6 +764,8 @@ class StateBoard:
 
     # -- human communication -------------------------------------------------
 
+    _MAX_HUMAN_MESSAGES = 1000
+
     def human_post(self, human_id: str, content: str, *, target_team: str = "") -> None:
         """Human proactively posts a message to a project or team."""
         self._human_messages.append({
@@ -772,6 +774,9 @@ class StateBoard:
             "target_team": target_team,
             "ts": time.time(),
         })
+        # Trim to prevent unbounded growth
+        if len(self._human_messages) > self._MAX_HUMAN_MESSAGES:
+            self._human_messages = self._human_messages[-self._MAX_HUMAN_MESSAGES:]
         # Route to target team or director
         if target_team:
             self.send_mail("human", target_team, content)

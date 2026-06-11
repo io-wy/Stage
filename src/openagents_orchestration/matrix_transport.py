@@ -131,36 +131,63 @@ class MatrixClient:
 class MatrixTransport:
     """Pluggable transport layer backed by Matrix.
 
-    When Matrix is not configured all methods silently no-op so the caller
-    can unconditionally call them without branching.
+    Supports multiple per-agent clients so each agent can have its own Matrix
+    identity. Falls back to the primary client (director) when no per-agent
+    client is registered.
     """
 
     def __init__(self, client: MatrixClient | None = None):
-        self._client = client
+        self._client = client  # primary / director client
+        self._clients: dict[str, MatrixClient] = {}  # agent_id -> client
 
     @property
     def enabled(self) -> bool:
         return self._client is not None
 
+    def register_client(self, agent_id: str, config: MatrixConfig) -> MatrixClient:
+        """Register a per-agent Matrix client."""
+        client = MatrixClient(config)
+        self._clients[agent_id] = client
+        return client
+
+    def _get_client(self, agent_id: str | None = None) -> MatrixClient | None:
+        """Return the client for the given agent, or the primary client."""
+        if agent_id is not None and agent_id in self._clients:
+            return self._clients[agent_id]
+        return self._client
+
     async def create_room(
         self,
         name: str,
         invite: list[str] | None = None,
+        *,
+        agent_id: str | None = None,
     ) -> str:
-        if self._client is None:
+        client = self._get_client(agent_id)
+        if client is None:
             return ""
-        return await self._client.ensure_room(name, invite=invite)
+        return await client.ensure_room(name, invite=invite)
 
-    async def send(self, room_id: str, body: str) -> str:
-        if self._client is None:
+    async def send(
+        self,
+        room_id: str,
+        body: str,
+        *,
+        agent_id: str | None = None,
+    ) -> str:
+        client = self._get_client(agent_id)
+        if client is None:
             return ""
-        return await self._client.send_text(room_id, body)
+        return await client.send_text(room_id, body)
 
-    async def receive(self) -> list[dict[str, Any]]:
-        if self._client is None:
+    async def receive(self, *, agent_id: str | None = None) -> list[dict[str, Any]]:
+        client = self._get_client(agent_id)
+        if client is None:
             return []
-        return await self._client.sync()
+        return await client.sync()
 
     async def close(self) -> None:
+        for client in self._clients.values():
+            await client.close()
         if self._client is not None:
             await self._client.close()

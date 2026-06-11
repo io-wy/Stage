@@ -76,3 +76,23 @@ async def test_matrix_transport_close(mock_matrix_client):
     transport = MatrixTransport(mock_matrix_client)
     await transport.close()
     mock_matrix_client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_matrix_transport_per_agent_client():
+    primary = MagicMock(spec=MatrixClient)
+    primary.ensure_room = AsyncMock(return_value="!primary:example.com")
+    per_agent = MagicMock(spec=MatrixClient)
+    per_agent.ensure_room = AsyncMock(return_value="!agent:example.com")
+
+    transport = MatrixTransport(primary)
+    transport._clients["coder-t1"] = per_agent
+
+    # Primary client for unknown agent
+    rid = await transport.create_room("dm", agent_id="unknown")
+    assert rid == "!primary:example.com"
+
+    # Per-agent client for registered agent
+    rid = await transport.create_room("dm", agent_id="coder-t1")
+    assert rid == "!agent:example.com"
+    per_agent.ensure_room.assert_awaited_once()

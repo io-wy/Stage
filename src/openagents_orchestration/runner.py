@@ -1090,6 +1090,13 @@ class OrchestratorRunner:
         llm = create_llm_client(director_agent.llm)
         agents_info = self._build_agents_info()
 
+        class _SubtaskSchema(BaseModel):
+            task_id: str
+            description: str
+            agent_type: str = "coder"
+            dependencies: list[str] = Field(default_factory=list)
+            expected_artifacts: list[str] = Field(default_factory=list)
+
         class _TaskSchema(BaseModel):
             task_id: str
             description: str
@@ -1097,6 +1104,7 @@ class OrchestratorRunner:
             agent_type: str = "coder"
             dependencies: list[str] = Field(default_factory=list)
             expected_artifacts: list[str] = Field(default_factory=list)
+            subtasks: list[_SubtaskSchema] = Field(default_factory=list)
 
         class _GraphSchema(BaseModel):
             tasks: list[_TaskSchema]
@@ -1110,7 +1118,9 @@ class OrchestratorRunner:
             "3. EACH TASK SHOULD HAVE AT MOST 3-5 expected_artifacts. Split large tasks.\n"
             "4. Keep the graph shallow (2-4 layers)\n"
             "5. input_context: detailed instructions for the agent\n"
-            "6. coder agents have a step budget of ~30 steps."
+            "6. coder agents have a step budget of ~30 steps.\n"
+            "7. For complex features that benefit from internal coder+reviewer loops, "
+            "set agent_type='team_leader' and provide subtasks (2-4 sub-tasks with dependencies)."
         )
 
         try:
@@ -1131,14 +1141,32 @@ class OrchestratorRunner:
 
         tasks = []
         for item in result.tasks:
-            tasks.append(TaskNode(
+            node = TaskNode(
                 task_id=str(item.task_id),
                 description=str(item.description),
                 agent_type=str(item.agent_type),
                 dependencies=list(item.dependencies),
                 expected_artifacts=list(item.expected_artifacts),
                 input_context=str(item.input_context),
-            ))
+            )
+            # Convert subtasks to subgraph for team_leader delegation
+            if item.subtasks:
+                sub_tasks = []
+                for sub in item.subtasks:
+                    sub_tasks.append(TaskNode(
+                        task_id=str(sub.task_id),
+                        description=str(sub.description),
+                        agent_type=str(sub.agent_type),
+                        dependencies=list(sub.dependencies),
+                        expected_artifacts=list(sub.expected_artifacts),
+                        input_context=f"Subtask of {item.task_id}: {sub.description}",
+                    ))
+                node.subgraph = TaskGraph(
+                    objective=node.description,
+                    tasks=sub_tasks,
+                )
+                node.subgraph.validate()
+            tasks.append(node)
         graph = TaskGraph(objective=objective, tasks=tasks)
         graph.validate()
         return graph
