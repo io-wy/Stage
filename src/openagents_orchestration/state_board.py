@@ -213,6 +213,7 @@ class StateBoard:
         self._final_summary: str = ""
         self._echo = echo
         self._human_questions: list[dict[str, Any]] = []
+        self._human_messages: list[dict[str, Any]] = []
         self._pending_messages: list[dict[str, Any]] = []
         self._recorder = recorder
         self._snapshotter = snapshotter
@@ -761,6 +762,42 @@ class StateBoard:
             "shared_notes": self.project_context["shared_notes"],
         }
 
+    # -- human communication -------------------------------------------------
+
+    def human_post(self, human_id: str, content: str, *, target_team: str = "") -> None:
+        """Human proactively posts a message to a project or team."""
+        self._human_messages.append({
+            "human_id": human_id,
+            "content": content,
+            "target_team": target_team,
+            "ts": time.time(),
+        })
+        # Route to target team or director
+        if target_team:
+            self.send_mail("human", target_team, content)
+        else:
+            self.send_mail("human", "director", content)
+        self.log_event(
+            "human.post",
+            message=content[:100],
+            human_id=human_id,
+            target_team=target_team,
+        )
+
+    def get_human_conversation(self) -> list[dict[str, Any]]:
+        """Return full human conversation log (asks + posts)."""
+        questions = [
+            {"type": "ask", "from": q["from"], "content": q["question"], "ts": None}
+            for q in self._human_questions
+        ]
+        posts = [
+            {"type": "post", "from": m["human_id"], "content": m["content"], "ts": m["ts"]}
+            for m in self._human_messages
+        ]
+        combined = questions + posts
+        combined.sort(key=lambda x: x.get("ts") or 0)
+        return combined
+
     # -- human questions -----------------------------------------------------
 
     def ask_human(self, question: str, *, options: str = "", from_agent: str = "") -> str:
@@ -883,6 +920,7 @@ class StateBoard:
                 for e in self.events
             ],
             "human_questions": list(self._human_questions),
+            "human_messages": list(self._human_messages),
             "pending_messages": list(self._pending_messages),
             "conversation_threads": {
                 tid: thread.to_dict()
@@ -1004,6 +1042,7 @@ class StateBoard:
 
         # Restore human questions, messages, and collaborative context
         board._human_questions = list(data.get("human_questions", []))
+        board._human_messages = list(data.get("human_messages", []))
         board._pending_messages = list(data.get("pending_messages", []))
         for tid, tdata in data.get("conversation_threads", {}).items():
             participants = list(tdata.get("participants", []))
@@ -1061,6 +1100,7 @@ class StateBoard:
         blocked = self.tasks_blocked()
         running = [t for t in self.tasks.values() if t.status == TaskStatus.RUNNING]
         unanswered = [q for q in self._human_questions if q["answer"] is None]
+        recent_human_posts = self._human_messages[-5:]
 
         return {
             "objective": self.objective,
@@ -1081,6 +1121,13 @@ class StateBoard:
                     {"id": q["id"], "question": q["question"][:100]}
                     for q in unanswered
                 ],
+                "human_activity": {
+                    "recent_posts": [
+                        {"from": p["human_id"], "content": p["content"][:100]}
+                        for p in recent_human_posts
+                    ],
+                    "post_count": len(self._human_messages),
+                },
                 "all_done": self.all_terminal(),
             },
             "recent_events": recent_events,
