@@ -18,9 +18,17 @@ class _ResidentStub:
     def __init__(self, resident_id: str):
         self.resident_id = resident_id
         self.stopped = False
+        self._sleeping = False
 
     async def stop(self) -> None:
         self.stopped = True
+        self._sleeping = False
+
+    async def sleep(self, reason: str = "") -> None:
+        self._sleeping = True
+
+    async def wake(self) -> None:
+        self._sleeping = False
 
 
 def _runner_with_task(status: TaskStatus = TaskStatus.RUNNING) -> tuple[OrchestratorRunner, StateBoard, TaskNode]:
@@ -96,7 +104,7 @@ async def test_process_collaborative_messages_requests_fix_once_and_preserves_co
     assert task.status == TaskStatus.FIX_NEEDED
     assert task.assigned_agent == "coder-api-auth"
     assert thread.messages[0]["_processed"] is True
-    assert "reviewer-api-auth" not in runner._residents
+    assert runner._residents["reviewer-api-auth"]._sleeping is True
     assert "coder-api-auth" in runner._residents
     assert len([h for h in task.iteration_history if h["action"] == "reviewer_requested_fix"]) == 1
     assert board.get_project_context()["recent_errors"][0]["error"].startswith("TASK_FIX_NEEDED")

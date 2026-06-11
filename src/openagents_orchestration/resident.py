@@ -12,8 +12,19 @@ import contextlib
 import json
 import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
+
+
+class AgentLifecycle(StrEnum):
+    """Four-state lifecycle for resident agents."""
+
+    IDLE = "idle"
+    BUSY = "busy"
+    ERROR = "error"
+    STOPPED = "stopped"
+    SLEEPING = "sleeping"
 
 
 @dataclass
@@ -22,7 +33,7 @@ class ResidentState:
 
     resident_id: str
     agent_type: str
-    status: str = "idle"  # idle | busy | error | stopped
+    status: str = AgentLifecycle.IDLE  # idle | busy | error | stopped | sleeping
     latest_output: str = ""
     latest_task: str = ""
     token_used: int = 0
@@ -75,6 +86,7 @@ class ResidentAgent:
         self._inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._task: asyncio.Task[Any] | None = None
         self._active = False
+        self._sleeping = False
         self._transcript: list[dict[str, Any]] = []
         self._state = ResidentState(resident_id=resident_id, agent_type=agent_type)
         if persist_dir is not None:
@@ -115,6 +127,7 @@ class ResidentAgent:
 
     async def start(self) -> None:
         self._active = True
+        self._sleeping = False
         # Load persisted transcript if exists
         if self._persist_path.exists():
             try:
@@ -132,8 +145,9 @@ class ResidentAgent:
 
     async def stop(self) -> None:
         self._active = False
-        self._state.status = "stopped"
-        self._board.update_resident(self.resident_id, status="stopped")
+        self._sleeping = False
+        self._state.status = AgentLifecycle.STOPPED
+        self._board.update_resident(self.resident_id, status=AgentLifecycle.STOPPED)
         current = asyncio.current_task()
         if self._task is not None and self._task is not current:
             self._task.cancel()
@@ -144,6 +158,31 @@ class ResidentAgent:
             agent_id=self.resident_id,
             message=f"Resident {self.agent_type} stopped",
         )
+
+    async def sleep(self, reason: str = "") -> None:
+        """Gracefully pause the resident: stop consuming messages, preserve transcript.
+
+        The resident remains in memory and can be woken with ``wake()``.
+        After ``max_idle_s`` in sleep it auto-stops to save resources.
+        """
+        if self._sleeping or not self._active:
+            return
+        self._sleeping = True
+        self._state.status = AgentLifecycle.SLEEPING
+        self._board.update_resident(self.resident_id, status=AgentLifecycle.SLEEPING)
+        self._board.log_event(
+            "resident.sleep",
+            agent_id=self.resident_id,
+            message=f"Sleeping: {reason}"[:200],
+        )
+        # Inject sentinel to break out of the normal wait_for in _loop
+        await self._inbox.put({"__sleep": True, "from": "system"})
+
+    async def wake(self) -> None:
+        """Wake a sleeping resident so it resumes message processing."""
+        if not self._sleeping:
+            return
+        await self._inbox.put({"__wake": True, "from": "system"})
 
     # -- messaging -----------------------------------------------------------
 
@@ -166,15 +205,23 @@ class ResidentAgent:
                     timeout=self._max_idle_s,
                 )
             except TimeoutError:
-                # Idle timeout — auto-stop to save resources
-                self._board.log_event(
-                    "resident.idle_timeout",
-                    agent_id=self.resident_id,
-                    message=f"Idle for {self._max_idle_s}s, auto-stopping",
-                )
+                if self._sleeping:
+                    # Slept too long — auto-stop to save resources
+                    self._board.log_event(
+                        "resident.sleep_timeout",
+                        agent_id=self.resident_id,
+                        message=f"Sleep timeout after {self._max_idle_s}s, auto-stopping",
+                    )
+                else:
+                    self._board.log_event(
+                        "resident.idle_timeout",
+                        agent_id=self.resident_id,
+                        message=f"Idle for {self._max_idle_s}s, auto-stopping",
+                    )
                 self._active = False
-                self._state.status = "stopped"
-                self._board.update_resident(self.resident_id, status="stopped")
+                self._sleeping = False
+                self._state.status = AgentLifecycle.STOPPED
+                self._board.update_resident(self.resident_id, status=AgentLifecycle.STOPPED)
                 self._board.log_event(
                     "resident.stopped",
                     agent_id=self.resident_id,
@@ -182,13 +229,71 @@ class ResidentAgent:
                 )
                 break
 
-            self._state.status = "busy"
+            # Sentinel handling for sleep/wake
+            if msg.get("__sleep"):
+                # Enter sleep sub-loop: only react to __wake and heartbeat
+                while self._sleeping and self._active:
+                    try:
+                        inner = await asyncio.wait_for(
+                            self._inbox.get(),
+                            timeout=self._max_idle_s,
+                        )
+                    except TimeoutError:
+                        self._board.log_event(
+                            "resident.sleep_timeout",
+                            agent_id=self.resident_id,
+                            message=f"Sleep timeout after {self._max_idle_s}s, auto-stopping",
+                        )
+                        self._active = False
+                        self._sleeping = False
+                        self._state.status = AgentLifecycle.STOPPED
+                        self._board.update_resident(self.resident_id, status=AgentLifecycle.STOPPED)
+                        break
+
+                    if inner.get("__wake"):
+                        self._sleeping = False
+                        self._state.status = AgentLifecycle.IDLE
+                        self._state.last_active = time.time()
+                        self._board.update_resident(
+                            self.resident_id,
+                            status=AgentLifecycle.IDLE,
+                            last_active=self._state.last_active,
+                        )
+                        self._board.log_event(
+                            "resident.wake",
+                            agent_id=self.resident_id,
+                            message="Resident woken",
+                        )
+                        break
+
+                    if inner.get("task") == "heartbeat":
+                        # Reply to heartbeat even while sleeping
+                        reply = self._build_heartbeat_reply(inner)
+                        await self._send_reply(to=inner.get("from", "monitor"), content=reply)
+                        self._state.last_active = time.time()
+                        self._board.update_resident(
+                            self.resident_id,
+                            last_active=self._state.last_active,
+                        )
+                        continue
+
+                    # Any other messages are queued for later processing after wake
+                    # Re-queue them so they are processed in order after wake
+                    await self._inbox.put(inner)
+                continue
+
+            if msg.get("__wake"):
+                # Wake received outside sleep (e.g. race) — ignore
+                continue
+
+            # Normal message processing
+            self._state.status = AgentLifecycle.BUSY
             self._state.last_active = time.time()
             self._state.message_count += 1
             self._state.latest_task = msg.get("task", "")[:100]
             self._board.update_resident(
                 self.resident_id,
-                status="busy",
+                status=AgentLifecycle.BUSY,
                 last_active=self._state.last_active,
                 message_count=self._state.message_count,
                 latest_task=self._state.latest_task,
@@ -197,20 +302,20 @@ class ResidentAgent:
             try:
                 result = await self._process_message(msg)
                 self._state.latest_output = result[:500]
-                self._state.status = "idle"
+                self._state.status = AgentLifecycle.IDLE
                 self._state.last_active = time.time()
                 self._board.update_resident(
                     self.resident_id,
-                    status="idle",
+                    status=AgentLifecycle.IDLE,
                     last_active=self._state.last_active,
                     latest_output=self._state.latest_output,
                 )
             except Exception as exc:
                 self._state.error_count += 1
-                self._state.status = "error"
+                self._state.status = AgentLifecycle.ERROR
                 self._board.update_resident(
                     self.resident_id,
-                    status="error",
+                    status=AgentLifecycle.ERROR,
                     error_count=self._state.error_count,
                 )
                 self._board.log_event(
@@ -310,6 +415,18 @@ class ResidentAgent:
             parts.append("# Request\nProcess this request.")
 
         return "\n\n".join(parts)
+
+    def _build_heartbeat_reply(self, msg: dict[str, Any]) -> str:
+        """Build a heartbeat reply summarizing current state."""
+        parts = ["HEARTBEAT_REPLY"]
+        parts.append(f"status={self._state.status}")
+        parts.append(f"task={self._state.latest_task or 'none'}")
+        parts.append(f"messages={self._state.message_count}")
+        parts.append(f"errors={self._state.error_count}")
+        parts.append(f"token_used={self._state.token_used}")
+        if self._bound_task_id:
+            parts.append(f"bound_task={self._bound_task_id}")
+        return "\n".join(parts)
 
     async def _send_reply(self, *, to: str, content: str) -> None:
         """Send reply back via StateBoard mailbox."""

@@ -593,11 +593,10 @@ class OrchestratorRunner:
                         source=task_id,
                         error=content,
                     )
-                    # Stop reviewer until coder fixes
+                    # Sleep reviewer until coder fixes (preserve context)
                     reviewer = self._residents.get(from_id)
                     if reviewer is not None:
-                        await reviewer.stop()
-                        self._residents.pop(reviewer.resident_id, None)
+                        await reviewer.sleep(reason="waiting for coder fix")
                     msg["_processed"] = True
 
     async def _spawn_resident_for_task(self, task: Any, agent_type: str) -> ResidentAgent | None:
@@ -613,10 +612,12 @@ class OrchestratorRunner:
 
         resident_id = f"{agent_type}-{task.task_id}"
 
-        # Don't spawn if already exists and active
+        # Don't spawn if already exists and active or sleeping
         if resident_id in self._residents:
             resident = self._residents[resident_id]
-            if resident._active:
+            if resident._active or resident._sleeping:
+                if resident._sleeping:
+                    await resident.wake()
                 return resident
 
         print(
