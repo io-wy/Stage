@@ -20,6 +20,14 @@ from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 _MAX_DIFF_CHARS = 3000
 
 
+def _infer_task_id(agent_id: str) -> str:
+    """Extract task id from agent_id (e.g. coder-t1 -> t1)."""
+    for prefix in ("coder-", "reviewer-", "researcher-", "github_agent-", "monitor-", "director-"):
+        if agent_id.startswith(prefix):
+            return agent_id[len(prefix):]
+    return agent_id
+
+
 class EditFileTool(ToolPlugin):
     """Replace an exact unique substring inside a file."""
 
@@ -103,6 +111,16 @@ class EditFileTool(ToolPlugin):
             dirty = context.scratch.setdefault("dirty_files", set())
             if isinstance(dirty, set):
                 dirty.add(str(path.resolve(strict=False)))
+
+            # Push to ArtifactStore for inter-agent sharing (best-effort)
+            store = getattr(getattr(context, "deps", None), "artifact_store", None)
+            if store is not None:
+                agent_id = getattr(context, "agent_id", "")
+                task_id = _infer_task_id(agent_id)
+                try:
+                    await store.put(task_id, str(path), new_content)
+                except Exception:
+                    pass
 
         diff = _unified_diff(content, new_content, str(path))
         return {

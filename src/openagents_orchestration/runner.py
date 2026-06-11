@@ -33,6 +33,7 @@ from openagents.plugins.builtin.events.async_event_bus import AsyncEventBus
 from openagents.plugins.loader import LoadedAgentPlugins, load_agent_plugins
 from pydantic import BaseModel, Field
 
+from openagents_orchestration.artifact_store import ArtifactStore, LocalArtifactStore
 from openagents_orchestration.collaboration import (
     CollaborationSignal,
     parse_collaboration_message,
@@ -118,6 +119,7 @@ class RunnerDeps:
     state_board: StateBoard
     runner_delegate: Any  # callable: (agent_type, input_text, agent_id=None) -> str
     runner: Any  # OrchestratorRunner reference for resident management
+    artifact_store: ArtifactStore | None = None  # shared artifact storage for inter-agent exchange
 
 
 class OrchestratorRunner:
@@ -293,10 +295,15 @@ class OrchestratorRunner:
         await self._spawn_monitor_resident()
 
         # 3. Deps for tools
+        artifact_store: ArtifactStore | None = None
+        if self._current_work_dir is not None:
+            store_dir = self._current_work_dir / ".artifacts"
+            artifact_store = LocalArtifactStore(store_dir)
         self._deps = RunnerDeps(
             state_board=self._state_board,
             runner_delegate=self.run_agent,
             runner=self,
+            artifact_store=artifact_store,
         )
 
         # 4. Choose execution mode based on task characteristics

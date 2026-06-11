@@ -16,6 +16,14 @@ from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 
+def _infer_task_id(agent_id: str) -> str:
+    """Extract task id from agent_id (e.g. coder-t1 -> t1)."""
+    for prefix in ("coder-", "reviewer-", "researcher-", "github_agent-", "monitor-", "director-"):
+        if agent_id.startswith(prefix):
+            return agent_id[len(prefix):]
+    return agent_id
+
+
 class WriteFileTool(ToolPlugin):
     """Overwrite a file with new content; record the path in scratch."""
 
@@ -64,6 +72,16 @@ class WriteFileTool(ToolPlugin):
             dirty = context.scratch.setdefault("dirty_files", set())
             if isinstance(dirty, set):
                 dirty.add(str(path.resolve(strict=False)))
+
+            # Push to ArtifactStore for inter-agent sharing (best-effort)
+            store = getattr(getattr(context, "deps", None), "artifact_store", None)
+            if store is not None:
+                agent_id = getattr(context, "agent_id", "")
+                task_id = _infer_task_id(agent_id)
+                try:
+                    await store.put(task_id, str(path), content)
+                except Exception:
+                    pass
 
         return {
             "file_path": str(path),
