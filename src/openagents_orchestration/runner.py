@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from openagents_orchestration.artifact_store import ArtifactStore, LocalArtifactStore
 from openagents_orchestration.matrix_transport import MatrixConfig, MatrixTransport, MatrixClient
+from openagents_orchestration.sub_state_board import SubStateBoard
 from openagents_orchestration.collaboration import (
     CollaborationSignal,
     parse_collaboration_message,
@@ -883,8 +884,38 @@ class OrchestratorRunner:
             file=sys.stderr,
             flush=True,
         )
+
+        # Team leader gets its own SubStateBoard scoped to the task subgraph
+        deps_override = None
+        if agent_type == "team_leader" and self._state_board is not None:
+            task_id = agent_id.replace(f"{agent_type}-", "", 1) if agent_id.startswith(f"{agent_type}-") else agent_id
+            task = self._state_board.get_task(task_id)
+            if task is not None and task.subgraph is not None:
+                sub_board = SubStateBoard(
+                    parent=self._state_board,
+                    objective=task.description,
+                )
+                sub_board.add_tasks(task.subgraph)
+                deps_override = RunnerDeps(
+                    state_board=sub_board,
+                    runner_delegate=self.run_agent,
+                    runner=self,
+                    artifact_store=getattr(self._deps, "artifact_store", None) if self._deps else None,
+                    matrix_transport=getattr(self._deps, "matrix_transport", None) if self._deps else None,
+                )
+                # Create Leader Room on Matrix if transport is enabled
+                mx = getattr(deps_override, "matrix_transport", None)
+                if mx is not None and mx.enabled:
+                    try:
+                        await mx.create_room(
+                            name=f"leader-{task_id}",
+                            invite=[],
+                        )
+                    except Exception:
+                        pass
+
         async with self._spawn_sem:
-            result = await self._run_single(agent_id, agent_type, input_text)
+            result = await self._run_single(agent_id, agent_type, input_text, deps_override=deps_override)
 
         # Extract metrics and record to StateBoard (even on failure)
         # NOTE: steps are already added inside _run_single (runner.py:803);
@@ -1165,15 +1196,17 @@ class OrchestratorRunner:
         input_text: str,
         budget: RunBudget | None = None,
         transcript_override: list[dict[str, Any]] | None = None,
+        deps_override: RunnerDeps | None = None,
     ) -> RunResult[str]:
         """Run one agent (director or tactical) — based on CoreCoderLocalRunner."""
         bundle = self._ensure_bundle(agent_type)
+        deps = deps_override if deps_override is not None else self._deps
         request = RunRequest(
             agent_id=agent_id,
             session_id=f"session-{agent_id}",
             input_text=input_text,
             budget=budget or self._default_budget(bundle.agent),
-            deps=self._deps,
+            deps=deps,
         )
         usage = RunUsage()
         state: dict[str, Any] = {}

@@ -38,6 +38,9 @@ class TaskNode:
     result_output: str = ""
     actual_artifacts: list[str] = field(default_factory=list)
 
+    # Team support: nested subgraph for sub-delegation
+    subgraph: TaskGraph | None = None
+
     # Iterative execution history (for coder -> review -> fix loops)
     iteration_history: list[dict[str, Any]] = field(default_factory=list)
     assigned_agent: str = ""  # resident_id or agent_id bound to this task
@@ -65,7 +68,7 @@ class TaskNode:
         })
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "task_id": self.task_id,
             "description": self.description,
             "agent_type": self.agent_type,
@@ -81,6 +84,9 @@ class TaskNode:
             "iteration_history": self.iteration_history,
             "assigned_agent": self.assigned_agent,
         }
+        if self.subgraph is not None:
+            result["subgraph"] = self.subgraph.to_dict()
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskNode:
@@ -100,6 +106,8 @@ class TaskNode:
         )
         node.iteration_history = list(data.get("iteration_history", []))
         node.assigned_agent = data.get("assigned_agent", "")
+        if "subgraph" in data:
+            node.subgraph = TaskGraph.from_dict(data["subgraph"])
         return node
 
 
