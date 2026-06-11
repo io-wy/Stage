@@ -151,6 +151,13 @@ Do not change the function signature or the test file.
 
             duration = time.monotonic() - start
 
+            # Token efficiency
+            token_efficiency = 0.0
+            if steps > 0 and tokens > 0:
+                step_ratio = task.max_steps / steps
+                token_ratio = task.max_tokens / tokens
+                token_efficiency = min(step_ratio * token_ratio, 1.0)
+
             return EvalResult(
                 task_id=task.task_id,
                 category=task.category,
@@ -158,11 +165,18 @@ Do not change the function signature or the test file.
                 success=verify_result.get("passed", False),
                 passed=1 if verify_result.get("passed") else 0,
                 total=1,
-                success_score=1.0 if verify_result.get("passed") else 0.0,
+                task_success=1.0 if verify_result.get("passed") else 0.0,
+                token_efficiency=token_efficiency,
+                orchestration_quality=0.0,
+                collaboration_success=0.0,
+                recovery_rate=0.0,
+                output_quality=0.0,
+                autonomy=1.0,
                 steps_taken=steps,
                 tokens_used=tokens,
                 budget_exceeded=budget_exceeded,
                 duration_sec=duration,
+                judge_skipped=True,
                 raw=verify_result,
             )
 

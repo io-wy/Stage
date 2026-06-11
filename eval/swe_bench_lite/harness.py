@@ -163,6 +163,9 @@ Your task:
 
             duration = time.monotonic() - start
 
+            # Token efficiency: SWE-bench uses unlimited budget, skip calculation
+            token_efficiency = 0.0
+
             return EvalResult(
                 task_id=task.task_id,
                 category=task.category,
@@ -170,11 +173,18 @@ Your task:
                 success=verify_result["passed"],
                 passed=1 if verify_result["passed"] else 0,
                 total=1,
-                success_score=1.0 if verify_result["passed"] else 0.0,
+                task_success=1.0 if verify_result["passed"] else 0.0,
+                token_efficiency=token_efficiency,
+                orchestration_quality=0.0,
+                collaboration_success=0.0,
+                recovery_rate=0.0,
+                output_quality=0.0,
+                autonomy=1.0,
                 steps_taken=steps,
                 tokens_used=tokens,
                 budget_exceeded=budget_exceeded,
                 duration_sec=duration,
+                judge_skipped=True,
                 raw={
                     "apply_success": verify_result["apply_success"],
                     "test_result": verify_result.get("test_result", {}),

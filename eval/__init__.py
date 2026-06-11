@@ -3,7 +3,7 @@
 包含三个评估方向:
 - swe_bench_lite: 软件工程任务评估
 - humaneval: 代码生成评估
-- custom: 自建多 Agent 编排评估
+- custom: 自建多 Agent 编排评估（集成 Agent-as-Judge）
 
 注意: eval 包运行时自动将项目 src/ 加入 Python path，
 确保能导入 openagents_orchestration。
@@ -19,5 +19,6 @@ if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
 from eval.base import EvalResult, EvalTask, EvalHarness
+from eval.judge import ClaudeCodeJudge
 
-__all__ = ["EvalResult", "EvalTask", "EvalHarness"]
+__all__ = ["EvalResult", "EvalTask", "EvalHarness", "ClaudeCodeJudge"]

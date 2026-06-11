@@ -1,0 +1,408 @@
+"""Agent-as-Judge — 用 Claude Code CLI 评估戏台执行质量.
+
+调用 `claude -p --output-format json --json-schema ...` 做非交互式结构化评估.
+Judge 通过 --add-dir 访问 work_dir，自行用 Read 工具读取需要评估的文件.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import subprocess
+from pathlib import Path
+from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# JSON Schema for the combined 4-dimension judgment
+# ---------------------------------------------------------------------------
+
+_JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "fulfillment": {
+            "type": "object",
+            "properties": {
+                "score": {"type": "number", "minimum": 0, "maximum": 1},
+                "reasoning": {"type": "string"},
+            },
+            "required": ["score", "reasoning"],
+        },
+        "decomposition": {
+            "type": "object",
+            "properties": {
+                "score": {"type": "number", "minimum": 0, "maximum": 1},
+                "reasoning": {"type": "string"},
+            },
+            "required": ["score", "reasoning"],
+        },
+        "collaboration": {
+            "type": "object",
+            "properties": {
+                "score": {"type": "number", "minimum": 0, "maximum": 1},
+                "feedback_quality": {"type": "number", "minimum": 0, "maximum": 1},
+                "reasoning": {"type": "string"},
+            },
+            "required": ["score", "feedback_quality", "reasoning"],
+        },
+        "output_quality": {
+            "type": "object",
+            "properties": {
+                "correctness": {"type": "number", "minimum": 1, "maximum": 5},
+                "readability": {"type": "number", "minimum": 1, "maximum": 5},
+                "completeness": {"type": "number", "minimum": 1, "maximum": 5},
+                "efficiency": {"type": "number", "minimum": 1, "maximum": 5},
+                "reasoning": {"type": "string"},
+            },
+            "required": ["correctness", "readability", "completeness", "efficiency", "reasoning"],
+        },
+    },
+    "required": ["fulfillment", "decomposition", "collaboration", "output_quality"],
+}
+
+
+class ClaudeCodeJudge:
+    """用 Claude Code CLI 作为 Judge.
+
+    Usage:
+        judge = ClaudeCodeJudge()
+        result = await judge.evaluate(task, state_board, work_dir)
+    """
+
+    def __init__(self, timeout_sec: int = 300):
+        self.timeout_sec = timeout_sec
+
+    # -- public API --------------------------------------------------------
+
+    async def evaluate(
+        self,
+        task_description: str,
+        state_board: Any,
+        work_dir: Path,
+        verify_scores: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """调用 Claude Code CLI 一次性评估 4 个主观维度.
+
+        Returns dict with keys:
+            - fulfillment_score (float)
+            - decomposition_score (float)
+            - collaboration_score (float)
+            - collaboration_feedback_quality (float)
+            - output_quality_score (float)   # 1-5 rubric 均值 ÷ 5 → 0-1
+            - output_quality_rubric (dict)
+            - reasoning_map (dict[str, str])
+            - cost_usd (float | None)
+            - error (str | None)
+        """
+        prompt = self._build_prompt(
+            task_description=task_description,
+            state_board=state_board,
+            work_dir=work_dir,
+            verify_scores=verify_scores or {},
+        )
+
+        raw_result = await self._call_claude(prompt, work_dir)
+
+        if raw_result.get("error"):
+            return {
+                "fulfillment_score": 0.0,
+                "decomposition_score": 0.0,
+                "collaboration_score": 0.0,
+                "collaboration_feedback_quality": 0.0,
+                "output_quality_score": 0.0,
+                "output_quality_rubric": {},
+                "reasoning_map": {},
+                "cost_usd": raw_result.get("cost_usd"),
+                "error": raw_result["error"],
+            }
+
+        data = raw_result["data"]
+
+        # 1-5 rubric 均值 → 0-1
+        oq = data.get("output_quality", {})
+        rubric_mean = (
+            oq.get("correctness", 1)
+            + oq.get("readability", 1)
+            + oq.get("completeness", 1)
+            + oq.get("efficiency", 1)
+        ) / 4.0 / 5.0
+
+        return {
+            "fulfillment_score": data.get("fulfillment", {}).get("score", 0.0),
+            "decomposition_score": data.get("decomposition", {}).get("score", 0.0),
+            "collaboration_score": data.get("collaboration", {}).get("score", 0.0),
+            "collaboration_feedback_quality": data.get("collaboration", {}).get("feedback_quality", 0.0),
+            "output_quality_score": rubric_mean,
+            "output_quality_rubric": {
+                "correctness": oq.get("correctness", 1),
+                "readability": oq.get("readability", 1),
+                "completeness": oq.get("completeness", 1),
+                "efficiency": oq.get("efficiency", 1),
+            },
+            "reasoning_map": {
+                "fulfillment": data.get("fulfillment", {}).get("reasoning", ""),
+                "decomposition": data.get("decomposition", {}).get("reasoning", ""),
+                "collaboration": data.get("collaboration", {}).get("reasoning", ""),
+                "output_quality": oq.get("reasoning", ""),
+            },
+            "cost_usd": raw_result.get("cost_usd"),
+            "error": None,
+        }
+
+    # -- prompt builder ----------------------------------------------------
+
+    def _build_prompt(
+        self,
+        task_description: str,
+        state_board: Any,
+        work_dir: Path,
+        verify_scores: dict[str, float],
+    ) -> str:
+        """构造给 Claude Code CLI 的 judge prompt."""
+
+        # 文件列表（让 judge 自己读）
+        file_list = self._list_work_dir_files(work_dir)
+
+        # StateBoard 摘要
+        board_summary = self._build_board_summary(state_board)
+
+        verify_summary = json.dumps(verify_scores, indent=2) if verify_scores else "(无验证规则)"
+
+        return (
+            "# 评估任务\n"
+            "你是独立的评估专家。请基于提供的证据，对以下戏台（多 Agent 编排系统）"
+            "的执行质量进行严格评估。不要给同情分。\n\n"
+            "## 原始任务描述\n"
+            f"{task_description}\n\n"
+            "## 验证规则结果\n"
+            f"{verify_summary}\n\n"
+            "## 产出文件列表\n"
+            "以下文件位于当前工作目录中，请使用 Read 工具按需读取来评估。\n"
+            f"{file_list}\n\n"
+            "## 戏台执行摘要\n"
+            f"{board_summary}\n\n"
+            "## 评估维度\n"
+            "请对以下 4 个维度分别评分，输出严格遵循 JSON Schema。\n\n"
+            "### 1. fulfillment（功能满足度）\n"
+            "验证规则通过不代表功能真正正确。请读取关键代码文件，判断：\n"
+            "- 功能是否真正满足任务描述的需求？\n"
+            "- 有无逻辑错误、边界条件遗漏、安全隐患？\n"
+            "- 0-1 分，1.0 = 完美，0.0 = 完全无关\n\n"
+            "### 2. decomposition（编排分解质量）\n"
+            "基于执行摘要中的任务图，判断：\n"
+            "- 任务拆分粒度是否合适（每个任务 3-30 步可完成）？\n"
+            "- 依赖关系是否合理、无冗余串行？\n"
+            "- agent_type 分配是否与任务性质匹配？\n"
+            "- 0-1 分\n\n"
+            "### 3. collaboration（协作质量）\n"
+            "基于执行摘要，判断：\n"
+            "- coder 和 reviewer 之间是否有有效的反馈闭环？\n"
+            "- reviewer 的反馈是否精准、可执行？\n"
+            "- 如果没有协作（单 agent 完成），整体 score 取 0.5（中性），"
+            "feedback_quality 取 0.5。\n"
+            "- score 和 feedback_quality 均为 0-1 分\n\n"
+            "### 4. output_quality（产出质量 rubric）\n"
+            "请读取代码文件，对以下 4 维度各给 1-5 的整数评分：\n"
+            "- correctness (正确性): 逻辑是否正确\n"
+            "- readability (可读性): 命名、结构、注释\n"
+            "- completeness (完整性): 边界条件、异常处理\n"
+            "- efficiency (效率): 是否过度工程或过于简陋\n"
+            "5 = 范例级，4 = 良好，3 = 合格，2 = 较差，1 = 不合格\n\n"
+            "## 输出格式\n"
+            "严格输出 JSON，不要 markdown 代码块，不要额外文本。"
+        )
+
+    # -- Claude CLI caller -------------------------------------------------
+
+    async def _call_claude(self, prompt: str, work_dir: Path) -> dict[str, Any]:
+        """调用 claude CLI，返回解析后的 structured_output 或错误信息."""
+        schema_str = json.dumps(_JUDGE_SCHEMA, ensure_ascii=False, separators=(",", ":"))
+
+        cmd = [
+            "claude",
+            "-p",
+            "--output-format", "json",
+            "--json-schema", schema_str,
+            "--bare",
+            "--permission-mode", "auto",
+            "--add-dir", str(work_dir),
+            prompt,
+        ]
+
+        try:
+            proc = await asyncio.to_thread(
+                subprocess.run,
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            return {"error": f"Claude Code CLI timed out after {self.timeout_sec}s", "cost_usd": None, "data": {}}
+        except FileNotFoundError:
+            return {"error": "Claude Code CLI not found. Is `claude` installed and in PATH?", "cost_usd": None, "data": {}}
+        except Exception as exc:
+            return {"error": f"Failed to run Claude Code CLI: {exc}", "cost_usd": None, "data": {}}
+
+        if proc.returncode != 0:
+            stderr_preview = proc.stderr[:500] if proc.stderr else "(no stderr)"
+            return {
+                "error": f"Claude Code CLI exited with code {proc.returncode}. stderr: {stderr_preview}",
+                "cost_usd": None,
+                "data": {},
+            }
+
+        # Parse JSON output
+        stdout = proc.stdout.strip()
+        if not stdout:
+            return {"error": "Claude Code CLI produced empty stdout", "cost_usd": None, "data": {}}
+
+        try:
+            outer = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            return {
+                "error": f"Claude Code CLI output is not valid JSON: {exc}. Output preview: {stdout[:300]}",
+                "cost_usd": None,
+                "data": {},
+            }
+
+        structured = outer.get("structured_output")
+        if structured is None:
+            return {
+                "error": "Claude Code CLI output missing 'structured_output' field. "
+                         f"Output preview: {stdout[:300]}",
+                "cost_usd": outer.get("total_cost_usd"),
+                "data": {},
+            }
+
+        return {
+            "error": None,
+            "cost_usd": outer.get("total_cost_usd"),
+            "data": structured,
+        }
+
+    # -- context builders --------------------------------------------------
+
+    @staticmethod
+    def _list_work_dir_files(work_dir: Path) -> str:
+        """生成工作目录中的可读文件列表（供 judge 自行读取）."""
+        if not work_dir.exists():
+            return "(work_dir does not exist)"
+
+        skip_suffixes = {
+            ".pyc", ".pyo", ".so", ".dll", ".exe",
+            ".png", ".jpg", ".jpeg", ".gif", ".svg",
+            ".zip", ".tar", ".gz", ".bz2", ".7z",
+            ".git", ".DS_Store",
+        }
+        skip_dirs = {".git", "__pycache__", ".pytest_cache", ".eval_cache", ".artifacts"}
+
+        lines: list[str] = []
+        for path in sorted(work_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(work_dir)
+            if any(part in skip_dirs for part in rel.parts):
+                continue
+            if any(str(rel).endswith(suffix) for suffix in skip_suffixes):
+                continue
+            try:
+                size = path.stat().st_size
+                lines.append(f"  - {rel} ({size} bytes)")
+            except Exception:
+                pass
+
+        if not lines:
+            return "(no readable files found)"
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_board_summary(state_board: Any) -> str:
+        """从 StateBoard 提取 Judge 需要的精简摘要."""
+        lines: list[str] = []
+
+        # objective
+        obj = getattr(state_board, "objective", "(unknown)")
+        lines.append(f"Objective: {obj}\n")
+
+        # tasks
+        tasks = getattr(state_board, "tasks", {})
+        if tasks:
+            lines.append("Tasks:")
+            for tid, t in tasks.items():
+                status = getattr(t, "status", "?")
+                status_val = status.value if hasattr(status, "value") else status
+                agent_type = getattr(t, "agent_type", "?")
+                deps = getattr(t, "dependencies", [])
+                desc = getattr(t, "description", "")[:60]
+                lines.append(
+                    f"  - {tid}: {agent_type} | {status_val} | deps={deps} | {desc}"
+                )
+            lines.append("")
+
+        # agents
+        agents = getattr(state_board, "agents", {})
+        if agents:
+            lines.append("Agents:")
+            for aid, a in agents.items():
+                status = getattr(a, "status", "?")
+                status_val = status.value if hasattr(status, "value") else status
+                steps = getattr(a, "steps_used", 0)
+                retry = getattr(a, "retry_count", 0)
+                lines.append(
+                    f"  - {aid}: {status_val} | steps={steps} | retry={retry}"
+                )
+            lines.append("")
+
+        # budget
+        budget = getattr(state_board, "budget", None)
+        if budget:
+            lines.append(
+                f"Budget: steps={budget.steps_taken}/{budget.max_steps}, "
+                f"tokens={budget.token_used}/{budget.token_limit}, "
+                f"exhausted={budget.exhausted}\n"
+            )
+
+        # events — collaboration & recovery focused
+        events = getattr(state_board, "events", [])
+        if events:
+            lines.append("Key events:")
+            relevant_keywords = ["review", "collab", "fix", "recover", "retry", "spawned_reviewer", "coder_ready", "approved"]
+            count = 0
+            for e in events:
+                et = getattr(e, "event_type", "")
+                msg = getattr(e, "message", "")
+                if any(kw in et.lower() or kw in msg.lower() for kw in relevant_keywords):
+                    agent_id = getattr(e, "agent_id", "")
+                    task_id = getattr(e, "task_id", "")
+                    parts = [f"  [{et}]"]
+                    if agent_id:
+                        parts.append(f"agent={agent_id}")
+                    if task_id:
+                        parts.append(f"task={task_id}")
+                    if msg:
+                        parts.append(msg[:100])
+                    lines.append(" ".join(parts))
+                    count += 1
+                    if count >= 20:
+                        break
+            lines.append("")
+
+        # human interventions
+        human_questions = getattr(state_board, "_human_questions", [])
+        if human_questions:
+            total = len(human_questions)
+            answered = sum(1 for q in human_questions if q.get("answer") is not None)
+            lines.append(f"Human questions: {answered}/{total} answered\n")
+
+        # conversation threads
+        threads = getattr(state_board, "conversation_threads", {})
+        if threads:
+            lines.append("Threads:")
+            for tid, thread in threads.items():
+                msgs = getattr(thread, "messages", [])
+                participants = getattr(thread, "participants", set())
+                lines.append(f"  - {tid}: {len(msgs)} msgs, {participants}")
+            lines.append("")
+
+        return "\n".join(lines)

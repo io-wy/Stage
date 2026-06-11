@@ -3,14 +3,17 @@
 统一入口，支持三种评估套件:
 - swe_bench_lite: 软件工程任务
 - humaneval: 代码生成
-- custom: 自建多 Agent 评估任务
+- custom: 自建多 Agent 评估任务（默认启用 Agent-as-Judge）
 
 Usage:
     # 查看帮助
     uv run python -m eval.main --help
 
-    # 跑全部自建任务
+    # 跑全部自建任务（启用 Claude Code CLI Judge）
     uv run python -m eval.main --suite custom
+
+    # 跳过 Judge（只用客观指标）
+    uv run python -m eval.main --suite custom --skip-judge
 
     # 跑 HumanEval 前 10 题
     uv run python -m eval.main --suite humaneval --limit 10
@@ -51,6 +54,7 @@ def main():
         epilog="""
 Examples:
   uv run python -m eval.main --suite custom
+  uv run python -m eval.main --suite custom --skip-judge
   uv run python -m eval.main --suite humaneval --limit 10
   uv run python -m eval.main --suite swe_bench_lite --limit 3
         """,
@@ -73,6 +77,8 @@ Examples:
                         help="只跑指定难度的任务 (easy/medium/hard)")
     parser.add_argument("--tasks-dir", default=None,
                         help="custom 套件的任务目录 (默认: eval/custom/tasks)")
+    parser.add_argument("--skip-judge", action="store_true",
+                        help="跳过 Agent-as-Judge（只用客观指标，快但缺少主观评估）")
 
     args = parser.parse_args()
 
@@ -94,8 +100,10 @@ Examples:
         harness_kwargs["source"] = args.source
         harness_kwargs["split"] = args.split
 
-    if args.suite == "custom" and args.tasks_dir:
-        harness_kwargs["tasks_dir"] = args.tasks_dir
+    if args.suite == "custom":
+        harness_kwargs["skip_judge"] = args.skip_judge
+        if args.tasks_dir:
+            harness_kwargs["tasks_dir"] = args.tasks_dir
 
     harness = harness_cls(**harness_kwargs)
 
@@ -104,6 +112,8 @@ Examples:
     print(f"Config: {args.config}")
     print(f"Work dir: {work_dir}")
     print(f"Limit: {args.limit or 'all'}")
+    if args.suite == "custom":
+        print(f"Judge: {'skipped' if args.skip_judge else 'enabled (Claude Code CLI)'}")
     print(f"=" * 60)
 
     try:
@@ -121,12 +131,20 @@ Examples:
     print(f"{'=' * 60}")
     if "summary" in report:
         s = report["summary"]
-        print(f"Total tasks: {s['total']}")
-        print(f"Passed:      {s['passed']} ({s['pass_rate']:.1%})")
-        print(f"Avg score:   {s['avg_success_score']:.2f}")
-        print(f"Avg steps:   {s['avg_steps']:.1f}")
-        print(f"Avg tokens:  {s['avg_tokens']:.0f}")
-        print(f"Avg time:    {s['avg_duration_sec']:.1f}s")
+        print(f"Total tasks:  {s['total']}")
+        print(f"Passed:       {s['passed']} ({s['pass_rate']:.1%})")
+        print(f"Task success: {s['avg_task_success']:.2f}")
+        print(f"Token eff:    {s['avg_token_efficiency']:.2f}")
+        print(f"Orchestration:{s['avg_orchestration_quality']:.2f}")
+        print(f"Collaboration:{s['avg_collaboration_success']:.2f}")
+        print(f"Recovery:     {s['avg_recovery_rate']:.2f}")
+        print(f"Output qual:  {s['avg_output_quality']:.2f}")
+        print(f"Autonomy:     {s['avg_autonomy']:.2f}")
+        print(f"Avg steps:    {s['avg_steps']:.1f}")
+        print(f"Avg tokens:   {s['avg_tokens']:.0f}")
+        print(f"Avg time:     {s['avg_duration_sec']:.1f}s")
+        if s.get("judge_errors"):
+            print(f"Judge errors: {s['judge_errors']}")
 
     if "by_difficulty" in report and report["by_difficulty"]:
         print(f"\nBy difficulty:")

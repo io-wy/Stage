@@ -1,4 +1,4 @@
-"""评估基类 — 定义通用接口."""
+"""评估基类 — 定义通用接口与 7 维评估模型."""
 
 from __future__ import annotations
 
@@ -24,17 +24,17 @@ class EvalTask:
     initial_dirs: list[str] = field(default_factory=list)
     # 验证规则
     verification: list[dict[str, Any]] = field(default_factory=list)
-    # 期望的任务分解 (用于计算调度质量)
+    # 期望的任务分解 (用于计算编排质量客观部分)
     expected_graph: dict[str, Any] | None = None
     # 资源限制
     max_steps: int = 20
-    max_tokens: int = 50000
+    max_tokens: int = 50_000
     timeout_sec: int = 300
 
 
 @dataclass
 class EvalResult:
-    """单个评估任务的结果."""
+    """单个评估任务的结果 — 7 维评估体系."""
 
     task_id: str
     category: str
@@ -45,19 +45,32 @@ class EvalResult:
     passed: int = 0
     total: int = 0
 
-    # 维度分数 (0-1)
-    success_score: float = 0.0
-    scheduling_score: float = 0.0
-    execution_score: float = 0.0
-    efficiency_score: float = 0.0
-    resilience_score: float = 0.0
-    state_score: float = 0.0
+    # ===== 7 维评估指标 (0-1) =====
+    # 1. 任务成功率 — 做没做对
+    task_success: float = 0.0
+    # 2. Token 效率 — 花得值不值
+    token_efficiency: float = 0.0
+    # 3. 编排质量 — 调度好不好
+    orchestration_quality: float = 0.0
+    # 4. 协作成功率 — 协作闭环是否有效
+    collaboration_success: float = 0.0
+    # 5. 恢复率 — 错了能不能自己恢复
+    recovery_rate: float = 0.0
+    # 6. 产出质量 — 产出物质量
+    output_quality: float = 0.0
+    # 7. 自治度 — 需不需要人救
+    autonomy: float = 0.0
 
     # 资源消耗
     steps_taken: int = 0
     tokens_used: int = 0
     budget_exceeded: bool = False
     duration_sec: float = 0.0
+
+    # Judge 相关元数据
+    judge_skipped: bool = False
+    judge_error: str | None = None
+    judge_cost_usd: float | None = None
 
     # 原始数据
     error: str | None = None
@@ -105,9 +118,15 @@ class EvalHarness(abc.ABC):
                 )
                 print(f"  ERROR: {e}")
             self.results.append(result)
-            print(f"  success={result.success} score={result.success_score:.2f} "
-                  f"steps={result.steps_taken} tokens={result.tokens_used} "
-                  f"dur={result.duration_sec:.1f}s")
+            print(
+                f"  success={result.success} "
+                f"task_success={result.task_success:.2f} "
+                f"orchestration={result.orchestration_quality:.2f} "
+                f"output_quality={result.output_quality:.2f} "
+                f"autonomy={result.autonomy:.2f} "
+                f"steps={result.steps_taken} tokens={result.tokens_used} "
+                f"dur={result.duration_sec:.1f}s"
+            )
         return self.results
 
     def report(self) -> dict[str, Any]:
@@ -125,12 +144,17 @@ class EvalHarness(abc.ABC):
                 "total": len(self.results),
                 "passed": sum(1 for r in self.results if r.success),
                 "pass_rate": sum(1 for r in self.results if r.success) / len(self.results),
-                "avg_success_score": _avg("success_score"),
-                "avg_scheduling_score": _avg("scheduling_score"),
-                "avg_efficiency_score": _avg("efficiency_score"),
+                "avg_task_success": _avg("task_success"),
+                "avg_token_efficiency": _avg("token_efficiency"),
+                "avg_orchestration_quality": _avg("orchestration_quality"),
+                "avg_collaboration_success": _avg("collaboration_success"),
+                "avg_recovery_rate": _avg("recovery_rate"),
+                "avg_output_quality": _avg("output_quality"),
+                "avg_autonomy": _avg("autonomy"),
                 "avg_steps": _avg("steps_taken"),
                 "avg_tokens": _avg("tokens_used"),
                 "avg_duration_sec": _avg("duration_sec"),
+                "judge_errors": sum(1 for r in self.results if r.judge_error),
             },
             "by_difficulty": {},
             "tasks": [r.to_dict() for r in self.results],
@@ -145,7 +169,8 @@ class EvalHarness(abc.ABC):
                 "count": len(rs),
                 "passed": sum(1 for r in rs if r.success),
                 "pass_rate": sum(1 for r in rs if r.success) / len(rs),
-                "avg_success_score": sum(r.success_score for r in rs) / len(rs),
+                "avg_task_success": sum(r.task_success for r in rs) / len(rs),
+                "avg_output_quality": sum(r.output_quality for r in rs) / len(rs),
             }
 
         return report
