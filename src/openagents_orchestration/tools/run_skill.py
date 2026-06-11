@@ -30,7 +30,7 @@ class RunSkillTool(ToolPlugin):
     description = (
         "Execute a local skill package. Provide the skill_name and a payload dict. "
         "Available skills: code-review-pipeline, data-processing-pipeline, "
-        "web-research-pipeline."
+        "web-research-pipeline, impact-scan-pipeline, pitfall-journal-pipeline."
     )
     durable_idempotent = False
 
