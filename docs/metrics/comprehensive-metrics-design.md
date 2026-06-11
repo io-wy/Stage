@@ -214,3 +214,508 @@
 2. diff 相似度
 3. 跨 Agent 引用分析
 4. 轨迹完整性检查
+
+---
+
+## 附录：48 个指标公式详解
+
+以下所有公式中，符号约定：
+
+- `T` = 总任务数 (`len(StateBoard.tasks)`)
+- `T_c` = COMPLETED 任务数
+- `T_f` = FAILED 任务数
+- `T_s` = SKIPPED 任务数
+- `B` = Budget 对象 (`StateBoard.budget`)
+- `E` = Events 列表 (`StateBoard.events`)
+- `A` = Agents 字典 (`StateBoard.agents`)
+- `Ar` = Artifacts 字典 (`StateBoard.artifacts`)
+- `ts(x)` = 事件 x 的时间戳
+
+---
+
+### A. 任务完成度（5 个）
+
+#### A1. success_rate
+```python
+success_rate = T_c / T
+```
+
+#### A2. pass_rate
+```python
+pass_rate = sum(1 for v in verify_scores.values() if v >= 0.8) / len(verify_scores)
+```
+
+#### A3. success_score
+```python
+success_score = sum(verify_scores.values()) / len(verify_scores) if verify_scores else 0.0
+```
+
+#### A4. partial_completion_rate
+```python
+partial = sum(
+    1 for t in tasks.values()
+    if t.actual_artifacts and len(t.actual_artifacts) < len(t.expected_artifacts)
+)
+partial_completion_rate = partial / T
+```
+
+#### A5. terminal_state_distribution
+```python
+terminal_state_distribution = {
+    "completed": T_c / T,
+    "failed":    T_f / T,
+    "skipped":   T_s / T,
+}
+```
+
+---
+
+### B. 编排效率（5 个）
+
+#### B1. scheduling_score
+基于期望任务图与实际任务图的 Jaccard 相似度：
+
+```python
+def graph_jaccard(expected: TaskGraph, actual: TaskGraph) -> float:
+    expected_nodes = {t.task_id for t in expected.tasks}
+    actual_nodes   = {t.task_id for t in actual.tasks}
+    node_sim = len(expected_nodes & actual_nodes) / len(expected_nodes | actual_nodes)
+
+    expected_edges = {(t.task_id, d) for t in expected.tasks for d in t.dependencies}
+    actual_edges   = {(t.task_id, d) for t in actual.tasks   for d in t.dependencies}
+    edge_sim = len(expected_edges & actual_edges) / len(expected_edges | actual_edges) if expected_edges else 1.0
+
+    return node_sim * 0.6 + edge_sim * 0.4
+```
+
+#### B2. parallelism_peak
+```python
+from collections import defaultdict
+
+agent_events = defaultdict(list)  # agent_id -> [(event_type, ts)]
+for e in E:
+    if e.agent_id:
+        agent_events[e.agent_id].append((e.event_type, e.ts))
+
+# 计算任意时刻的 RUNNING agent 数
+running_counts = []
+for agent_id, events in agent_events.items():
+    for etype, ts in events:
+        if etype in ("agent.running", "resident.started"):
+            running_counts.append((ts, +1))
+        elif etype in ("agent.done", "agent.failed", "resident.stopped"):
+            running_counts.append((ts, -1))
+
+running_counts.sort()
+peak = 0
+current = 0
+for _, delta in running_counts:
+    current += delta
+    peak = max(peak, current)
+
+parallelism_peak = peak
+```
+
+#### B3. parallelism_utilization
+```python
+layers = task_graph.topological_layers()
+max_layer_width = max(len(layer) for layer in layers) if layers else 1
+parallelism_utilization = parallelism_peak / max_layer_width
+```
+
+#### B4. dependency_wait_avg
+```python
+waits = []
+for e in E:
+    if e.event_type == "task.running" and e.task_id:
+        pending_events = [x for x in E if x.event_type == "task.pending" and x.task_id == e.task_id]
+        if pending_events:
+            wait = e.ts - min(x.ts for x in pending_events)
+            waits.append(wait)
+
+dependency_wait_avg = sum(waits) / len(waits) if waits else 0.0
+```
+
+#### B5. replan_frequency
+```python
+replan_count = sum(1 for e in E if e.event_type == "replan.called")
+replan_frequency = replan_count / T
+```
+
+#### B6. plan_adherence (P2)
+```python
+initial_ids = {t.task_id for t in initial_graph.tasks}
+executed_ids = {t.task_id for t in actual_graph.tasks}
+plan_adherence = len(initial_ids & executed_ids) / len(initial_ids | executed_ids)
+```
+
+---
+
+### C. 资源效率（9 个）
+
+#### C1. token_efficiency
+```python
+token_efficiency = T / max(B.token_used, 1)
+```
+
+#### C2. step_efficiency
+```python
+step_efficiency = T / max(B.steps_taken, 1)
+```
+
+#### C3. time_efficiency
+```python
+duration_sec = time.time() - B.start_time
+time_efficiency = T / max(duration_sec, 1)
+```
+
+#### C4. budget_exhaustion_rate
+```python
+budget_exhaustion_rate = int(B.exhausted)  # 0 或 1，单次 run；多次 run 取平均
+```
+
+#### C5. token_per_task
+```python
+token_per_task = B.token_used / T
+```
+
+#### C6. token_per_agent_type
+```python
+from collections import defaultdict
+
+agent_tokens = defaultdict(int)
+for agent_id, agent_state in A.items():
+    agent_tokens[agent_state.agent_type] += agent_state.token_used
+
+token_per_agent_type = {
+    atype: tokens / B.token_used
+    for atype, tokens in agent_tokens.items()
+}
+```
+
+#### C7. step_per_task
+```python
+step_per_task = B.steps_taken / T
+```
+
+#### C8. idle_token_ratio (P2)
+```python
+# 近似：Director + Monitor + TeamLeader 的 token 视为 "编排开销"
+overhead_agents = {"director", "monitor", "team_leader"}
+overhead_tokens = sum(
+    a.token_used for a in A.values()
+    if a.agent_type in overhead_agents
+)
+idle_token_ratio = overhead_tokens / max(B.token_used, 1)
+```
+
+#### C9. overhead_ratio (P2)
+```python
+# 与 idle_token_ratio 相同，换个视角
+overhead_ratio = overhead_tokens / max(B.token_used, 1)
+```
+
+---
+
+### D. 协作质量（6 个）
+
+#### D1. iteration_rounds
+```python
+# 对每个经过 REVIEW 状态的任务，统计 fix_needed → approved 的轮数
+review_tasks = [t for t in tasks.values() if any(
+    h["action"].startswith("reviewer") for h in t.iteration_history
+)]
+
+rounds = []
+for t in review_tasks:
+    fix_count = sum(1 for h in t.iteration_history if "fix" in h["action"])
+    rounds.append(fix_count + 1)  # +1 for initial review
+
+iteration_rounds = sum(rounds) / len(rounds) if rounds else 0.0
+```
+
+#### D2. message_round_trip_avg
+```python
+message_count = sum(1 for e in E if e.event_type == "message.sent")
+message_round_trip_avg = message_count / T
+```
+
+#### D3. message_response_time
+```python
+# 简化为 mailbox 中 send → 下一次 check_messages 的时间差
+# 精确实现需要按 conversation thread 配对
+response_times = []
+for thread in conversation_threads.values():
+    msgs = sorted(thread.messages, key=lambda m: m["ts"])
+    for i, msg in enumerate(msgs):
+        if i + 1 < len(msgs):
+            response_times.append(msgs[i + 1]["ts"] - msg["ts"])
+
+message_response_time = sum(response_times) / len(response_times) if response_times else 0.0
+```
+
+#### D4. collaboration_success_rate
+```python
+collab_tasks = [t for t in tasks.values() if t.agent_type == "coder" and any(
+    h["action"] == "reviewer_approved" for h in t.iteration_history
+)]
+collaboration_success_rate = len(collab_tasks) / max(len([t for t in tasks.values() if t.agent_type == "coder"]), 1)
+```
+
+#### D5. thread_utilization
+```python
+active_threads = sum(1 for t in conversation_threads.values() if t.messages)
+thread_utilization = active_threads / max(len(conversation_threads), 1)
+```
+
+#### D6. cross_agent_mention_count (P2)
+```python
+# 简单实现：检查消息内容中是否包含其他 agent 的 ID
+mentions = 0
+for thread in conversation_threads.values():
+    for msg in thread.messages:
+        for agent_id in agents.keys():
+            if agent_id != msg.get("from") and agent_id in msg.get("content", ""):
+                mentions += 1
+```
+
+---
+
+### E. 系统健壮性（8 个）
+
+#### E1. recovery_rate
+```python
+# 追踪 FAILED → COMPLETED 的状态转换
+recovered = 0
+for t in tasks.values():
+    if t.status == TaskStatus.COMPLETED:
+        # 检查是否曾经 FAILED
+        if any(h["action"] == "retry" or "failed" in h["action"] for h in t.iteration_history):
+            recovered += 1
+
+recovery_rate = recovered / max(T_f, 1)
+```
+
+#### E2. retry_success_rate
+```python
+retried_tasks = [t for t in tasks.values() if t.retry_count > 0]
+retry_success = sum(1 for t in retried_tasks if t.status == TaskStatus.COMPLETED)
+retry_success_rate = retry_success / max(len(retried_tasks), 1)
+```
+
+#### E3. resilience_score
+```python
+auto_finalize_count = sum(1 for e in E if e.event_type == "orchestrator.auto_finalized")
+auto_finalize_rate = auto_finalize_count / max(total_runs, 1)
+
+resilience_score = (
+    recovery_rate       * 0.5 +
+    retry_success_rate  * 0.3 +
+    auto_finalize_rate  * 0.2
+)
+```
+
+#### E4. stuck_detection_rate
+```python
+stuck_events = [e for e in E if e.event_type == "orchestrator.resident_stuck"]
+stuck_recovered = sum(1 for e in stuck_events if any(
+    x.event_type.startswith("task.completed") and x.task_id == e.task_id
+    for x in E if x.ts > e.ts
+))
+stuck_detection_rate = stuck_recovered / max(len(stuck_events), 1)
+```
+
+#### E5. heartbeat_timeout_rate
+```python
+heartbeat_sent = sum(1 for e in E if e.event_type == "monitor.heartbeat_sent")
+heartbeat_timeout = sum(1 for e in E if e.event_type == "monitor.heartbeat_timeout")
+heartbeat_timeout_rate = heartbeat_timeout / max(heartbeat_sent, 1)
+```
+
+#### E6. api_error_rate
+```python
+llm_ok    = sum(1 for e in E if e.event_type == "sdk.llm.succeeded")
+llm_fail  = sum(1 for e in E if e.event_type == "sdk.llm.failed")
+api_error_rate = llm_fail / max(llm_ok + llm_fail, 1)
+```
+
+#### E7. tool_failure_rate
+```python
+tool_ok   = sum(1 for e in E if e.event_type == "sdk.tool.succeeded")
+tool_fail = sum(1 for e in E if e.event_type == "sdk.tool.failed")
+tool_failure_rate = tool_fail / max(tool_ok + tool_fail, 1)
+```
+
+#### E8. auto_finalize_rate
+```python
+auto_finalize_rate = auto_finalize_count / max(total_runs, 1)
+```
+
+---
+
+### F. 产出质量（6 个）
+
+#### F1. artifact_verification_rate
+```python
+claimed = [a for a in Ar.values() if a.status in ("claimed", "verified")]
+verified = [a for a in claimed if a.status == "verified"]
+artifact_verification_rate = len(verified) / max(len(claimed), 1)
+```
+
+#### F2. artifact_empty_rate
+```python
+from pathlib import Path
+
+empty = 0
+for path, rec in Ar.items():
+    full = Path(path)
+    if full.exists() and full.stat().st_size == 0:
+        empty += 1
+
+artifact_empty_rate = empty / max(len(Ar), 1)
+```
+
+#### F3. test_pass_rate
+```python
+reports = project_context.get("test_reports", [])
+if reports:
+    latest = reports[-1]
+    total_tests = latest.get("passed", 0) + latest.get("failed", 0)
+    test_pass_rate = latest.get("passed", 0) / max(total_tests, 1)
+else:
+    test_pass_rate = 0.0
+```
+
+#### F4. code_complexity_delta (P2)
+```python
+import ast
+
+def cyclomatic_complexity(source: str) -> int:
+    tree = ast.parse(source)
+    complexity = 1
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.While, ast.For, ast.ExceptHandler, ast.With, ast.Assert)):
+            complexity += 1
+        elif isinstance(node, ast.BoolOp):
+            complexity += len(node.values) - 1
+    return complexity
+```
+
+#### F5. diff_similarity (P2)
+```python
+def levenshtein(a: str, b: str) -> int:
+    # 标准 Levenshtein 距离实现
+    m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m + 1): dp[i][0] = i
+    for j in range(n + 1): dp[0][j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            cost = 0 if a[i-1] == b[j-1] else 1
+            dp[i][j] = min(dp[i-1][j] + 1, dp[i][j-1] + 1, dp[i-1][j-1] + cost)
+    return dp[m][n]
+
+def diff_similarity(actual: str, expected: str) -> float:
+    dist = levenshtein(actual, expected)
+    max_len = max(len(actual), len(expected))
+    return 1.0 - (dist / max_len) if max_len > 0 else 1.0
+```
+
+#### F6. artifact_coverage
+```python
+actual_set   = set(t.actual_artifacts or [])
+expected_set = set(t.expected_artifacts or [])
+artifact_coverage = len(actual_set & expected_set) / max(len(expected_set), 1)
+```
+
+---
+
+### G. Human-in-the-Loop（5 个）
+
+#### G1. human_intervention_frequency
+```python
+human_intervention_frequency = len(_human_questions) / T
+```
+
+#### G2. human_response_time
+```python
+response_times = []
+for q in _human_questions:
+    if q["answer"] is not None and q.get("ts"):
+        # 需要给 question 也记录 ts
+        response_times.append(reply_ts - question_ts)
+
+human_response_time = sum(response_times) / len(response_times) if response_times else 0.0
+```
+
+#### G3. human_reply_rate
+```python
+answered = sum(1 for q in _human_questions if q["answer"] is not None)
+human_reply_rate = answered / max(len(_human_questions), 1)
+```
+
+#### G4. human_post_impact (P2)
+```python
+# human_post 后 60 秒内是否有 task 状态变更
+impacted = 0
+for msg in _human_messages:
+    post_ts = msg["ts"]
+    for e in E:
+        if e.ts > post_ts and e.ts < post_ts + 60 and e.event_type.startswith("task."):
+            impacted += 1
+            break
+
+human_post_impact = impacted / max(len(_human_messages), 1)
+```
+
+#### G5. human_escalation_accuracy (P2)
+```python
+escalated_tasks = []
+for q in _human_questions:
+    # 找到关联 task（通过 agent_id 或最近 task）
+    task = find_related_task(q["from"])
+    if task:
+        escalated_tasks.append(task)
+
+successful = sum(1 for t in escalated_tasks if t.status == TaskStatus.COMPLETED)
+human_escalation_accuracy = successful / max(len(escalated_tasks), 1)
+```
+
+---
+
+### H. 可观测性（4 个）
+
+#### H1. event_coverage
+```python
+tasks_with_events = len({e.task_id for e in E if e.task_id})
+event_coverage = tasks_with_events / T
+```
+
+#### H2. event_density
+```python
+event_density = len(E) / T
+```
+
+#### H3. trace_completeness (P2)
+```python
+# 检查每个 task 是否有 PENDING → RUNNING → 终态的完整链
+complete = 0
+for task_id in tasks.keys():
+    task_events = [e for e in E if e.task_id == task_id]
+    types = {e.event_type for e in task_events}
+    has_pending = any(t.startswith("task.pending") for t in types)
+    has_terminal = any(t.startswith("task.completed") or t.startswith("task.failed") for t in types)
+    if has_pending and has_terminal:
+        complete += 1
+
+trace_completeness = complete / T
+```
+
+#### H4. log_signal_ratio (P2)
+```python
+# "有意义" = 非 budget.steps / budget.tokens 这类高频噪音事件
+noise_types = {"budget.tokens", "budget.steps"}
+all_types = {e.event_type for e in E}
+meaningful_types = all_types - noise_types
+log_signal_ratio = len(meaningful_types) / max(len(all_types), 1)
+```
