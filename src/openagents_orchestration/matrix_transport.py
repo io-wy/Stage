@@ -17,6 +17,8 @@ from typing import Any
 
 from nio import AsyncClient, RoomCreateResponse, RoomMessageText, SyncResponse
 
+_MAX_ROOMS_CACHE = 256
+
 
 @dataclass
 class MatrixConfig:
@@ -43,6 +45,7 @@ class MatrixClient:
         )
         self._client.access_token = config.access_token
         self._rooms: dict[str, str] = {}  # room_alias -> room_id
+        self._since_token: str | None = None
 
     async def close(self) -> None:
         await self._client.close()
@@ -63,6 +66,7 @@ class MatrixClient:
         )
         if isinstance(response, RoomCreateResponse):
             self._rooms[name] = response.room_id
+            self._trim_rooms_cache()
             return response.room_id
         raise RuntimeError(f"Failed to create room {name}: {response}")
 
@@ -72,11 +76,17 @@ class MatrixClient:
             return self._rooms[name]
         return await self.create_room(name, invite=invite)
 
+    def _trim_rooms_cache(self) -> None:
+        if len(self._rooms) > _MAX_ROOMS_CACHE:
+            # Evict oldest entries (simple FIFO)
+            excess = len(self._rooms) - _MAX_ROOMS_CACHE
+            for key in list(self._rooms.keys())[:excess]:
+                del self._rooms[key]
+
     # -- messaging -----------------------------------------------------------
 
     async def send_text(self, room_id: str, body: str) -> str:
         """Send a text message to a room. Returns event_id."""
-        content = {"msgtype": "m.room.message", "body": body, "msgtype_inner": "m.text"}
         response = await self._client.room_send(
             room_id=room_id,
             message_type="m.room.message",
@@ -86,9 +96,15 @@ class MatrixClient:
 
     async def sync(self, timeout_ms: int = 3000) -> list[dict[str, Any]]:
         """Pull new messages since last sync."""
-        response = await self._client.sync(timeout=timeout_ms)
+        response = await self._client.sync(
+            timeout=timeout_ms,
+            since=self._since_token,
+        )
         if not isinstance(response, SyncResponse):
             return []
+
+        # Advance sync token so next call only gets new messages
+        self._since_token = response.next_batch
 
         messages: list[dict[str, Any]] = []
         for room_id, room in response.rooms.join.items():

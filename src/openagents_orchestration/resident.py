@@ -87,6 +87,7 @@ class ResidentAgent:
         self._task: asyncio.Task[Any] | None = None
         self._active = False
         self._sleeping = False
+        self._sleep_backlog: list[dict[str, Any]] = []
         self._transcript: list[dict[str, Any]] = []
         self._state = ResidentState(resident_id=resident_id, agent_type=agent_type)
         if persist_dir is not None:
@@ -264,6 +265,10 @@ class ResidentAgent:
                             agent_id=self.resident_id,
                             message="Resident woken",
                         )
+                        # Drain backlog back into inbox for ordered processing
+                        for backlog_msg in self._sleep_backlog:
+                            await self._inbox.put(backlog_msg)
+                        self._sleep_backlog = []
                         break
 
                     if inner.get("task") == "heartbeat":
@@ -277,9 +282,10 @@ class ResidentAgent:
                         )
                         continue
 
-                    # Any other messages are queued for later processing after wake
-                    # Re-queue them so they are processed in order after wake
-                    await self._inbox.put(inner)
+                    # Any other messages are buffered for later processing after wake
+                    # Limit backlog to prevent unbounded memory growth
+                    if len(self._sleep_backlog) < 100:
+                        self._sleep_backlog.append(inner)
                 continue
 
             if msg.get("__wake"):

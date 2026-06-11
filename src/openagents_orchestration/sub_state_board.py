@@ -52,10 +52,20 @@ class SubStateBoard(StateBoard):
         )
 
     def add_tokens(self, n: int) -> None:
+        """Track tokens locally; parent budget is merged after team completion."""
         super().add_tokens(n)
-        # Also deduct from parent budget so global tracking stays accurate
-        self._parent.add_tokens(n)
+        # Bubble event for observability without double-counting parent budget
+        self._parent.log_event(
+            "sub.budget.tokens",
+            message=f"+{n}",
+            n=n,
+        )
 
     def add_steps(self, n: int) -> None:
+        """Track steps locally; parent budget is merged after team completion."""
         super().add_steps(n)
-        self._parent.add_steps(n)
+        self._parent.log_event(
+            "sub.budget.steps",
+            message=f"+{n}",
+            n=n,
+        )

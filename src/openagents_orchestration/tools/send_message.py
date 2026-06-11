@@ -91,12 +91,12 @@ class SendMessageTool(ToolPlugin):
 
         # Mirror to Matrix if transport is enabled
         matrix_transport = getattr(deps, "matrix_transport", None)
-        if matrix_transport is not None and matrix_transport.enabled:
+        if matrix_transport is not None and matrix_transport.enabled and to_agent != "*":
             try:
                 room_name = f"dm-{from_agent}-{to_agent}"
                 room_id = await matrix_transport.create_room(
                     name=room_name,
-                    invite=[to_agent] if to_agent != "*" else [],
+                    invite=[],
                 )
                 if room_id:
                     await matrix_transport.send(room_id, f"[{from_agent}] {message}")

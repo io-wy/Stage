@@ -47,19 +47,23 @@ class TestSubStateBoard:
         assert any(e.event_type == "test.event" for e in sub.events)
         assert any(e.event_type == "sub.test.event" for e in parent.events)
 
-    def test_sub_board_add_tokens_deducts_parent(self):
+    def test_sub_board_add_tokens_bubbles_event_not_parent_budget(self):
         parent = StateBoard("obj", budget=Budget(token_limit=1000, max_steps=20))
         sub = SubStateBoard(parent=parent, objective="sub")
         sub.add_tokens(50)
         assert sub.budget.token_used == 50
-        assert parent.budget.token_used == 50
+        # Parent budget is NOT directly modified; merged after team completion
+        assert parent.budget.token_used == 0
+        # But event is bubbled for observability
+        assert any(e.event_type == "sub.budget.tokens" for e in parent.events)
 
-    def test_sub_board_add_steps_deducts_parent(self):
+    def test_sub_board_add_steps_bubbles_event_not_parent_budget(self):
         parent = StateBoard("obj", budget=Budget(token_limit=1000, max_steps=20))
         sub = SubStateBoard(parent=parent, objective="sub")
         sub.add_steps(3)
         assert sub.budget.steps_taken == 3
-        assert parent.budget.steps_taken == 3
+        assert parent.budget.steps_taken == 0
+        assert any(e.event_type == "sub.budget.steps" for e in parent.events)
 
     def test_sub_board_task_isolation(self):
         parent = StateBoard("obj", echo=False)

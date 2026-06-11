@@ -172,7 +172,7 @@ class OrchestratorRunner:
     def state_board(self) -> StateBoard | None:
         return self._state_board
 
-    def _init_matrix_transport(self) -> MatrixTransport | None:
+    async def _init_matrix_transport(self) -> MatrixTransport | None:
         """Initialize Matrix transport from environment if configured."""
         import os
 
@@ -188,6 +188,8 @@ class OrchestratorRunner:
         )
         try:
             client = MatrixClient(config)
+            # Verify connection with a quick sync
+            await client.sync(timeout_ms=1000)
             print(
                 f"[Orchestrator] Matrix transport enabled: {user_id} @ {homeserver}",
                 file=sys.stderr,
@@ -332,7 +334,7 @@ class OrchestratorRunner:
         if self._current_work_dir is not None:
             store_dir = self._current_work_dir / ".artifacts"
             artifact_store = LocalArtifactStore(store_dir)
-        matrix_transport = self._init_matrix_transport()
+        matrix_transport = await self._init_matrix_transport()
         self._deps = RunnerDeps(
             state_board=self._state_board,
             runner_delegate=self.run_agent,
@@ -954,6 +956,18 @@ class OrchestratorRunner:
                         exists = full_path.exists() and full_path.stat().st_size > 0
                         self._state_board.verify_artifact(str(art_path), exists=exists)
                         self._state_board.claim_artifact(task_id, [art_path])
+
+            # Merge sub-board budget back to parent for team leaders
+            if agent_type == "team_leader" and deps_override is not None:
+                sub_board = getattr(deps_override, "state_board", None)
+                if sub_board is not None and hasattr(sub_board, "budget"):
+                    self._state_board.add_tokens(sub_board.budget.token_used)
+                    self._state_board.add_steps(sub_board.budget.steps_taken)
+                    self._state_board.log_event(
+                        "team.budget_merged",
+                        agent_id=agent_id,
+                        message=f"tokens={sub_board.budget.token_used}, steps={sub_board.budget.steps_taken}",
+                    )
 
         # Print execution summary
         tokens = result.usage.total_tokens if result.usage else 0
