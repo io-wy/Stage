@@ -34,6 +34,7 @@ from openagents.plugins.loader import LoadedAgentPlugins, load_agent_plugins
 from pydantic import BaseModel, Field
 
 from openagents_orchestration.artifact_store import ArtifactStore, LocalArtifactStore
+from openagents_orchestration.matrix_transport import MatrixConfig, MatrixTransport, MatrixClient
 from openagents_orchestration.collaboration import (
     CollaborationSignal,
     parse_collaboration_message,
@@ -120,6 +121,7 @@ class RunnerDeps:
     runner_delegate: Any  # callable: (agent_type, input_text, agent_id=None) -> str
     runner: Any  # OrchestratorRunner reference for resident management
     artifact_store: ArtifactStore | None = None  # shared artifact storage for inter-agent exchange
+    matrix_transport: Any | None = None  # optional Matrix transport backend
 
 
 class OrchestratorRunner:
@@ -168,6 +170,36 @@ class OrchestratorRunner:
     @property
     def state_board(self) -> StateBoard | None:
         return self._state_board
+
+    def _init_matrix_transport(self) -> MatrixTransport | None:
+        """Initialize Matrix transport from environment if configured."""
+        import os
+
+        homeserver = os.environ.get("MATRIX_HOMESERVER", "").strip()
+        user_id = os.environ.get("MATRIX_USER_ID", "").strip()
+        access_token = os.environ.get("MATRIX_ACCESS_TOKEN", "").strip()
+        if not homeserver or not user_id or not access_token:
+            return None
+        config = MatrixConfig(
+            homeserver=homeserver,
+            user_id=user_id,
+            access_token=access_token,
+        )
+        try:
+            client = MatrixClient(config)
+            print(
+                f"[Orchestrator] Matrix transport enabled: {user_id} @ {homeserver}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return MatrixTransport(client)
+        except Exception as exc:
+            print(
+                f"[Orchestrator] Matrix transport init failed: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return None
 
     # -- public API ----------------------------------------------------------
 
@@ -299,11 +331,13 @@ class OrchestratorRunner:
         if self._current_work_dir is not None:
             store_dir = self._current_work_dir / ".artifacts"
             artifact_store = LocalArtifactStore(store_dir)
+        matrix_transport = self._init_matrix_transport()
         self._deps = RunnerDeps(
             state_board=self._state_board,
             runner_delegate=self.run_agent,
             runner=self,
             artifact_store=artifact_store,
+            matrix_transport=matrix_transport,
         )
 
         # 4. Choose execution mode based on task characteristics

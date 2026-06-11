@@ -89,6 +89,24 @@ class SendMessageTool(ToolPlugin):
         # Always store in mailbox as well for audit / offline retrieval
         board.send_mail(from_agent, to_agent, message)
 
+        # Mirror to Matrix if transport is enabled
+        matrix_transport = getattr(deps, "matrix_transport", None)
+        if matrix_transport is not None and matrix_transport.enabled:
+            try:
+                room_name = f"dm-{from_agent}-{to_agent}"
+                room_id = await matrix_transport.create_room(
+                    name=room_name,
+                    invite=[to_agent] if to_agent != "*" else [],
+                )
+                if room_id:
+                    await matrix_transport.send(room_id, f"[{from_agent}] {message}")
+            except Exception as exc:
+                board.log_event(
+                    "matrix.send_error",
+                    agent_id=from_agent,
+                    message=f"to={to_agent}: {exc}",
+                )
+
         # If this looks like a task collaboration thread message, also record
         # it in the conversation thread so the orchestrator can parse state
         # transitions (TASK_REVIEW_READY / TASK_APPROVED / TASK_FIX_NEEDED).

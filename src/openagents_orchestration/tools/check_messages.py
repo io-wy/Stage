@@ -94,6 +94,24 @@ class CheckMessagesTool(ToolPlugin):
         # First: inject external inbox messages
         self._read_inbox(board)
 
+        # Pull from Matrix if transport is enabled
+        matrix_transport = getattr(deps, "matrix_transport", None)
+        if matrix_transport is not None and matrix_transport.enabled:
+            try:
+                mx_messages = await matrix_transport.receive()
+                for mx in mx_messages:
+                    board.send_mail(
+                        from_id=mx.get("sender", "matrix"),
+                        to_id=agent_id,
+                        content=mx.get("body", ""),
+                    )
+            except Exception as exc:
+                board.log_event(
+                    "matrix.receive_error",
+                    agent_id=agent_id,
+                    message=str(exc),
+                )
+
         # Collect messages addressed to this agent via mailbox API
         matching = board.messages_for(agent_id)
 
