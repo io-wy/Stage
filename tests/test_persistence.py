@@ -8,7 +8,7 @@ from pathlib import Path
 from openagents_orchestration.persistence.event_recorder import EventRecorder
 from openagents_orchestration.persistence.session_resumer import SessionResumer
 from openagents_orchestration.persistence.state_snapshotter import StateSnapshotter
-from openagents_orchestration.state_board import Budget, StateBoard
+from openagents_orchestration.core.state_board import Budget, StateBoard
 
 
 class TestEventRecorder:
@@ -229,9 +229,9 @@ class TestStateBoardPersistence:
         recorder = EventRecorder(tmp_path, "test")
         snapshots_dir = tmp_path / "snapshots"
         snapper = StateSnapshotter(snapshots_dir, interval=2)
-        board = StateBoard("obj", recorder=recorder, snapshotter=snapper)
+        board = StateBoard("obj", recorder=recorder, snapshotter=snapper, snapshot_interval_s=0)
 
-        # First mutation — no snapshot
+        # First mutation — no snapshot (snapper interval=2)
         board.log_event("a")
         assert snapper.latest_snapshot() is None
 
@@ -273,6 +273,7 @@ class TestStateBoardRoundtrip:
         ])
         board.add_tasks(graph)
         board.register_agent("coder-t1", "coder")
+        board.update_task("t1", status="running")
         board.update_task("t1", status="completed", result_output="done")
         board.update_agent("coder-t1", status="done")
         board.add_tokens(500)

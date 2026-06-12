@@ -36,15 +36,23 @@ class EventRecorder:
 
     # -- write API -----------------------------------------------------------
 
-    def append(self, event_type: str, **payload: Any) -> int:
+    def append(
+        self,
+        event_type: str,
+        *,
+        trace_id: str | None = None,
+        **payload: Any,
+    ) -> int:
         """Append a mutation event. Returns the assigned seq number."""
         self._seq += 1
-        entry = {
+        entry: dict[str, Any] = {
             "seq": self._seq,
             "type": event_type,
             "ts": time.time(),
             **payload,
         }
+        if trace_id:
+            entry["trace_id"] = trace_id
         self._buffer.append(entry)
         if len(self._buffer) >= self._flush_threshold:
             self.flush()
