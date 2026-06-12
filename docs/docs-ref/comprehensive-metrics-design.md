@@ -84,10 +84,10 @@
 |------|------|---------|--------|---------|
 | **iteration_rounds** | 迭代轮数 | coder→reviewer 的平均往返次数 | P0 | StateBoard.events (reviewer_requested_fix / reviewer_approved) |
 | **message_round_trip_avg** | 平均消息往返 | `send_message 次数 / total_tasks` | P1 | StateBoard.events (message.sent) |
-| **message_response_time** | 消息响应时间 | send → reply 的平均时间差 | P1 | StateBoard._pending_messages (ts 差值) |
+| **message_response_time** | 消息响应时间 | send → reply 的平均时间差 | P1 | StateBoard Mailbox v2 (peek_mailbox) (ts 差值) |
 | **collaboration_success_rate** | 协作成功率 | 协作模式下完成且 approved 的任务 / 协作模式总任务 | P1 | StateBoard.tasks (agent_type=coder + status=COMPLETED after REVIEW) |
-| **thread_utilization** | 对话线程利用率 | 有消息的 thread 数 / 总 thread 数 | P2 | StateBoard.conversation_threads |
-| **cross_agent_mention_count** | 跨 Agent 提及次数 | 一个 Agent 的 message 被另一个 Agent 引用的次数 | P2 | conversation_threads.messages 内容分析 |
+| **thread_utilization** | 对话线程利用率 | 有消息的 thread 数 / 总 thread 数 | P2 | StateBoard Mailbox v2 (per-agent isolated queues) |
+| **cross_agent_mention_count** | 跨 Agent 提及次数 | 一个 Agent 的 message 被另一个 Agent 引用的次数 | P2 | mailbox queues.messages 内容分析 |
 
 **已有实现**：无。
 
@@ -135,11 +135,11 @@
 
 | 指标 | 定义 | 计算方式 | 优先级 | 数据来源 |
 |------|------|---------|--------|---------|
-| **human_intervention_frequency** | 人工介入频率 | ask_human 次数 / total_tasks | P1 | StateBoard._human_questions |
-| **human_response_time** | 人类响应时间 | ask → reply 的平均时间差 | P1 | StateBoard._human_questions (ts 差值) |
-| **human_reply_rate** | 人类回复率 | 被回答的 question / 总 question | P1 | StateBoard._human_questions |
-| **human_post_impact** | 人工干预影响力 | human_post 后 task 状态变更的比例 | P2 | StateBoard._human_messages + 关联 task 状态变更 |
-| **human_escalation_accuracy** | 升级准确性 | ask_human 后 task 最终成功的比例 | P2 | StateBoard._human_questions + 关联 task 终态 |
+| **human_intervention_frequency** | 人工介入频率 | ask_human 次数 / total_tasks | P1 | StateBoard._human_channel.get_pending_questions() |
+| **human_response_time** | 人类响应时间 | ask → reply 的平均时间差 | P1 | StateBoard._human_channel.get_pending_questions() (ts 差值) |
+| **human_reply_rate** | 人类回复率 | 被回答的 question / 总 question | P1 | StateBoard._human_channel.get_pending_questions() |
+| **human_post_impact** | 人工干预影响力 | human_post 后 task 状态变更的比例 | P2 | StateBoard._human_channel.get_messages() + 关联 task 状态变更 |
+| **human_escalation_accuracy** | 升级准确性 | ask_human 后 task 最终成功的比例 | P2 | StateBoard._human_channel.get_pending_questions() + 关联 task 终态 |
 
 **已有实现**：无。
 
@@ -445,7 +445,7 @@ message_round_trip_avg = message_count / T
 # 简化为 mailbox 中 send → 下一次 check_messages 的时间差
 # 精确实现需要按 conversation thread 配对
 response_times = []
-for thread in conversation_threads.values():
+for thread in mailbox queues.values():
     msgs = sorted(thread.messages, key=lambda m: m["ts"])
     for i, msg in enumerate(msgs):
         if i + 1 < len(msgs):
@@ -464,15 +464,15 @@ collaboration_success_rate = len(collab_tasks) / max(len([t for t in tasks.value
 
 #### D5. thread_utilization
 ```python
-active_threads = sum(1 for t in conversation_threads.values() if t.messages)
-thread_utilization = active_threads / max(len(conversation_threads), 1)
+active_threads = sum(1 for t in mailbox queues.values() if t.messages)
+thread_utilization = active_threads / max(len(mailbox queues), 1)
 ```
 
 #### D6. cross_agent_mention_count (P2)
 ```python
 # 简单实现：检查消息内容中是否包含其他 agent 的 ID
 mentions = 0
-for thread in conversation_threads.values():
+for thread in mailbox queues.values():
     for msg in thread.messages:
         for agent_id in agents.keys():
             if agent_id != msg.get("from") and agent_id in msg.get("content", ""):

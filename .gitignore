@@ -3,6 +3,9 @@
 *.env
 .venv/
 
+# VS Code (contains secrets in launch.json/settings.json)
+.vscode/
+
 # Python cache
 __pycache__/
 *.pyc
@@ -35,3 +38,7 @@ fallback_test_plan.json
 *.db
 *.sqlite
 *.sqlite3
+
+# Local artifacts / IDE project files
+.artifacts/
+.project
