@@ -39,31 +39,36 @@ verification:
   - type: file_exists
     path: src/todo.py
   - type: exec
-    command: "cd src && python todo.py add 'Test task 1'"
+    command: "python todo.py add 'Test task 1'"
+    cwd: src
     timeout: 10
   - type: exec
-    command: "cd src && python todo.py list"
+    command: "python todo.py list"
+    cwd: src
     timeout: 10
   - type: exec
-    command: "cd src && python todo.py done 1"
+    command: "python todo.py done 1"
+    cwd: src
     timeout: 10
   - type: exec
-    command: "cd src && python todo.py list"
+    command: "python todo.py list"
+    cwd: src
     timeout: 10
   - type: exec
-    command: "cd src && python -c \"import json; d=json.load(open('data/todos.json')); assert len(d)==1 and d[0]['text']=='Test task 1' and d[0]['done']==True\""
+    command: "python -c \"import json; d=json.load(open('data/todos.json')); assert len(d)==1 and d[0]['text']=='Test task 1' and d[0]['done']==True\""
+    cwd: src
     timeout: 10
 
 expected_graph:
   tasks:
     - id: design
-      role: coder
+      agent_type: coder
       dependencies: []
     - id: implement
-      role: coder
+      agent_type: coder
       dependencies: [design]
     - id: test
-      role: tester
+      agent_type: tester
       dependencies: [implement]
 
 max_steps: 15

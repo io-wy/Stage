@@ -13,11 +13,15 @@ from pathlib import Path
 from typing import Any
 
 
-def load_from_huggingface(split: str = "test", limit: int | None = None) -> list[dict[str, Any]]:
+def load_from_huggingface(
+    split: str = "test", limit: int | None = None
+) -> list[dict[str, Any]]:
     try:
         from datasets import load_dataset
-    except ImportError:
-        raise ImportError("datasets library not installed. Run: uv pip install datasets")
+    except ImportError as err:
+        raise ImportError(
+            "datasets library not installed. Run: uv pip install datasets"
+        ) from err
 
     ds = load_dataset("openai_humaneval", split=split, trust_remote_code=True)
     items = []
@@ -30,11 +34,14 @@ def load_from_huggingface(split: str = "test", limit: int | None = None) -> list
 
 def load_from_jsonl(path: Path, limit: int | None = None) -> list[dict[str, Any]]:
     items = []
-    with open(path, encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if limit is not None and i >= limit:
-                break
-            items.append(json.loads(line))
+    try:
+        with open(path, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if limit is not None and i >= limit:
+                    break
+                items.append(json.loads(line))
+    except Exception as e:
+        raise RuntimeError(f"Failed to load HumanEval from {path}: {e}") from e
     return items
 
 
@@ -64,4 +71,4 @@ def load_humaneval(
             f"Failed to load HumanEval: {e}\n"
             "Please install datasets: uv pip install datasets\n"
             "Or download manually and pass --source <path>.jsonl"
-        )
+        ) from e

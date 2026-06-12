@@ -46,16 +46,13 @@ def run_tests(repo_dir: Path, test_spec: dict[str, Any]) -> dict[str, Any]:
         # 尝试从 instance 推断
         # SWE-bench 通常有 test_patch 字段，里面包含测试文件
         test_patch = test_spec.get("test_patch", "")
-        if test_patch:
-            # 尝试从 test_patch 中找测试命令
-            # 简化: 尝试 pytest 在 tests/ 目录
-            cmd = "pytest tests/ -x --tb=short"
-        else:
-            cmd = "python -m pytest"
+        cmd = "pytest tests/ -x --tb=short" if test_patch else "python -m pytest"
+
+    import shlex
 
     result = subprocess.run(
-        cmd,
-        shell=True,
+        shlex.split(cmd) if isinstance(cmd, str) else cmd,
+        shell=False,
         cwd=repo_dir,
         capture_output=True,
         timeout=120,
@@ -93,6 +90,19 @@ def verify_instance(
         }
 
     test_result = run_tests(repo_dir, test_spec)
+
+    # Reset repo working tree to prevent cross-task pollution of cached repo
+    subprocess.run(
+        ["git", "reset", "--hard", "HEAD"],
+        cwd=repo_dir,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "clean", "-fd"],
+        cwd=repo_dir,
+        capture_output=True,
+    )
+
     return {
         "passed": test_result["passed"],
         "reason": "test passed" if test_result["passed"] else "test failed",

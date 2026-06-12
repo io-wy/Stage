@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import abc
 import json
+import os
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -100,9 +101,77 @@ class EvalHarness(abc.ABC):
         """运行单个任务并返回结果."""
         ...
 
-    async def run_all(self, limit: int | None = None) -> list[EvalResult]:
+    async def _run_orchestrator(
+        self,
+        task: EvalTask,
+        work_path: Path,
+        description: str | None = None,
+    ) -> tuple[Any, Any, int, int, bool]:
+        """共享方法：启动 OrchestratorRunner 运行任务.
+
+        Args:
+            description: 可选自定义 objective，默认使用 task.description
+
+        Returns: (report, state_board, steps, tokens, budget_exceeded)
+        """
+        import asyncio
+
+        from openagents_orchestration.runner import OrchestratorRunner
+        from openagents_orchestration.state_board import Budget
+
+        runner = OrchestratorRunner(config_path=str(self.config_path))
+
+        # SWE-bench 等使用无限预算时用 -1
+        budget = Budget(
+            max_steps=task.max_steps if task.max_steps >= 0 else -1,
+            token_limit=task.max_tokens if task.max_tokens >= 0 else -1,
+            time_limit_s=task.timeout_sec,
+        )
+
+        desc = description if description is not None else task.description
+        report = await asyncio.wait_for(
+            runner.run(desc, budget=budget, work_dir=work_path),
+            timeout=task.timeout_sec,
+        )
+
+        board = runner.state_board
+        steps = board.budget.steps_taken if board else 0
+        tokens = board.budget.token_used if board else 0
+        budget_exceeded = board.budget.exhausted if board else False
+
+        await runner.close()
+        return report, board, steps, tokens, budget_exceeded
+
+    @staticmethod
+    def compute_token_efficiency(task: EvalTask, steps: int, tokens: int) -> float:
+        """计算 token 效率：任一维度超预算都会拉低分数."""
+        if steps <= 0 or tokens <= 0:
+            return 0.0
+        # 负值表示无限预算，此时只计算实际使用的比例（越小越好）
+        if task.max_steps < 0 and task.max_tokens < 0:
+            return 0.0  # 无限预算时无法计算效率
+        token_ratio = min(task.max_tokens / tokens, 1.0) if task.max_tokens > 0 else 1.0
+        step_ratio = min(task.max_steps / steps, 1.0) if task.max_steps > 0 else 1.0
+        return min(token_ratio, step_ratio)
+
+    @staticmethod
+    def compute_autonomy(board: Any) -> float:
+        """从 StateBoard 计算自治度."""
+        if board is None:
+            return 1.0
+        human_questions = getattr(board, "_human_questions", [])
+        total_tasks = len(getattr(board, "tasks", {}))
+        if total_tasks <= 0:
+            return 1.0
+        return 1.0 - (len(human_questions) / total_tasks)
+
+    async def run_all(
+        self, limit: int | None = None, difficulty_filter: str | None = None
+    ) -> list[EvalResult]:
         """运行所有任务."""
         tasks = self.load_tasks(limit=limit)
+        if difficulty_filter:
+            tasks = [t for t in tasks if t.difficulty == difficulty_filter]
         for t in tasks:
             print(f"\n[EVAL:{self.name}] {t.task_id} ({t.difficulty})")
             start = time.monotonic()
@@ -135,7 +204,9 @@ class EvalHarness(abc.ABC):
             return {}
 
         def _avg(key: str) -> float:
-            vals = [getattr(r, key) for r in self.results if getattr(r, key) is not None]
+            vals = [
+                getattr(r, key) for r in self.results if getattr(r, key) is not None
+            ]
             return sum(vals) / len(vals) if vals else 0.0
 
         report = {
@@ -143,7 +214,8 @@ class EvalHarness(abc.ABC):
             "summary": {
                 "total": len(self.results),
                 "passed": sum(1 for r in self.results if r.success),
-                "pass_rate": sum(1 for r in self.results if r.success) / len(self.results),
+                "pass_rate": sum(1 for r in self.results if r.success)
+                / len(self.results),
                 "avg_task_success": _avg("task_success"),
                 "avg_token_efficiency": _avg("token_efficiency"),
                 "avg_orchestration_quality": _avg("orchestration_quality"),
@@ -169,11 +241,17 @@ class EvalHarness(abc.ABC):
                 "count": len(rs),
                 "passed": sum(1 for r in rs if r.success),
                 "pass_rate": sum(1 for r in rs if r.success) / len(rs),
-                "avg_task_success": sum(r.task_success for r in rs) / len(rs),
-                "avg_output_quality": sum(r.output_quality for r in rs) / len(rs),
+                "avg_task_success": _avg_for_list([r.task_success for r in rs]),
+                "avg_output_quality": _avg_for_list([r.output_quality for r in rs]),
             }
 
         return report
+
+
+def _avg_for_list(vals: list[Any]) -> float:
+    """过滤 None 后计算平均值."""
+    filtered = [v for v in vals if v is not None]
+    return sum(filtered) / len(filtered) if filtered else 0.0
 
     def save_report(self, path: Path) -> None:
         with open(path, "w", encoding="utf-8") as f:
@@ -192,6 +270,7 @@ class WorkDirSetup:
         """创建目录并写入初始文件."""
         if self.path.exists():
             import shutil
+
             shutil.rmtree(self.path)
         self.path.mkdir(parents=True)
         for d in task.initial_dirs:
@@ -204,12 +283,38 @@ class WorkDirSetup:
 
     def cleanup(self) -> None:
         import shutil
+
         if self.path.exists():
             shutil.rmtree(self.path)
 
+    def __enter__(self) -> Path:
+        """Context manager entry: requires task to be set via attribute."""
+        if getattr(self, "_enter_task", None) is None:
+            raise RuntimeError("Use WorkDirSetup.with_task(task) as context manager")
+        return self.setup(self._enter_task)
 
-def verify_task(work_dir: Path, rules: list[dict[str, Any]]) -> dict[str, float]:
-    """通用验证器: 执行验证规则并返回各条分数."""
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.cleanup()
+
+    def with_task(self, task: EvalTask) -> WorkDirSetup:
+        """绑定 task，启用 context manager 用法."""
+        self._enter_task = task
+        return self
+
+
+def verify_task(
+    work_dir: Path,
+    rules: list[dict[str, Any]],
+    errors_out: dict[str, str] | None = None,
+) -> dict[str, float]:
+    """通用验证器: 执行验证规则并返回各条分数.
+
+    Args:
+        errors_out: 可选字典，用于接收每个规则的错误信息
+                   (timeout | file_not_found | unknown_rule | error)
+    """
+    import warnings
+
     scores: dict[str, float] = {}
     for i, rule in enumerate(rules):
         rule_type = rule.get("type", "")
@@ -230,21 +335,35 @@ def verify_task(work_dir: Path, rules: list[dict[str, Any]]) -> dict[str, float]
                 else:
                     scores[key] = 1.0
             elif rule_type == "test_pass":
+                import shlex
                 import subprocess
+
+                cmd = shlex.split(rule["command"])
+                cwd = work_dir / rule["cwd"] if rule.get("cwd") else work_dir
+                env = os.environ.copy()
+                env.update(rule.get("env", {}))
                 result = subprocess.run(
-                    rule["command"],
-                    shell=True,
-                    cwd=work_dir,
+                    cmd,
+                    shell=False,
+                    cwd=cwd,
+                    env=env,
                     capture_output=True,
                     timeout=rule.get("timeout", 60),
                 )
                 scores[key] = 1.0 if result.returncode == 0 else 0.0
             elif rule_type == "exec":
+                import shlex
                 import subprocess
+
+                cmd = shlex.split(rule["command"])
+                cwd = work_dir / rule["cwd"] if rule.get("cwd") else work_dir
+                env = os.environ.copy()
+                env.update(rule.get("env", {}))
                 result = subprocess.run(
-                    rule["command"],
-                    shell=True,
-                    cwd=work_dir,
+                    cmd,
+                    shell=False,
+                    cwd=cwd,
+                    env=env,
                     capture_output=True,
                     timeout=rule.get("timeout", 60),
                 )
@@ -252,7 +371,29 @@ def verify_task(work_dir: Path, rules: list[dict[str, Any]]) -> dict[str, float]
                 actual = result.stdout.decode("utf-8", errors="replace")
                 scores[key] = 1.0 if expected in actual else 0.0
             else:
+                warnings.warn(
+                    f"verify_task: unknown rule type '{rule_type}' for key {key}",
+                    stacklevel=2,
+                )
                 scores[key] = 0.0
-        except Exception:
+                if errors_out is not None:
+                    errors_out[key] = f"unknown_rule:{rule_type}"
+        except subprocess.TimeoutExpired:
+            warnings.warn(
+                f"verify_task: rule {key} timed out after {rule.get('timeout', 60)}s",
+                stacklevel=2,
+            )
             scores[key] = 0.0
+            if errors_out is not None:
+                errors_out[key] = "timeout"
+        except FileNotFoundError as e:
+            warnings.warn(f"verify_task: rule {key} file not found: {e}", stacklevel=2)
+            scores[key] = 0.0
+            if errors_out is not None:
+                errors_out[key] = f"file_not_found:{e}"
+        except Exception as e:
+            warnings.warn(f"verify_task: rule {key} error: {e}", stacklevel=2)
+            scores[key] = 0.0
+            if errors_out is not None:
+                errors_out[key] = f"error:{e}"
     return scores

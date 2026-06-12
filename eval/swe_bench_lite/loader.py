@@ -15,14 +15,16 @@ from pathlib import Path
 from typing import Any
 
 
-def load_from_huggingface(split: str = "test", limit: int | None = None) -> list[dict[str, Any]]:
+def load_from_huggingface(
+    split: str = "test", limit: int | None = None
+) -> list[dict[str, Any]]:
     """从 HuggingFace 加载 SWE-bench-lite 数据集."""
     try:
         from datasets import load_dataset
-    except ImportError:
+    except ImportError as err:
         raise ImportError(
             "datasets library not installed. Run: uv pip install datasets"
-        )
+        ) from err
 
     ds = load_dataset("princeton-nlp/SWE-bench_Lite", split=split)
     items = []
@@ -36,11 +38,14 @@ def load_from_huggingface(split: str = "test", limit: int | None = None) -> list
 def load_from_jsonl(path: Path, limit: int | None = None) -> list[dict[str, Any]]:
     """从本地 JSONL 文件加载."""
     items = []
-    with open(path, encoding="utf-8") as f:
-        for i, line in enumerate(f):
-            if limit is not None and i >= limit:
-                break
-            items.append(json.loads(line))
+    try:
+        with open(path, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if limit is not None and i >= limit:
+                    break
+                items.append(json.loads(line))
+    except Exception as e:
+        raise RuntimeError(f"Failed to load SWE-bench-lite from {path}: {e}") from e
     return items
 
 
@@ -78,7 +83,7 @@ def load_swe_bench_lite(
             f"Failed to load SWE-bench-lite: {e}\n"
             "Please install datasets: uv pip install datasets\n"
             "Or download manually and pass --source <path>.jsonl"
-        )
+        ) from e
 
 
 def clone_repo(repo_url: str, commit_hash: str, dest: Path) -> Path:
@@ -132,6 +137,8 @@ def setup_repo(instance: dict[str, Any], work_dir: Path) -> Path:
     base_commit = instance.get("base_commit", "")
 
     if not repo or not base_commit:
-        raise ValueError(f"Missing repo or base_commit in instance: {instance.get('instance_id')}")
+        raise ValueError(
+            f"Missing repo or base_commit in instance: {instance.get('instance_id')}"
+        )
 
     return clone_repo(repo, base_commit, repo_path)

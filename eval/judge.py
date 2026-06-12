@@ -7,11 +7,11 @@ Judge 通过 --add-dir 访问 work_dir，自行用 Read 工具读取需要评估
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import subprocess
 from pathlib import Path
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # JSON Schema for the combined 4-dimension judgment
@@ -54,7 +54,13 @@ _JUDGE_SCHEMA = {
                 "efficiency": {"type": "number", "minimum": 1, "maximum": 5},
                 "reasoning": {"type": "string"},
             },
-            "required": ["correctness", "readability", "completeness", "efficiency", "reasoning"],
+            "required": [
+                "correctness",
+                "readability",
+                "completeness",
+                "efficiency",
+                "reasoning",
+            ],
         },
     },
     "required": ["fulfillment", "decomposition", "collaboration", "output_quality"],
@@ -101,7 +107,13 @@ class ClaudeCodeJudge:
             verify_scores=verify_scores or {},
         )
 
-        raw_result = await self._call_claude(prompt, work_dir)
+        state_file = work_dir / ".judge_state.txt"
+        try:
+            raw_result = await self._call_claude(prompt, work_dir)
+        finally:
+            # Clean up temp state file to prevent cross-task leakage
+            with contextlib.suppress(Exception):
+                state_file.unlink(missing_ok=True)
 
         if raw_result.get("error"):
             return {
@@ -121,17 +133,23 @@ class ClaudeCodeJudge:
         # 1-5 rubric 均值 → 0-1
         oq = data.get("output_quality", {})
         rubric_mean = (
-            oq.get("correctness", 1)
-            + oq.get("readability", 1)
-            + oq.get("completeness", 1)
-            + oq.get("efficiency", 1)
-        ) / 4.0 / 5.0
+            (
+                oq.get("correctness", 1)
+                + oq.get("readability", 1)
+                + oq.get("completeness", 1)
+                + oq.get("efficiency", 1)
+            )
+            / 4.0
+            / 5.0
+        )
 
         return {
             "fulfillment_score": data.get("fulfillment", {}).get("score", 0.0),
             "decomposition_score": data.get("decomposition", {}).get("score", 0.0),
             "collaboration_score": data.get("collaboration", {}).get("score", 0.0),
-            "collaboration_feedback_quality": data.get("collaboration", {}).get("feedback_quality", 0.0),
+            "collaboration_feedback_quality": data.get("collaboration", {}).get(
+                "feedback_quality", 0.0
+            ),
             "output_quality_score": rubric_mean,
             "output_quality_rubric": {
                 "correctness": oq.get("correctness", 1),
@@ -158,15 +176,29 @@ class ClaudeCodeJudge:
         work_dir: Path,
         verify_scores: dict[str, float],
     ) -> str:
-        """构造给 Claude Code CLI 的 judge prompt."""
+        """构造给 Claude Code CLI 的 judge prompt.
+
+        为避免命令行参数过长，将完整的 StateBoard 摘要写入 work_dir 下的
+        临时文件，prompt 中仅保留精简概览和文件引用。
+        """
 
         # 文件列表（让 judge 自己读）
         file_list = self._list_work_dir_files(work_dir)
 
-        # StateBoard 摘要
+        # StateBoard 摘要 —— 写入临时文件避免 CLI 参数过长
         board_summary = self._build_board_summary(state_board)
+        state_file = work_dir / ".judge_state.txt"
+        with contextlib.suppress(Exception):
+            state_file.write_text(board_summary, encoding="utf-8")
 
-        verify_summary = json.dumps(verify_scores, indent=2) if verify_scores else "(无验证规则)"
+        # 只保留前 1500 字符的概览放入 prompt
+        board_preview = board_summary[:1500]
+        if len(board_summary) > 1500:
+            board_preview += "\n... (truncated; full summary in .judge_state.txt)"
+
+        verify_summary = (
+            json.dumps(verify_scores, indent=2) if verify_scores else "(无验证规则)"
+        )
 
         return (
             "# 评估任务\n"
@@ -180,7 +212,9 @@ class ClaudeCodeJudge:
             "以下文件位于当前工作目录中，请使用 Read 工具按需读取来评估。\n"
             f"{file_list}\n\n"
             "## 戏台执行摘要\n"
-            f"{board_summary}\n\n"
+            f"{board_preview}\n\n"
+            "**注意**：完整的执行摘要已写入 `.judge_state.txt`，"
+            "请使用 Read 工具读取该文件获取全部任务、Agent、事件和预算细节。\n\n"
             "## 评估维度\n"
             "请对以下 4 个维度分别评分，输出严格遵循 JSON Schema。\n\n"
             "### 1. fulfillment（功能满足度）\n"
@@ -198,8 +232,8 @@ class ClaudeCodeJudge:
             "基于执行摘要，判断：\n"
             "- coder 和 reviewer 之间是否有有效的反馈闭环？\n"
             "- reviewer 的反馈是否精准、可执行？\n"
-            "- 如果没有协作（单 agent 完成），整体 score 取 0.5（中性），"
-            "feedback_quality 取 0.5。\n"
+            "- 如果没有协作（单 agent 完成），整体 score 取 0.8（不应惩罚无必要的协作），"
+            "feedback_quality 取 0.8。\n"
             "- score 和 feedback_quality 均为 0-1 分\n\n"
             "### 4. output_quality（产出质量 rubric）\n"
             "请读取代码文件，对以下 4 维度各给 1-5 的整数评分：\n"
@@ -215,17 +249,27 @@ class ClaudeCodeJudge:
     # -- Claude CLI caller -------------------------------------------------
 
     async def _call_claude(self, prompt: str, work_dir: Path) -> dict[str, Any]:
-        """调用 claude CLI，返回解析后的 structured_output 或错误信息."""
-        schema_str = json.dumps(_JUDGE_SCHEMA, ensure_ascii=False, separators=(",", ":"))
+        """调用 claude CLI，返回解析后的 structured_output 或错误信息.
+
+        为了避免命令行参数过长（state board 摘要可能达数 MB），将完整摘要写入
+        work_dir 下的临时文件，prompt 中只保留精简概览和文件引用。
+        """
+        schema_str = json.dumps(
+            _JUDGE_SCHEMA, ensure_ascii=False, separators=(",", ":")
+        )
 
         cmd = [
             "claude",
             "-p",
-            "--output-format", "json",
-            "--json-schema", schema_str,
+            "--output-format",
+            "json",
+            "--json-schema",
+            schema_str,
             "--bare",
-            "--permission-mode", "auto",
-            "--add-dir", str(work_dir),
+            "--permission-mode",
+            "auto",
+            "--add-dir",
+            str(work_dir),
             prompt,
         ]
 
@@ -238,11 +282,23 @@ class ClaudeCodeJudge:
                 timeout=self.timeout_sec,
             )
         except subprocess.TimeoutExpired:
-            return {"error": f"Claude Code CLI timed out after {self.timeout_sec}s", "cost_usd": None, "data": {}}
+            return {
+                "error": f"Claude Code CLI timed out after {self.timeout_sec}s",
+                "cost_usd": None,
+                "data": {},
+            }
         except FileNotFoundError:
-            return {"error": "Claude Code CLI not found. Is `claude` installed and in PATH?", "cost_usd": None, "data": {}}
+            return {
+                "error": "Claude Code CLI not found. Is `claude` installed and in PATH?",
+                "cost_usd": None,
+                "data": {},
+            }
         except Exception as exc:
-            return {"error": f"Failed to run Claude Code CLI: {exc}", "cost_usd": None, "data": {}}
+            return {
+                "error": f"Failed to run Claude Code CLI: {exc}",
+                "cost_usd": None,
+                "data": {},
+            }
 
         if proc.returncode != 0:
             stderr_preview = proc.stderr[:500] if proc.stderr else "(no stderr)"
@@ -255,7 +311,11 @@ class ClaudeCodeJudge:
         # Parse JSON output
         stdout = proc.stdout.strip()
         if not stdout:
-            return {"error": "Claude Code CLI produced empty stdout", "cost_usd": None, "data": {}}
+            return {
+                "error": "Claude Code CLI produced empty stdout",
+                "cost_usd": None,
+                "data": {},
+            }
 
         try:
             outer = json.loads(stdout)
@@ -270,7 +330,16 @@ class ClaudeCodeJudge:
         if structured is None:
             return {
                 "error": "Claude Code CLI output missing 'structured_output' field. "
-                         f"Output preview: {stdout[:300]}",
+                f"Output preview: {stdout[:300]}",
+                "cost_usd": outer.get("total_cost_usd"),
+                "data": {},
+            }
+
+        # Schema validation
+        validation_err = self._validate_judge_output(structured)
+        if validation_err:
+            return {
+                "error": f"Judge output schema validation failed: {validation_err}",
                 "cost_usd": outer.get("total_cost_usd"),
                 "data": {},
             }
@@ -281,6 +350,37 @@ class ClaudeCodeJudge:
             "data": structured,
         }
 
+    @staticmethod
+    def _validate_judge_output(data: dict[str, Any]) -> str | None:
+        """手动校验 judge 输出是否符合 _JUDGE_SCHEMA. 返回错误信息或 None."""
+        for dim in ("fulfillment", "decomposition", "collaboration", "output_quality"):
+            if dim not in data:
+                return f"missing dimension: {dim}"
+
+        for dim in ("fulfillment", "decomposition", "collaboration"):
+            score = data.get(dim, {}).get("score")
+            if score is None or not isinstance(score, (int, float)):
+                return f"{dim}.score is not a number: {score}"
+            if not (0 <= score <= 1):
+                return f"{dim}.score out of range [0,1]: {score}"
+
+        collab = data.get("collaboration", {})
+        fq = collab.get("feedback_quality")
+        if fq is None or not isinstance(fq, (int, float)):
+            return f"collaboration.feedback_quality is not a number: {fq}"
+        if not (0 <= fq <= 1):
+            return f"collaboration.feedback_quality out of range [0,1]: {fq}"
+
+        oq = data.get("output_quality", {})
+        for k in ("correctness", "readability", "completeness", "efficiency"):
+            v = oq.get(k)
+            if v is None or not isinstance(v, (int, float)):
+                return f"output_quality.{k} is not a number: {v}"
+            if not (1 <= v <= 5):
+                return f"output_quality.{k} out of range [1,5]: {v}"
+
+        return None
+
     # -- context builders --------------------------------------------------
 
     @staticmethod
@@ -290,12 +390,31 @@ class ClaudeCodeJudge:
             return "(work_dir does not exist)"
 
         skip_suffixes = {
-            ".pyc", ".pyo", ".so", ".dll", ".exe",
-            ".png", ".jpg", ".jpeg", ".gif", ".svg",
-            ".zip", ".tar", ".gz", ".bz2", ".7z",
-            ".git", ".DS_Store",
+            ".pyc",
+            ".pyo",
+            ".so",
+            ".dll",
+            ".exe",
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".zip",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".7z",
+            ".git",
+            ".DS_Store",
         }
-        skip_dirs = {".git", "__pycache__", ".pytest_cache", ".eval_cache", ".artifacts"}
+        skip_dirs = {
+            ".git",
+            "__pycache__",
+            ".pytest_cache",
+            ".eval_cache",
+            ".artifacts",
+        }
 
         lines: list[str] = []
         for path in sorted(work_dir.rglob("*")):
@@ -325,8 +444,18 @@ class ClaudeCodeJudge:
         obj = getattr(state_board, "objective", "(unknown)")
         lines.append(f"Objective: {obj}\n")
 
+        # agents (fetch before tasks so we can build task_id -> steps mapping)
+        agents = getattr(state_board, "agents", {})
+        agent_steps: dict[str, int] = {}
+        for _aid, a in agents.items():
+            ct = getattr(a, "current_task", "")
+            if ct:
+                agent_steps[ct] = getattr(a, "steps_used", 0)
+
         # tasks
         tasks = getattr(state_board, "tasks", {})
+        total_estimated = 0
+        total_actual = 0
         if tasks:
             lines.append("Tasks:")
             for tid, t in tasks.items():
@@ -335,13 +464,20 @@ class ClaudeCodeJudge:
                 agent_type = getattr(t, "agent_type", "?")
                 deps = getattr(t, "dependencies", [])
                 desc = getattr(t, "description", "")[:60]
+                est = getattr(t, "estimated_complexity", 1)
+                actual = agent_steps.get(tid, 0)
+                total_estimated += est
+                total_actual += actual
                 lines.append(
-                    f"  - {tid}: {agent_type} | {status_val} | deps={deps} | {desc}"
+                    f"  - {tid}: {agent_type} | {status_val} | est={est} | actual={actual} steps | deps={deps} | {desc}"
                 )
             lines.append("")
-
-        # agents
-        agents = getattr(state_board, "agents", {})
+            if total_estimated > 0:
+                ratio = total_actual / total_estimated
+                lines.append(
+                    f"Complexity summary: total_estimated={total_estimated}, "
+                    f"total_actual={total_actual}, ratio={ratio:.1f} (约 3-5 steps per complexity point is healthy)\n"
+                )
         if agents:
             lines.append("Agents:")
             for aid, a in agents.items():
@@ -349,9 +485,7 @@ class ClaudeCodeJudge:
                 status_val = status.value if hasattr(status, "value") else status
                 steps = getattr(a, "steps_used", 0)
                 retry = getattr(a, "retry_count", 0)
-                lines.append(
-                    f"  - {aid}: {status_val} | steps={steps} | retry={retry}"
-                )
+                lines.append(f"  - {aid}: {status_val} | steps={steps} | retry={retry}")
             lines.append("")
 
         # budget
@@ -367,12 +501,23 @@ class ClaudeCodeJudge:
         events = getattr(state_board, "events", [])
         if events:
             lines.append("Key events:")
-            relevant_keywords = ["review", "collab", "fix", "recover", "retry", "spawned_reviewer", "coder_ready", "approved"]
+            relevant_keywords = [
+                "review",
+                "collab",
+                "fix",
+                "recover",
+                "retry",
+                "spawned_reviewer",
+                "coder_ready",
+                "approved",
+            ]
             count = 0
             for e in events:
                 et = getattr(e, "event_type", "")
                 msg = getattr(e, "message", "")
-                if any(kw in et.lower() or kw in msg.lower() for kw in relevant_keywords):
+                if any(
+                    kw in et.lower() or kw in msg.lower() for kw in relevant_keywords
+                ):
                     agent_id = getattr(e, "agent_id", "")
                     task_id = getattr(e, "task_id", "")
                     parts = [f"  [{et}]"]

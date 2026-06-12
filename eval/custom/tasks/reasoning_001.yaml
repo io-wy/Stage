@@ -36,13 +36,13 @@ verification:
 expected_graph:
   tasks:
     - id: analyze
-      role: coder
+      agent_type: coder
       dependencies: []
     - id: solve
-      role: coder
+      agent_type: coder
       dependencies: [analyze]
     - id: write
-      role: coder
+      agent_type: coder
       dependencies: [solve]
 
 max_steps: 10

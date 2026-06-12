@@ -35,10 +35,9 @@ import asyncio
 import sys
 from pathlib import Path
 
-from eval.swe_bench_lite.harness import SWEBenchHarness
-from eval.humaneval.harness import HumanEvalHarness
 from eval.custom.harness import CustomHarness
-
+from eval.humaneval.harness import HumanEvalHarness
+from eval.swe_bench_lite.harness import SWEBenchHarness
 
 SUITES = {
     "swe_bench_lite": SWEBenchHarness,
@@ -59,33 +58,45 @@ Examples:
   uv run python -m eval.main --suite swe_bench_lite --limit 3
         """,
     )
-    parser.add_argument("--suite", required=True, choices=list(SUITES.keys()),
-                        help="评估套件名称")
-    parser.add_argument("--limit", type=int, default=None,
-                        help="最多跑多少个任务")
-    parser.add_argument("--config", default="agent.json",
-                        help="Agent 配置文件路径 (默认: agent.json)")
-    parser.add_argument("--work-dir", default=".eval_work",
-                        help="工作目录 (默认: .eval_work)")
-    parser.add_argument("--output", default=None,
-                        help="报告输出路径 (默认: eval_report_<suite>.json)")
-    parser.add_argument("--source", default=None,
-                        help="数据源路径 (JSONL 或 HuggingFace 数据集)")
-    parser.add_argument("--split", default="test",
-                        help="数据集 split (默认: test)")
-    parser.add_argument("--difficulty", default=None,
-                        help="只跑指定难度的任务 (easy/medium/hard)")
-    parser.add_argument("--tasks-dir", default=None,
-                        help="custom 套件的任务目录 (默认: eval/custom/tasks)")
-    parser.add_argument("--skip-judge", action="store_true",
-                        help="跳过 Agent-as-Judge（只用客观指标，快但缺少主观评估）")
+    parser.add_argument(
+        "--suite", required=True, choices=list(SUITES.keys()), help="评估套件名称"
+    )
+    parser.add_argument("--limit", type=int, default=None, help="最多跑多少个任务")
+    parser.add_argument(
+        "--config", default="agent.json", help="Agent 配置文件路径 (默认: agent.json)"
+    )
+    parser.add_argument(
+        "--work-dir", default=".eval_work", help="工作目录 (默认: .eval_work)"
+    )
+    parser.add_argument(
+        "--output", default=None, help="报告输出路径 (默认: eval_report_<suite>.json)"
+    )
+    parser.add_argument(
+        "--source", default=None, help="数据源路径 (JSONL 或 HuggingFace 数据集)"
+    )
+    parser.add_argument("--split", default="test", help="数据集 split (默认: test)")
+    parser.add_argument(
+        "--difficulty", default=None, help="只跑指定难度的任务 (easy/medium/hard)"
+    )
+    parser.add_argument(
+        "--tasks-dir",
+        default=None,
+        help="custom 套件的任务目录 (默认: eval/custom/tasks)",
+    )
+    parser.add_argument(
+        "--skip-judge",
+        action="store_true",
+        help="跳过 Agent-as-Judge（只用客观指标，快但缺少主观评估）",
+    )
 
     args = parser.parse_args()
 
     work_dir = Path(args.work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = Path(args.output) if args.output else Path(f"eval_report_{args.suite}.json")
+    output_path = (
+        Path(args.output) if args.output else Path(f"eval_report_{args.suite}.json")
+    )
 
     harness_cls = SUITES[args.suite]
 
@@ -107,17 +118,19 @@ Examples:
 
     harness = harness_cls(**harness_kwargs)
 
-    print(f"=" * 60)
+    print("=" * 60)
     print(f"Xitai Eval: {args.suite}")
     print(f"Config: {args.config}")
     print(f"Work dir: {work_dir}")
     print(f"Limit: {args.limit or 'all'}")
+    if args.difficulty:
+        print(f"Difficulty: {args.difficulty}")
     if args.suite == "custom":
         print(f"Judge: {'skipped' if args.skip_judge else 'enabled (Claude Code CLI)'}")
-    print(f"=" * 60)
+    print("=" * 60)
 
     try:
-        results = asyncio.run(harness.run_all())
+        asyncio.run(harness.run_all(difficulty_filter=args.difficulty))
     except KeyboardInterrupt:
         print("\nInterrupted by user.")
         sys.exit(1)
@@ -127,7 +140,7 @@ Examples:
 
     # 打印汇总
     print(f"\n{'=' * 60}")
-    print(f"RESULTS")
+    print("RESULTS")
     print(f"{'=' * 60}")
     if "summary" in report:
         s = report["summary"]
@@ -147,9 +160,11 @@ Examples:
             print(f"Judge errors: {s['judge_errors']}")
 
     if "by_difficulty" in report and report["by_difficulty"]:
-        print(f"\nBy difficulty:")
+        print("\nBy difficulty:")
         for diff, data in report["by_difficulty"].items():
-            print(f"  {diff:8s}: {data['passed']}/{data['count']} ({data['pass_rate']:.1%})")
+            print(
+                f"  {diff:8s}: {data['passed']}/{data['count']} ({data['pass_rate']:.1%})"
+            )
 
     print(f"\nReport saved to: {output_path}")
 

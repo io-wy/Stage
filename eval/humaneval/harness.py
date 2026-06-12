@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import ast
 import time
 from pathlib import Path
 from typing import Any
@@ -47,7 +46,11 @@ class HumanEvalHarness(EvalHarness):
             canonical_solution = prob.get("canonical_solution", "")
 
             # 难度: 基于 canonical_solution 行数简单分档
-            sol_lines = len(canonical_solution.strip().split("\n")) if canonical_solution else 10
+            sol_lines = (
+                len(canonical_solution.strip().split("\n"))
+                if canonical_solution
+                else 10
+            )
             if sol_lines <= 5:
                 difficulty = "easy"
             elif sol_lines <= 15:
@@ -63,7 +66,7 @@ class HumanEvalHarness(EvalHarness):
                 "test_solution.py": test_with_import,
             }
 
-            objective = f"""Complete the Python function in solution.py.
+            objective = """Complete the Python function in solution.py.
 
 The file contains a function signature and docstring. Your task:
 1. Read solution.py to understand the problem
@@ -74,113 +77,98 @@ The file contains a function signature and docstring. Your task:
 Do not change the function signature or the test file.
 """
 
-            tasks.append(EvalTask(
-                task_id=task_id,
-                category="humaneval",
-                difficulty=difficulty,
-                description=objective,
-                initial_files=initial_files,
-                initial_dirs=["output"],
-                max_steps=20,
-                max_tokens=200000,
-                timeout_sec=300,
-                verification=[
-                    {"type": "test_pass", "command": "python test_solution.py"},
-                ],
-            ))
+            tasks.append(
+                EvalTask(
+                    task_id=task_id,
+                    category="humaneval",
+                    difficulty=difficulty,
+                    description=objective,
+                    initial_files=initial_files,
+                    initial_dirs=["output"],
+                    max_steps=20,
+                    max_tokens=200000,
+                    timeout_sec=300,
+                    verification=[
+                        {"type": "test_pass", "command": "python test_solution.py"},
+                    ],
+                )
+            )
         return tasks
 
     async def run_task(self, task: EvalTask) -> EvalResult:
-        import asyncio
-
-        ws = WorkDirSetup(self.work_dir, task.task_id)
-        work_path = ws.setup(task)
 
         start = time.monotonic()
         try:
-            # 找到对应的 problem 数据
-            problem = None
-            for p in self._problems:
-                if p.get("task_id") == task.task_id:
-                    problem = p
-                    break
-
-            # 启动戏台
-            from openagents_orchestration.runner import OrchestratorRunner
-            from openagents_orchestration.state_board import Budget
-
-            runner = OrchestratorRunner(
-                config_path=str(self.config_path),
-            )
-
-            budget = Budget(
-                max_steps=task.max_steps,
-                token_limit=task.max_tokens,
-            )
-
-            report = await asyncio.wait_for(
-                runner.run(task.description, budget=budget, work_dir=work_path),
-                timeout=task.timeout_sec,
-            )
-
-            # 收集资源消耗
-            steps = runner.state_board.budget.steps_taken if runner.state_board else 0
-            tokens = runner.state_board.budget.token_used if runner.state_board else 0
-            budget_exceeded = runner.state_board.budget.exhausted if runner.state_board else False
-
-            # 验证: 提取 solution.py 中的函数体，执行测试
-            solution_file = work_path.resolve() / "solution.py"
-            test_file = work_path.resolve() / "test_solution.py"
-
-            # 如果戏子没改 solution.py（输出到了别的地方），尝试从常见位置找
-            if not solution_file.exists():
-                for alt in ["output/solution.py", "src/solution.py", "fixed_solution.py"]:
-                    alt_path = work_path / alt
-                    if alt_path.exists():
-                        solution_file = alt_path
+            with WorkDirSetup(self.work_dir, task.task_id).with_task(task) as work_path:
+                # 找到对应的 problem 数据
+                problem = None
+                for p in self._problems:
+                    if p.get("task_id") == task.task_id:
+                        problem = p
                         break
 
-            if solution_file.exists() and test_file.exists():
-                verify_result = verify_humaneval_solution(
-                    solution_file=solution_file,
-                    test_file=test_file,
-                    entry_point=problem.get("entry_point", "") if problem else "",
+                # 共享方法：启动 runner
+                (
+                    report,
+                    board,
+                    steps,
+                    tokens,
+                    budget_exceeded,
+                ) = await self._run_orchestrator(task, work_path)
+
+                # 验证: 提取 solution.py 中的函数体，执行测试
+                solution_file = work_path.resolve() / "solution.py"
+                test_file = work_path.resolve() / "test_solution.py"
+
+                # 如果戏子没改 solution.py（输出到了别的地方），尝试从常见位置找
+                if not solution_file.exists():
+                    for alt in [
+                        "output/solution.py",
+                        "src/solution.py",
+                        "fixed_solution.py",
+                    ]:
+                        alt_path = work_path / alt
+                        if alt_path.exists():
+                            solution_file = alt_path
+                            break
+
+                if solution_file.exists() and test_file.exists():
+                    verify_result = verify_humaneval_solution(
+                        solution_file=solution_file,
+                        test_file=test_file,
+                        entry_point=problem.get("entry_point", "") if problem else "",
+                    )
+                else:
+                    verify_result = {"passed": False, "reason": "missing files"}
+
+                duration = time.monotonic() - start
+
+                # Token efficiency — 共享方法
+                token_efficiency = self.compute_token_efficiency(task, steps, tokens)
+
+                return EvalResult(
+                    task_id=task.task_id,
+                    category=task.category,
+                    difficulty=task.difficulty,
+                    success=verify_result.get("passed", False),
+                    passed=1 if verify_result.get("passed") else 0,
+                    total=1,
+                    task_success=1.0 if verify_result.get("passed") else 0.0,
+                    token_efficiency=token_efficiency,
+                    orchestration_quality=0.0,
+                    collaboration_success=0.0,
+                    recovery_rate=0.0,
+                    output_quality=0.0,
+                    autonomy=self.compute_autonomy(board),
+                    steps_taken=steps,
+                    tokens_used=tokens,
+                    budget_exceeded=budget_exceeded,
+                    duration_sec=duration,
+                    judge_skipped=True,
+                    raw=verify_result,
                 )
-            else:
-                verify_result = {"passed": False, "reason": "missing files"}
 
-            duration = time.monotonic() - start
-
-            # Token efficiency
-            token_efficiency = 0.0
-            if steps > 0 and tokens > 0:
-                step_ratio = task.max_steps / steps
-                token_ratio = task.max_tokens / tokens
-                token_efficiency = min(step_ratio * token_ratio, 1.0)
-
-            return EvalResult(
-                task_id=task.task_id,
-                category=task.category,
-                difficulty=task.difficulty,
-                success=verify_result.get("passed", False),
-                passed=1 if verify_result.get("passed") else 0,
-                total=1,
-                task_success=1.0 if verify_result.get("passed") else 0.0,
-                token_efficiency=token_efficiency,
-                orchestration_quality=0.0,
-                collaboration_success=0.0,
-                recovery_rate=0.0,
-                output_quality=0.0,
-                autonomy=1.0,
-                steps_taken=steps,
-                tokens_used=tokens,
-                budget_exceeded=budget_exceeded,
-                duration_sec=duration,
-                judge_skipped=True,
-                raw=verify_result,
-            )
-
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return EvalResult(
                 task_id=task.task_id,
                 category=task.category,
@@ -198,5 +186,3 @@ Do not change the function signature or the test file.
                 error=str(e),
                 duration_sec=time.monotonic() - start,
             )
-        finally:
-            ws.cleanup()

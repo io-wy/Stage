@@ -18,7 +18,7 @@ _SRC_DIR = _EVAL_ROOT / "src"
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from eval.base import EvalResult, EvalTask, EvalHarness
-from eval.judge import ClaudeCodeJudge
+from eval.base import EvalHarness, EvalResult, EvalTask  # noqa: E402
+from eval.judge import ClaudeCodeJudge  # noqa: E402
 
 __all__ = ["EvalResult", "EvalTask", "EvalHarness", "ClaudeCodeJudge"]

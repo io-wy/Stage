@@ -5,12 +5,11 @@
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from typing import Any
 
-from eval.base import EvalHarness, EvalResult, EvalTask, WorkDirSetup, verify_task
+from eval.base import EvalHarness, EvalResult, EvalTask, WorkDirSetup
 from eval.swe_bench_lite.loader import load_swe_bench_lite, setup_repo
 from eval.swe_bench_lite.verify import extract_patch_from_work_dir, verify_instance
 
@@ -66,23 +65,24 @@ Your task:
 4. Output the fix as a git patch or modified files in the repo/
 """
 
-            tasks.append(EvalTask(
-                task_id=task_id,
-                category="swe_bench_lite",
-                difficulty="hard",
-                description=objective,
-                max_steps=50,
-                max_tokens=1000000,
-                timeout_sec=1200,
-                verification=[
-                    {"type": "custom", "instance": inst},  # 由 harness 自行验证
-                ],
-            ))
+            tasks.append(
+                EvalTask(
+                    task_id=task_id,
+                    category="swe_bench_lite",
+                    difficulty="hard",
+                    description=objective,
+                    max_steps=50,
+                    max_tokens=1000000,
+                    timeout_sec=1200,
+                    verification=[
+                        {"type": "custom", "instance": inst},  # 由 harness 自行验证
+                    ],
+                )
+            )
         return tasks
 
     async def run_task(self, task: EvalTask) -> EvalResult:
         """运行单个 SWE-bench 实例."""
-        import asyncio
 
         # 找到对应的原始实例数据
         instance = None
@@ -90,109 +90,101 @@ Your task:
             if inst.get("instance_id") == task.task_id:
                 instance = inst
                 break
-
-        # 准备工作目录
-        ws = WorkDirSetup(self.work_dir, task.task_id)
-        work_path = ws.setup(task)
+        if instance is None:
+            return EvalResult(
+                task_id=task.task_id,
+                category=task.category,
+                difficulty=task.difficulty,
+                success=False,
+                error=f"instance not found for {task.task_id}",
+                duration_sec=0.0,
+            )
 
         # repo 放在全局缓存目录（按 repo 名分），跨 eval 运行复用
-        repo_name = instance.get("repo", "unknown").replace("/", "_") if instance else "unknown"
+        repo_name = instance.get("repo", "unknown").replace("/", "_")
         repo_cache = Path(".eval_cache") / "repos" / repo_name
         repo_cache.mkdir(parents=True, exist_ok=True)
 
         start = time.monotonic()
         try:
-            # clone repo（复用全局缓存）
-            repo_dir = setup_repo(instance, repo_cache) if instance else work_path / "repo"
+            with WorkDirSetup(self.work_dir, task.task_id).with_task(task) as work_path:
+                # clone repo（复用全局缓存）
+                repo_dir = (
+                    setup_repo(instance, repo_cache) if instance else work_path / "repo"
+                )
 
-            # 把 repo 放到工作目录下（符号链接或复制），让戏子能看到代码
-            repo_in_work = work_path / "repo"
-            if not repo_in_work.exists():
-                if repo_dir.exists():
-                    import shutil
-                    shutil.copytree(repo_dir, repo_in_work)
-                else:
-                    repo_in_work.mkdir(parents=True, exist_ok=True)
+                # 把 repo 放到工作目录下（符号链接或复制），让戏子能看到代码
+                repo_in_work = work_path / "repo"
+                if not repo_in_work.exists():
+                    if repo_dir.exists():
+                        import shutil
 
-            # 安装 repo 环境（pip install -e .），让测试能直接运行
-            self._install_repo_env(repo_in_work)
+                        shutil.copytree(repo_dir, repo_in_work)
+                    else:
+                        repo_in_work.mkdir(parents=True, exist_ok=True)
 
-            # 构建给导演的 objective，包含 repo 上下文
-            objective = (
-                f"{task.description}\n\n"
-                f"The repository is located at: repo/\n"
-                f"All file paths should be relative to repo/. "
-                f"Use repo/astropy/... when reading or editing files."
-            )
+                # 安装 repo 环境（pip install -e .），让测试能直接运行
+                self._install_repo_env(repo_in_work)
 
-            # 启动戏台
-            from openagents_orchestration.runner import OrchestratorRunner
-            from openagents_orchestration.state_board import Budget
+                # 构建给导演的 objective，包含 repo 上下文
+                objective = (
+                    f"{task.description}\n\n"
+                    f"The repository is located at: repo/\n"
+                    f"All file paths should be relative to repo/. "
+                    f"Use repo/astropy/... when reading or editing files."
+                )
 
-            runner = OrchestratorRunner(
-                config_path=str(self.config_path),
-            )
+                # 共享方法：启动 runner（使用自定义 objective）
+                (
+                    report,
+                    board,
+                    steps,
+                    tokens,
+                    budget_exceeded,
+                ) = await self._run_orchestrator(task, work_path, description=objective)
 
-            # 运行（带超时）
-            loop = asyncio.get_event_loop()
-            budget = Budget(
-                max_steps=-1,
-                token_limit=-1,
-                time_limit_s=task.timeout_sec,
-            )
+                # 提取 patch
+                patch = extract_patch_from_work_dir(work_path)
 
-            report = await asyncio.wait_for(
-                runner.run(objective, budget=budget, work_dir=work_path),
-                timeout=task.timeout_sec,
-            )
+                # 验证
+                verify_result = verify_instance(
+                    repo_dir,
+                    patch,
+                    {"test_command": instance.get("test_command")} if instance else {},
+                )
 
-            # 收集结果
-            steps = runner.state_board.budget.steps_taken if runner.state_board else 0
-            tokens = runner.state_board.budget.token_used if runner.state_board else 0
-            budget_exceeded = runner.state_board.budget.exhausted if runner.state_board else False
+                duration = time.monotonic() - start
 
-            # 提取 patch
-            patch = extract_patch_from_work_dir(work_path)
+                # Token efficiency: SWE-bench uses unlimited budget, skip calculation
+                token_efficiency = 0.0
 
-            # 验证
-            verify_result = verify_instance(
-                repo_dir,
-                patch,
-                {"test_command": instance.get("test_command")} if instance else {},
-            )
+                return EvalResult(
+                    task_id=task.task_id,
+                    category=task.category,
+                    difficulty=task.difficulty,
+                    success=verify_result["passed"],
+                    passed=1 if verify_result["passed"] else 0,
+                    total=1,
+                    task_success=1.0 if verify_result["passed"] else 0.0,
+                    token_efficiency=token_efficiency,
+                    orchestration_quality=0.0,
+                    collaboration_success=0.0,
+                    recovery_rate=0.0,
+                    output_quality=0.0,
+                    autonomy=self.compute_autonomy(board),
+                    steps_taken=steps,
+                    tokens_used=tokens,
+                    budget_exceeded=budget_exceeded,
+                    duration_sec=duration,
+                    judge_skipped=True,
+                    raw={
+                        "apply_success": verify_result["apply_success"],
+                        "test_result": verify_result.get("test_result", {}),
+                        "patch_length": len(patch) if patch else 0,
+                    },
+                )
 
-            duration = time.monotonic() - start
-
-            # Token efficiency: SWE-bench uses unlimited budget, skip calculation
-            token_efficiency = 0.0
-
-            return EvalResult(
-                task_id=task.task_id,
-                category=task.category,
-                difficulty=task.difficulty,
-                success=verify_result["passed"],
-                passed=1 if verify_result["passed"] else 0,
-                total=1,
-                task_success=1.0 if verify_result["passed"] else 0.0,
-                token_efficiency=token_efficiency,
-                orchestration_quality=0.0,
-                collaboration_success=0.0,
-                recovery_rate=0.0,
-                output_quality=0.0,
-                autonomy=1.0,
-                steps_taken=steps,
-                tokens_used=tokens,
-                budget_exceeded=budget_exceeded,
-                duration_sec=duration,
-                judge_skipped=True,
-                raw={
-                    "apply_success": verify_result["apply_success"],
-                    "test_result": verify_result.get("test_result", {}),
-                    "patch_length": len(patch) if patch else 0,
-                },
-            )
-
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return EvalResult(
                 task_id=task.task_id,
                 category=task.category,
@@ -210,8 +202,6 @@ Your task:
                 error=str(e),
                 duration_sec=time.monotonic() - start,
             )
-        finally:
-            ws.cleanup()
 
     @staticmethod
     def _install_repo_env(repo_dir: Path) -> None:

@@ -73,7 +73,6 @@ def verify_humaneval_solution(
     work_dir = solution_file.parent
     # HumanEval 测试通常依赖 solution.py 中的函数
     # 我们需要确保 test_solution.py 能 import solution
-    test_code = test_file.read_text(encoding="utf-8")
 
     # 如果 test 文件里用了 from solution import ... 我们需要在正确的目录运行
     try:

@@ -47,16 +47,19 @@ verification:
   - type: file_exists
     path: tests/test_solution.py
   - type: test_pass
-    command: "PYTHONPATH=src python -m pytest tests/test_solution.py -q"
+    command: "python -m pytest tests/test_solution.py -q"
+    cwd: .
+    env:
+      PYTHONPATH: src
     timeout: 30
 
 expected_graph:
   tasks:
     - id: implement
-      role: coder
+      agent_type: coder
       dependencies: []
     - id: test
-      role: tester
+      agent_type: tester
       dependencies: [implement]
 
 max_steps: 50

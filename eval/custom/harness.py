@@ -30,7 +30,9 @@ class CustomHarness(EvalHarness):
         skip_judge: bool = False,
     ):
         super().__init__(work_dir, config_path)
-        self.tasks_dir = Path(tasks_dir) if tasks_dir else Path(__file__).parent / "tasks"
+        self.tasks_dir = (
+            Path(tasks_dir) if tasks_dir else Path(__file__).parent / "tasks"
+        )
         self._limit = limit
         self._skip_judge = skip_judge
         self._judge: ClaudeCodeJudge | None = None
@@ -48,19 +50,21 @@ class CustomHarness(EvalHarness):
             with open(yaml_file, encoding="utf-8") as f:
                 data = yaml.safe_load(f)
 
-            tasks.append(EvalTask(
-                task_id=data["id"],
-                category=data.get("category", "custom"),
-                difficulty=data.get("difficulty", "medium"),
-                description=data["description"],
-                initial_files=data.get("initial_files", {}),
-                initial_dirs=data.get("initial_dirs", []),
-                verification=data.get("verification", []),
-                expected_graph=data.get("expected_graph"),
-                max_steps=data.get("max_steps", 20),
-                max_tokens=data.get("max_tokens", 50_000),
-                timeout_sec=data.get("timeout_sec", 300),
-            ))
+            tasks.append(
+                EvalTask(
+                    task_id=data["id"],
+                    category=data.get("category", "custom"),
+                    difficulty=data.get("difficulty", "medium"),
+                    description=data["description"],
+                    initial_files=data.get("initial_files", {}),
+                    initial_dirs=data.get("initial_dirs", []),
+                    verification=data.get("verification", []),
+                    expected_graph=data.get("expected_graph"),
+                    max_steps=data.get("max_steps", 20),
+                    max_tokens=data.get("max_tokens", 50_000),
+                    timeout_sec=data.get("timeout_sec", 300),
+                )
+            )
 
             if lim is not None and len(tasks) >= lim:
                 break
@@ -68,87 +72,72 @@ class CustomHarness(EvalHarness):
         return tasks
 
     async def run_task(self, task: EvalTask) -> EvalResult:
-        import asyncio
-
-        ws = WorkDirSetup(self.work_dir, task.task_id)
-        work_path = ws.setup(task)
 
         start = time.monotonic()
         try:
-            from openagents_orchestration.runner import OrchestratorRunner
-            from openagents_orchestration.state_board import Budget
-            from openagents_orchestration.models.task import TaskStatus
+            with WorkDirSetup(self.work_dir, task.task_id).with_task(task) as work_path:
+                from openagents_orchestration.models.task import TaskStatus
 
-            runner = OrchestratorRunner(
-                config_path=str(self.config_path),
-            )
-
-            budget = Budget(
-                max_steps=task.max_steps,
-                token_limit=task.max_tokens,
-            )
-
-            report = await asyncio.wait_for(
-                runner.run(task.description, budget=budget, work_dir=work_path),
-                timeout=task.timeout_sec,
-            )
-
-            board = runner.state_board
+                # 共享方法：启动 runner 并收集资源消耗
+                (
+                    report,
+                    board,
+                    steps,
+                    tokens,
+                    budget_exceeded,
+                ) = await self._run_orchestrator(task, work_path)
 
             # ---- 客观指标收集 ------------------------------------------------
 
             # 1. 验证规则通过率
-            verify_scores = verify_task(work_path, task.verification)
+            verify_errors: dict[str, str] = {}
+            verify_scores = verify_task(
+                work_path, task.verification, errors_out=verify_errors
+            )
             verify_pass_rate = (
                 sum(verify_scores.values()) / len(verify_scores)
-                if verify_scores else 0.0
+                if verify_scores
+                else 0.0
             )
 
-            # 资源消耗
-            steps = board.budget.steps_taken if board else 0
-            tokens = board.budget.token_used if board else 0
-            budget_exceeded = board.budget.exhausted if board else False
-
-            # 2. Token 效率
-            token_efficiency = 0.0
-            if steps > 0 and tokens > 0:
-                step_ratio = task.max_steps / steps
-                token_ratio = task.max_tokens / tokens
-                token_efficiency = min(step_ratio * token_ratio, 1.0)
+            # 2. Token 效率 — 共享方法
+            token_efficiency = self.compute_token_efficiency(task, steps, tokens)
 
             # 3. 编排质量 — 客观部分 (graph_jaccard)
             orchestration_obj = 0.0
             if task.expected_graph and board:
-                orchestration_obj = self._graph_jaccard(
-                    task.expected_graph, board
-                )
+                orchestration_obj = self._graph_jaccard(task.expected_graph, board)
 
             # 4. 协作成功率 — 客观部分
             collaboration_obj = 0.0
             if board:
                 review_approved = sum(
-                    1 for e in board.events
+                    1
+                    for e in board.events
                     if "reviewer_approved" in str(getattr(e, "message", ""))
                 )
                 review_spawned = sum(
-                    1 for e in board.events
+                    1
+                    for e in board.events
                     if "spawned_reviewer" in str(getattr(e, "message", ""))
                 )
                 if review_spawned > 0:
                     collaboration_obj = review_approved / review_spawned
-                elif len(board.agents) > 1:
-                    # 有多 agent 但没有 reviewer 闭环，说明协作不完整
-                    collaboration_obj = 0.3
                 else:
-                    # 单 agent，中性
-                    collaboration_obj = 0.5
+                    # 排除 director/monitor，只看战术 agent
+                    tactical = [
+                        a
+                        for a in board.agents.values()
+                        if getattr(a, "agent_type", "") not in ("director", "monitor")
+                    ]
+                    # 有多战术 agent 但无 reviewer 闭环则 0.3，单战术 agent 不应惩罚无必要协作
+                    collaboration_obj = 0.3 if len(tactical) > 1 else 0.8
 
             # 5. 恢复率
             recovery_rate = 0.0
             if board:
                 total_failed = sum(
-                    1 for t in board.tasks.values()
-                    if t.status == TaskStatus.FAILED
+                    1 for t in board.tasks.values() if t.status == TaskStatus.FAILED
                 )
                 # 从 events 中找 FAILED -> COMPLETED 的转换
                 recovered = 0
@@ -162,18 +151,13 @@ class CustomHarness(EvalHarness):
                             elif failed_seen and "completed" in et:
                                 recovered += 1
                                 break
-                recovery_rate = recovered / max(total_failed, 1)
+                recovery_rate = min(recovered / max(total_failed, 1), 1.0)
 
             # 6. 产出质量 — 纯主观，客观部分暂设为 0
             output_quality = 0.0
 
-            # 7. 自治度
-            autonomy = 1.0
-            if board:
-                human_questions = getattr(board, "_human_questions", [])
-                total_tasks = len(board.tasks)
-                if total_tasks > 0:
-                    autonomy = 1.0 - (len(human_questions) / total_tasks)
+            # 7. 自治度 — 共享方法
+            autonomy = self.compute_autonomy(board)
 
             duration = time.monotonic() - start
 
@@ -201,8 +185,7 @@ class CustomHarness(EvalHarness):
                 else:
                     # 组合客观 + 主观
                     task_success = (
-                        verify_pass_rate * 0.5
-                        + judge_result["fulfillment_score"] * 0.5
+                        verify_pass_rate * 0.5 + judge_result["fulfillment_score"] * 0.5
                     )
                     orchestration_quality = (
                         orchestration_obj * 0.4
@@ -244,12 +227,13 @@ class CustomHarness(EvalHarness):
                 judge_cost_usd=judge_cost_usd,
                 raw={
                     "verify_scores": verify_scores,
+                    "verify_errors": verify_errors,
                     "orchestration_obj": orchestration_obj,
                     "collaboration_obj": collaboration_obj,
                 },
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return EvalResult(
                 task_id=task.task_id,
                 category=task.category,
@@ -269,8 +253,6 @@ class CustomHarness(EvalHarness):
                 duration_sec=time.monotonic() - start,
                 judge_skipped=self._skip_judge,
             )
-        finally:
-            ws.cleanup()
 
     # -- helpers -----------------------------------------------------------
 
