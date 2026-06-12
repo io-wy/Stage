@@ -4,7 +4,7 @@ Faithful port of CoreCoder's ``Agent.chat()`` into the openagents SDK's
 ``PatternPlugin`` shape:
 
 - Builds an Anthropic-compatible tool schema list from the raw ToolPlugins
-  registered for this agent (excluding ``sub_agent`` for the sub-agent role).
+  registered for this agent.
 - Loops up to ``max_steps`` (default 20) calling the LLM with
   ``tools=schemas``; on ``tool_use`` blocks, dispatches each call through the
   bound-tool layer (so executor timeouts/policies still apply), then appends
@@ -259,10 +259,19 @@ class CoreCoderPattern(PatternPlugin):
 
             # Allow subclasses to decide whether to keep looping.
             if not await self._should_continue_step(step):
-                final_text = "[CoreCoder] loop terminated by pattern condition."
+                complete_summary = ctx.state.get("__complete_task_summary__")
+                final_text = (
+                    complete_summary
+                    or "[CoreCoder] loop terminated by pattern condition."
+                )
                 ctx.state["__steps_used__"] = step
                 ctx.state["__tool_calls_used__"] = (
                     sum(1 for m in messages if m.get("role") == "assistant" and "tool_calls" in m)
+                )
+                await self.emit(
+                    "pattern.completed" if complete_summary else "pattern.terminated",
+                    steps=step,
+                    final_chars=len(final_text),
                 )
                 break
         else:  # for/else: ran out of steps
@@ -270,6 +279,7 @@ class CoreCoderPattern(PatternPlugin):
                 "pattern.step_budget_exhausted",
                 max_steps=self._max_steps,
             )
+            ctx.state["__step_budget_exhausted__"] = True
             ctx.state["__steps_used__"] = self._max_steps
             ctx.state["__tool_calls_used__"] = (
                 sum(1 for m in messages if m.get("role") == "assistant" and "tool_calls" in m)
@@ -547,6 +557,9 @@ class CoreCoderPattern(PatternPlugin):
         Return False to stop looping before max_steps is reached.
         Called after each tool-dispatch turn (not after text-only turns).
         """
+        ctx = self.context
+        if ctx is not None and ctx.state.get("__complete_task_summary__"):
+            return False
         return True
 
     async def _should_accept_text_response(self, text: str) -> bool:
