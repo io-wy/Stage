@@ -73,55 +73,59 @@
         },
         {
           "id": "spawn_agent",
-          "impl": "openagents_orchestration.tools.spawn_agent.SpawnAgentTool"
+          "impl": "openagents_orchestration.tools.director.spawn_agent.SpawnAgentTool"
         },
         {
           "id": "show_state",
-          "impl": "openagents_orchestration.tools.show_state.ShowStateTool"
+          "impl": "openagents_orchestration.tools.director.show_state.ShowStateTool"
         },
         {
           "id": "replan",
-          "impl": "openagents_orchestration.tools.replan.ReplanTool"
+          "impl": "openagents_orchestration.tools.director.replan.ReplanTool"
         },
         {
           "id": "recover_task",
-          "impl": "openagents_orchestration.tools.recover_task.RecoverTaskTool"
+          "impl": "openagents_orchestration.tools.director.recover_task.RecoverTaskTool"
         },
         {
           "id": "correct_task_status",
-          "impl": "openagents_orchestration.tools.correct_task_status.CorrectTaskStatusTool"
+          "impl": "openagents_orchestration.tools.director.correct_task_status.CorrectTaskStatusTool"
         },
         {
           "id": "finalize",
-          "impl": "openagents_orchestration.tools.finalize.FinalizeTool"
+          "impl": "openagents_orchestration.tools.director.finalize.FinalizeTool"
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
         },
         {
           "id": "send_message",
-          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
         },
         {
           "id": "spawn_resident",
-          "impl": "openagents_orchestration.tools.spawn_resident.SpawnResidentTool"
+          "impl": "openagents_orchestration.tools.resident.spawn_resident.SpawnResidentTool"
         },
         {
           "id": "send_to_resident",
-          "impl": "openagents_orchestration.tools.send_to_resident.SendToResidentTool"
+          "impl": "openagents_orchestration.tools.resident.send_to_resident.SendToResidentTool"
         },
         {
           "id": "read_resident_state",
-          "impl": "openagents_orchestration.tools.read_resident_state.ReadResidentStateTool"
+          "impl": "openagents_orchestration.tools.resident.read_resident_state.ReadResidentStateTool"
         },
         {
           "id": "stop_resident",
-          "impl": "openagents_orchestration.tools.stop_resident.StopResidentTool"
+          "impl": "openagents_orchestration.tools.resident.stop_resident.StopResidentTool"
         },
         {
           "id": "check_messages",
-          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
+        },
+        {
+          "id": "check_dlq",
+          "impl": "openagents_orchestration.tools.monitor.check_dlq.CheckDLQTool"
         }
       ],
       "runtime": {
@@ -206,15 +210,15 @@
         },
         {
           "id": "send_message",
-          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
         },
         {
           "id": "check_messages",
-          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
         },
         {
           "id": "todo_write",
@@ -239,6 +243,10 @@
         {
           "id": "semantic_edit",
           "impl": "openagents_orchestration.tools.corecoder.semantic_edit.SemanticEditTool"
+        },
+        {
+          "id": "complete_task",
+          "impl": "openagents_orchestration.tools.corecoder.complete_task.CompleteTaskTool"
         }
       ],
       "runtime": {
@@ -311,15 +319,15 @@
         },
         {
           "id": "send_message",
-          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
         },
         {
           "id": "check_messages",
-          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
         },
         {
           "id": "todo_write",
@@ -394,15 +402,15 @@
         },
         {
           "id": "send_message",
-          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
         },
         {
           "id": "check_messages",
-          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
         },
         {
           "id": "web_search",
@@ -473,15 +481,15 @@
         },
         {
           "id": "send_message",
-          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
         },
         {
           "id": "check_messages",
-          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
         },
         {
           "id": "github_pr",
@@ -560,15 +568,15 @@
         },
         {
           "id": "send_message",
-          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
         },
         {
           "id": "check_messages",
-          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
         },
         {
           "id": "inspect_state",
@@ -654,35 +662,35 @@
         },
         {
           "id": "spawn_agent",
-          "impl": "openagents_orchestration.tools.spawn_agent.SpawnAgentTool"
+          "impl": "openagents_orchestration.tools.director.spawn_agent.SpawnAgentTool"
         },
         {
           "id": "show_state",
-          "impl": "openagents_orchestration.tools.show_state.ShowStateTool"
+          "impl": "openagents_orchestration.tools.director.show_state.ShowStateTool"
         },
         {
           "id": "replan",
-          "impl": "openagents_orchestration.tools.replan.ReplanTool"
+          "impl": "openagents_orchestration.tools.director.replan.ReplanTool"
         },
         {
           "id": "recover_task",
-          "impl": "openagents_orchestration.tools.recover_task.RecoverTaskTool"
+          "impl": "openagents_orchestration.tools.director.recover_task.RecoverTaskTool"
         },
         {
           "id": "correct_task_status",
-          "impl": "openagents_orchestration.tools.correct_task_status.CorrectTaskStatusTool"
+          "impl": "openagents_orchestration.tools.director.correct_task_status.CorrectTaskStatusTool"
         },
         {
           "id": "finalize",
-          "impl": "openagents_orchestration.tools.finalize.FinalizeTool"
+          "impl": "openagents_orchestration.tools.director.finalize.FinalizeTool"
         },
         {
           "id": "send_message",
-          "impl": "openagents_orchestration.tools.send_message.SendMessageTool"
+          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
         },
         {
           "id": "check_messages",
-          "impl": "openagents_orchestration.tools.check_messages.CheckMessagesTool"
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
         }
       ],
       "runtime": {

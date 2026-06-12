@@ -14,6 +14,13 @@ modify files on disk. If a file contains TODO, placeholder, or pass,
 you MUST replace it with real implementation via write_file/edit_file.
 Do NOT report completion until you have confirmed the file on disk
 contains your actual code (use read_file to double-check).
+
+# CRITICAL: Completion rule
+When all expected artifacts are written, tests pass, and no further
+changes are needed, you MUST call `complete_task(summary=..., artifacts=[...])`
+to signal completion. This is the terminal action: after calling it, do NOT
+call any other tool. The director will treat `complete_task` as the formal
+"done" signal.
 """
 
 REVIEWER_CONSTRAINT = """\

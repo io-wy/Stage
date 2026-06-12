@@ -6,14 +6,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.state_board import Budget, StateBoard
-from openagents_orchestration.tools.check_messages import CheckMessagesTool
-from openagents_orchestration.tools.finalize import FinalizeTool
-from openagents_orchestration.tools.replan import ReplanTool
-from openagents_orchestration.tools.send_message import SendMessageTool
-from openagents_orchestration.tools.show_state import ShowStateTool
-from openagents_orchestration.tools.spawn_agent import SpawnAgentTool
+from openagents_orchestration.core.state_board import Budget, StateBoard
+from openagents_orchestration.tools.director.check_messages import CheckMessagesTool
+from openagents_orchestration.tools.director.finalize import FinalizeTool
+from openagents_orchestration.tools.director.replan import ReplanTool
+from openagents_orchestration.tools.director.send_message import SendMessageTool
+from openagents_orchestration.tools.director.show_state import ShowStateTool
+from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
 
 class MockContext:
@@ -110,6 +111,7 @@ class TestSpawnAgentFullChain:
                 TaskNode("t2", "implement", "coder", dependencies=["t1"]),
             ],
         ))
+        board.update_task("t1", status=TaskStatus.RUNNING)
         board.update_task("t1", status=TaskStatus.COMPLETED, actual_artifacts=["api.yml"])
 
         mock_delegate = AsyncMock(return_value="done")
@@ -134,13 +136,16 @@ class TestMessageFlow:
     @pytest.mark.asyncio
     async def test_message_roundtrip(self):
         board = StateBoard("obj")
+        board.register_agent("reviewer-1", "reviewer")
 
         # Step 1: Agent A sends message to Agent B
         ctx_a = MockContext(deps=MockContext(state_board=board), agent_id="coder-1")
         send_tool = SendMessageTool()
         await send_tool.invoke({"to_agent": "reviewer-1", "message": "Please check line 42"}, ctx_a)
 
-        assert len(board._pending_messages) == 1
+        # Message delivered via Mailbox v2 (no legacy pending list)
+        pending = await board.peek_mailbox("reviewer-1")
+        assert len(pending) == 1
 
         # Step 2: Agent B checks messages
         ctx_b = MockContext(deps=MockContext(state_board=board), agent_id="reviewer-1")
@@ -149,18 +154,21 @@ class TestMessageFlow:
 
         assert result["count"] == 1
         assert "line 42" in result["message"]
-        # Message should be cleared
-        assert len(board._pending_messages) == 0
+        # Message should be cleared from mailbox
+        remaining = await board.claim_messages("reviewer-1")
+        assert len(remaining) == 0
 
     @pytest.mark.asyncio
     async def test_broadcast_message(self):
         board = StateBoard("obj")
+        board.register_agent("coder-x", "coder")
+        board.register_agent("reviewer-x", "reviewer")
 
         ctx_sender = MockContext(deps=MockContext(state_board=board), agent_id="director")
         send_tool = SendMessageTool()
         await send_tool.invoke({"to_agent": "*", "message": "Everyone stop"}, ctx_sender)
 
-        # Any agent should receive the broadcast
+        # Any registered agent should receive the broadcast
         ctx_any = MockContext(deps=MockContext(state_board=board), agent_id="coder-x")
         check_tool = CheckMessagesTool()
         result = await check_tool.invoke({}, ctx_any)
@@ -176,9 +184,7 @@ class TestMessageFlow:
             objective="obj",
             tasks=[TaskNode("t1", "fix bug", "coder")],
         ))
-        board._pending_messages = [
-            {"from": "reviewer", "to": "coder", "content": "The bug is on line 42"},
-        ]
+        board.send_mail("reviewer", "coder", "The bug is on line 42")
 
         task = board.get_task("t1")
         input_text = SpawnAgentTool._build_input(task, board)
@@ -242,7 +248,9 @@ class TestDirectorDecisionFlow:
                 TaskNode("t2", "task 2", "coder"),
             ],
         ))
+        board.update_task("t1", status=TaskStatus.RUNNING)
         board.update_task("t1", status=TaskStatus.COMPLETED)
+        board.update_task("t2", status=TaskStatus.RUNNING)
         board.update_task("t2", status=TaskStatus.COMPLETED)
 
         ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
@@ -265,13 +273,14 @@ class TestDirectorDecisionFlow:
         ctx = MockContext(deps=MockContext(state_board=board), agent_id="coder")
 
         tool = CheckMessagesTool()  # noqa: F841 -- used below but linter may complain
-        from openagents_orchestration.tools.ask_human import AskHumanTool
+        from openagents_orchestration.tools.director.ask_human import AskHumanTool
         ask_tool = AskHumanTool()
         result = await ask_tool.invoke({"question": "JWT or session?"}, ctx)
 
         assert "JWT or session?" in result
-        assert len(board._human_questions) == 1
-        assert board._human_questions[0]["from"] == "coder"
+        questions = board._human_channel.get_pending_questions(project_id=board.project_id)
+        assert len(questions) == 1
+        assert questions[0].from_agent == "coder"
 
 
 class TestBudgetTracking:
@@ -310,4 +319,101 @@ class TestBudgetTracking:
         assert board.has_actionable()
 
         board.add_tokens(100)
+
+
+class TestCommunicationEndToEnd:
+    """End-to-end communication: send → route → claim → ack."""
+
+    async def test_send_structured_routed_claimed_acked(self):
+        """Full lifecycle: send_structured → claim → ack → no redelivery."""
+        board = StateBoard("e2e", budget=Budget())
+        board.register_agent("agent-a", "coder")
+        board.register_agent("agent-b", "reviewer")
+        board.register_agent("agent-c", "tester")
+
+        # Send p2p
+        msg = StructuredMessage.from_text("director", "agent-a", "task assignment")
+        ok = await board.send_structured(msg)
+        assert ok is True
+
+        # Claim
+        claimed = await board.claim_messages("agent-a", batch_size=5)
+        assert len(claimed) == 1
+        assert claimed[0].text == "task assignment"
+
+        # Ack
+        await board.ack_message("agent-a", claimed[0].msg_id)
+
+        # No redelivery
+        claimed2 = await board.claim_messages("agent-a")
+        assert len(claimed2) == 0
+
+    async def test_send_broadcast_all_agents_receive(self):
+        """Broadcast delivers to all registered agents."""
+        board = StateBoard("e2e", budget=Budget())
+        for aid in ("a", "b", "c", "d", "e"):
+            board.register_agent(aid, "coder")
+
+        msg = StructuredMessage.event("director", "deploy", data="v1.0")
+        ok = await board.send_structured(msg)
+        assert ok is True
+
+        for aid in ("a", "b", "c", "d", "e"):
+            claimed = await board.claim_messages(aid)
+            assert len(claimed) == 1
+
+    async def test_send_pubsub_only_subscribers_receive(self):
+        """Pubsub delivers only to topic subscribers."""
+        board = StateBoard("e2e", budget=Budget())
+        board.register_agent("sub-1", "coder")
+        board.register_agent("sub-2", "reviewer")
+        board.register_agent("no-sub", "coder")
+        board.subscribe_topic("sub-1", "alerts")
+        board.subscribe_topic("sub-2", "alerts")
+
+        msg = StructuredMessage.from_text("director", "topic:alerts", "fire drill")
+        ok = await board.send_structured(msg)
+        assert ok is True
+
+        assert len(await board.claim_messages("sub-1")) == 1
+        assert len(await board.claim_messages("sub-2")) == 1
+        assert len(await board.claim_messages("no-sub")) == 0
+
+    async def test_collaboration_signal_flow(self):
+        """Coder sends REVIEW_READY signal, it lands as typed SIGNAL message."""
+        board = StateBoard("collab", budget=Budget())
+        board.register_agent("coder-api", "coder")
+        board.register_agent("reviewer-api", "reviewer")
+
+        signal = StructuredMessage.signal(
+            "coder-api", "reviewer-api", "review_ready", "api",
+            tests_passed=5,
+        )
+        await board.send_structured(signal)
+
+        claimed = await board.claim_messages("reviewer-api")
+        assert len(claimed) == 1
+        assert claimed[0].msg_type.value == "signal"
+        assert claimed[0].payload["signal"] == "review_ready"
+        assert claimed[0].payload["task_id"] == "api"
+        assert claimed[0].payload["tests_passed"] == 5
+
+    async def test_peek_filtered_view(self):
+        """Peek with filters returns only matching messages."""
+        board = StateBoard("filter", budget=Budget())
+        board.register_agent("agent-1", "coder")
+
+        await board.send_structured(
+            StructuredMessage.signal("director", "agent-1", "review_ready", "t1")
+        )
+        await board.send_structured(
+            StructuredMessage.command("director", "agent-1", "implement")
+        )
+
+        signals = await board.peek_mailbox("agent-1", limit=5, msg_type="signal")
+        assert len(signals) == 1
+        assert signals[0].msg_type.value == "signal"
+
+        commands = await board.peek_mailbox("agent-1", limit=5, msg_type="command")
+        assert len(commands) == 1
         assert not board.has_actionable()
