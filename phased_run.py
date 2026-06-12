@@ -37,9 +37,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.runner import OrchestratorRunner, RunnerDeps
-from openagents_orchestration.state_board import StateBoard, Budget
-from openagents_orchestration.tools.spawn_agent import SpawnAgentTool
+from openagents_orchestration.core.runner import OrchestratorRunner, RunnerDeps
+from openagents_orchestration.core.state_board import StateBoard, Budget
+from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +231,7 @@ async def cmd_execute_task(plan_file: Path, task_id: str) -> int:
     # Load and apply saved state
     state = _load_state(plan_file)
     for tid, tstate in state.get("tasks", {}).items():
-        board.update_task(tid, status=TaskStatus(tstate["status"]))
+        board.update_task(tid, status=TaskStatus(tstate["status"]), _force=True)
 
     # Check if task is ready
     completed = {t.task_id for t in board.tasks.values() if t.status == TaskStatus.COMPLETED}
@@ -295,7 +295,7 @@ async def cmd_step(plan_file: Path) -> int:
 
     state = _load_state(plan_file)
     for tid, tstate in state.get("tasks", {}).items():
-        board.update_task(tid, status=TaskStatus(tstate["status"]))
+        board.update_task(tid, status=TaskStatus(tstate["status"]), _force=True)
 
     # Find ready tasks
     ready = board.tasks_ready()
