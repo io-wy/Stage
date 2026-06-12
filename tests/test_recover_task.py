@@ -8,8 +8,8 @@ import pytest
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.reporting import summarize_agent_run
-from openagents_orchestration.state_board import StateBoard
-from openagents_orchestration.tools.recover_task import RecoverTaskTool
+from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.tools.director.recover_task import RecoverTaskTool
 
 
 @pytest.mark.asyncio
@@ -22,6 +22,7 @@ async def test_recover_task_creates_minimal_recovery_and_rewires_dependents():
             TaskNode("t2", "test API", "coder", dependencies=["t1"]),
         ],
     ))
+    board.update_task("t1", status=TaskStatus.RUNNING)
     board.update_task("t1", status=TaskStatus.FAILED, error="Server disconnected")
     summary = summarize_agent_run(
         agent_id="coder-t1",

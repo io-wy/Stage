@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode
-from openagents_orchestration.state_board import StateBoard
+from openagents_orchestration.core.state_board import StateBoard
 
 
 class TestAskHumanReply:
@@ -15,7 +15,7 @@ class TestAskHumanReply:
             from_agent="director",
         )
 
-        assert qid == "hq-0"
+        assert qid.startswith("hq-")
         questions = board.get_human_questions()
         assert len(questions) == 1
         assert questions[0]["question"] == "What database should we use?"
@@ -28,8 +28,9 @@ class TestAskHumanReply:
         result = board.reply_human(qid, "Use Postgres")
 
         assert result is True
-        assert len(board._pending_messages) == 1
-        msg = board._pending_messages[0]
+        messages = board.messages_for("director")
+        assert len(messages) == 1
+        msg = messages[0]
         assert msg["from"] == "human"
         assert msg["to"] == "director"
         assert "Use Postgres" in msg["content"]
@@ -69,9 +70,9 @@ class TestAskHumanReply:
             objective="obj",
             tasks=[TaskNode("t1", "task", "coder")],
         ))
-        board.ask_human("What db?", from_agent="director")
+        qid = board.ask_human("What db?", from_agent="director")
 
         snapshot = board.snapshot()
         assert "waiting_for_human" in snapshot["signals"]
         assert len(snapshot["signals"]["waiting_for_human"]) == 1
-        assert snapshot["signals"]["waiting_for_human"][0]["id"] == "hq-0"
+        assert snapshot["signals"]["waiting_for_human"][0]["id"] == qid

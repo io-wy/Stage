@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode
-from openagents_orchestration.state_board import StateBoard
-from openagents_orchestration.tools.spawn_agent import SpawnAgentTool
+from openagents_orchestration.core.state_board import AgentStatus, StateBoard
+from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
 
 class MockContext:
@@ -90,3 +90,32 @@ class TestSpawnAgentBatch:
         assert "task_id" in schema["properties"]
         assert "task_ids" in schema["properties"]
         assert "required" not in schema
+
+    @pytest.mark.asyncio
+    async def test_single_task_fails_when_agent_failed(self):
+        """If the runner marks the agent as FAILED, task must not be COMPLETED."""
+        board = StateBoard("obj")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "task 1", "coder")],
+        ))
+
+        async def failing_delegate(*args, **kwargs):
+            # Simulate what run_agent does on MAX_STEPS.
+            board.update_agent("coder-t1", status=AgentStatus.FAILED)
+            board.update_task("t1", error="step budget exhausted")
+            return "[CoreCoder] step budget exhausted before producing a final answer."
+
+        ctx = MockContext(
+            deps=MockContext(state_board=board, runner_delegate=failing_delegate),
+            agent_id="director",
+        )
+
+        tool = SpawnAgentTool()
+        with pytest.raises(Exception, match="failed"):
+            await tool.invoke({"task_id": "t1"}, ctx)
+
+        task = board.get_task("t1")
+        assert task is not None
+        assert task.status.value == "failed"
+        assert "step budget" in task.error

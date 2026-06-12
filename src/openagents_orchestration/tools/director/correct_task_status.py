@@ -72,6 +72,24 @@ class CorrectTaskStatusTool(ToolPlugin):
             raise PermanentToolError(f"Invalid status '{status_raw}'", tool_name=self.name) from exc
 
         old_status = task.status.value
+
+        # No-op if status isn't changing — avoids spurious invalid_transition events
+        if status == task.status:
+            # Still update artifacts if provided
+            if artifacts:
+                board.update_task(task_id, actual_artifacts=artifacts, _force=True)
+                for artifact in artifacts:
+                    board.verify_artifact(artifact, exists=True)
+            return {
+                "task_id": task_id,
+                "old_status": old_status,
+                "new_status": status.value,
+                "reason": reason,
+                "artifacts": artifacts,
+                "note": "Status unchanged, artifacts updated",
+                "signals": board.snapshot()["signals"],
+            }
+
         update: dict[str, Any] = {"status": status, "error": None if status == TaskStatus.COMPLETED else task.error}
         if artifacts:
             update["actual_artifacts"] = artifacts

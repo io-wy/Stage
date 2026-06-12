@@ -19,7 +19,7 @@ from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 from openagents_orchestration.models.task import TaskStatus
 from openagents_orchestration.reporting import summarize_agent_run
-from openagents_orchestration.state_board import AgentStatus
+from openagents_orchestration.core.state_board import AgentStatus
 from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
 from prompts.corrections import build_hallucination_correction
 
@@ -196,6 +196,40 @@ class SpawnAgentTool(ToolPlugin):
                 tool_name=self.name,
             ) from last_exc
 
+        # ---- failure guard ----
+        # If the agent already failed (e.g. step budget exhausted), do not mark COMPLETED.
+        agent_state = board.get_agent(agent_id)
+        if agent_state is not None and agent_state.status == AgentStatus.FAILED:
+            error_msg = task.error or f"Agent {agent_id} failed before completing the task"
+            board.update_task(task_id, status=TaskStatus.FAILED, error=error_msg)
+            summary = summarize_agent_run(
+                agent_id=agent_id,
+                task_id=task_id,
+                status="failed",
+                error=error_msg,
+                artifacts=task.actual_artifacts or task.expected_artifacts,
+                retry_count=agent_state.retry_count,
+                steps_used=agent_state.steps_used,
+                token_used=agent_state.token_used,
+            )
+            board.log_event(
+                "agent.run_summary",
+                task_id=task_id,
+                agent_id=agent_id,
+                message=f"failed: {summary['failure_type']}",
+                summary=summary,
+            )
+            board.log_event(
+                "agent.failed",
+                task_id=task_id,
+                agent_id=agent_id,
+                message=error_msg,
+            )
+            raise RetryableToolError(
+                f"Agent failed for task '{task_id}': {error_msg}",
+                tool_name=self.name,
+            )
+
         # ---- coder hallucination guard ----
         # If expected artifacts still contain TODO/placeholder/pass, force a retry
         # regardless of what the coder claimed. The coder may hallucinate that a
@@ -238,12 +272,27 @@ class SpawnAgentTool(ToolPlugin):
                 verified.append(art_path)
 
         board.update_agent(agent_id, status=AgentStatus.DONE, end_time=time.time())
-        board.update_task(
-            task_id,
-            status=TaskStatus.COMPLETED,
-            result_output=result_text,
-            actual_artifacts=verified,
-        )
+
+        # Only set task to COMPLETED if _spawn_and_run hasn't already done it.
+        # _spawn_and_run marks the task completed on StopReason.COMPLETED, but
+        # this tool post-processes the result with artifact verification, so
+        # update the artifacts even if the status is already terminal.
+        task = board.get_task(task_id)
+        if task is not None and task.status != TaskStatus.COMPLETED:
+            board.update_task(
+                task_id,
+                status=TaskStatus.COMPLETED,
+                result_output=result_text,
+                actual_artifacts=verified,
+            )
+        elif task is not None:
+            # Task already completed — just backfill verified artifacts
+            board.update_task(
+                task_id,
+                actual_artifacts=verified,
+                result_output=result_text,
+                _force=True,
+            )
         agent_state = board.get_agent(agent_id)
         summary = summarize_agent_run(
             agent_id=agent_id,
@@ -399,12 +448,23 @@ class SpawnAgentTool(ToolPlugin):
         """Compose the full input text for a tactical agent.
 
         Includes: task description + input_context + dependency artifacts +
-        pending messages.
+        pending messages + current working directory.
         """
+        import os
+
         parts: list[str] = []
 
+        # Working directory — critical for correct file placement
+        cwd = os.getcwd()
+        parts.append(f"# Working Directory\nAll file paths are relative to: {cwd}")
+        if task.expected_artifacts:
+            parts.append("Expected artifacts:")
+            for art in task.expected_artifacts:
+                abs_art = os.path.join(cwd, art) if not os.path.isabs(art) else art
+                parts.append(f"  - {art}  (absolute: {abs_art})")
+
         # Core task
-        parts.append(f"# Task: {task.description}")
+        parts.append(f"\n# Task: {task.description}")
         if task.input_context:
             parts.append(task.input_context)
 

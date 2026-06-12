@@ -7,14 +7,14 @@ import asyncio
 import pytest
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode
-from openagents_orchestration.state_board import StateBoard
-from openagents_orchestration.tools.ask_human import AskHumanTool
-from openagents_orchestration.tools.check_messages import CheckMessagesTool
-from openagents_orchestration.tools.finalize import FinalizeTool
-from openagents_orchestration.tools.replan import ReplanTool
-from openagents_orchestration.tools.send_message import SendMessageTool
-from openagents_orchestration.tools.show_state import ShowStateTool
-from openagents_orchestration.tools.spawn_agent import SpawnAgentTool
+from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.tools.director.ask_human import AskHumanTool
+from openagents_orchestration.tools.director.check_messages import CheckMessagesTool
+from openagents_orchestration.tools.director.finalize import FinalizeTool
+from openagents_orchestration.tools.director.replan import ReplanTool
+from openagents_orchestration.tools.director.send_message import SendMessageTool
+from openagents_orchestration.tools.director.show_state import ShowStateTool
+from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
 
 class MockContext:
@@ -62,28 +62,30 @@ class TestFinalizeTool:
 
 
 class TestSendMessageTool:
-    def test_invoke(self):
+    async def test_invoke(self):
         board = StateBoard("obj")
         ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
 
         tool = SendMessageTool()
-        result = asyncio.run(tool.invoke({"to_agent": "coder", "message": "hello"}, ctx))
+        result = await tool.invoke({"to_agent": "coder", "message": "hello"}, ctx)
         assert "coder" in result
-        assert len(board._pending_messages) == 1
+        # Message now delivered via Mailbox v2
+        msgs = await board.claim_messages("coder")
+        assert len(msgs) == 1
+        assert msgs[0].text == "hello"
 
-
-
-    def test_thread_routing_preserves_hyphenated_task_ids(self):
+    async def test_collaboration_signal_delivered_as_structured_message(self):
         board = StateBoard("obj")
-        board.get_or_create_thread("task-api-auth", ["coder-api-auth", "reviewer-api-auth"])
         ctx = MockContext(deps=MockContext(state_board=board), agent_id="coder-api-auth")
 
         tool = SendMessageTool()
-        asyncio.run(tool.invoke({"to_agent": "reviewer-api-auth", "message": "TASK_REVIEW_READY[api-auth]: tests passed = 1"}, ctx))
+        await tool.invoke({"to_agent": "reviewer-api-auth", "message": "TASK_REVIEW_READY[api-auth]: tests passed = 1"}, ctx)
 
-        thread = board.conversation_threads["task-api-auth"]
-        assert len(thread.messages) == 1
-        assert thread.messages[0]["task_id"] == "api-auth"
+        # Collaboration signals are delivered as structured SIGNAL messages
+        signals = await board.claim_messages("reviewer-api-auth")
+        assert len(signals) == 1
+        assert signals[0].header.msg_type.value == "signal"
+        assert signals[0].payload["signal"] == "review_ready"
 
 
 class TestSpawnAgentTool:
@@ -127,7 +129,8 @@ class TestAskHumanTool:
         tool = AskHumanTool()
         result = asyncio.run(tool.invoke({"question": "Which auth?"}, ctx))
         assert "Which auth?" in result
-        assert len(board._human_questions) == 1
+        questions = board._human_channel.get_pending_questions(project_id=board.project_id)
+        assert len(questions) == 1
 
 
 class TestCheckMessagesTool:
@@ -142,28 +145,26 @@ class TestCheckMessagesTool:
 
     def test_with_messages(self):
         board = StateBoard("obj")
-        board._pending_messages = [
-            {"from": "director", "to": "coder-1", "content": "fix line 42"},
-            {"from": "reviewer", "to": "other", "content": "wrong"},
-        ]
+        board.send_mail("director", "coder-1", "fix line 42")
+        board.send_mail("reviewer", "other", "wrong")
         ctx = MockContext(deps=MockContext(state_board=board), agent_id="coder-1")
 
         tool = CheckMessagesTool()
         result = asyncio.run(tool.invoke({}, ctx))
         assert result["count"] == 1
         assert "fix line 42" in result["message"]
-        # Message should be cleared
-        assert len(board._pending_messages) == 1
-        assert board._pending_messages[0]["to"] == "other"
+        # Other recipient's message should remain
+        assert len(board.messages_for("other")) == 1
+        assert board.messages_for("other")[0]["to"] == "other"
 
     def test_no_clear(self):
         board = StateBoard("obj")
-        board._pending_messages = [
-            {"from": "director", "to": "*", "content": "broadcast"},
-        ]
+        board.register_agent("any", "coder")
+        board.send_mail("director", "*", "broadcast")
         ctx = MockContext(deps=MockContext(state_board=board), agent_id="any")
 
         tool = CheckMessagesTool()
         result = asyncio.run(tool.invoke({"clear": False}, ctx))
         assert result["count"] == 1
-        assert len(board._pending_messages) == 1
+        # With clear=False the message stays in-flight; peek to verify.
+        assert len(asyncio.run(board.peek_mailbox("any"))) == 1

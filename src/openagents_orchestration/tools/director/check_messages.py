@@ -1,8 +1,7 @@
-"""check_messages — pull-based message retrieval for agent-to-agent communication.
+"""check_messages — pull-based message retrieval via Mailbox v2.
 
-Agents call this tool periodically (every 3-5 turns) to check if other agents
-or the director have sent them messages. Returns a list of pending messages
-and clears them from the queue.
+Agents call this tool periodically to claim messages from their isolated
+mailbox. Messages are acknowledged after being returned.
 """
 
 from __future__ import annotations
@@ -13,6 +12,8 @@ from typing import Any
 
 from openagents.errors.exceptions import PermanentToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
+
+from openagents_orchestration.models.message import StructuredMessage
 
 
 class CheckMessagesTool(ToolPlugin):
@@ -37,12 +38,15 @@ class CheckMessagesTool(ToolPlugin):
                     "type": "boolean",
                     "description": "Whether to clear messages after reading. Default true.",
                 },
+                "batch_size": {
+                    "type": "integer",
+                    "description": "Max messages to retrieve. Default 10.",
+                },
             },
         }
 
     def _read_inbox(self, board: Any) -> list[dict[str, Any]]:
         """Read external messages from inbox file and inject into mailbox."""
-        # Find inbox file in persist directory
         inbox_messages: list[dict[str, Any]] = []
         recorder = getattr(board, "_recorder", None)
         if recorder is None:
@@ -71,7 +75,7 @@ class CheckMessagesTool(ToolPlugin):
                     continue
             # Clear inbox after reading
             inbox_file.write_text("", encoding="utf-8")
-            # Inject into StateBoard mailbox
+            # Inject into StateBoard mailbox via legacy sync API
             for msg in inbox_messages:
                 board.send_mail(
                     from_id=msg.get("from", "human"),
@@ -83,6 +87,14 @@ class CheckMessagesTool(ToolPlugin):
 
         return inbox_messages
 
+    @staticmethod
+    def _format_message(msg: StructuredMessage) -> str:
+        """Convert a structured message to human-readable text."""
+        prefix = f"From {msg.header.sender}"
+        if msg.header.msg_type.value != "notification":
+            prefix += f" [{msg.header.msg_type.value}]"
+        return f"{prefix}: {msg.text or str(msg.payload)}"
+
     async def invoke(self, params: dict[str, Any], context: Any) -> dict[str, Any]:
         deps = getattr(context, "deps", None)
         board = getattr(deps, "state_board", None) if deps else None
@@ -90,8 +102,10 @@ class CheckMessagesTool(ToolPlugin):
             raise PermanentToolError("StateBoard not available", tool_name=self.name)
 
         agent_id = getattr(context, "agent_id", "unknown")
+        batch_size = int(params.get("batch_size", 10))
+        clear = params.get("clear", True)
 
-        # First: inject external inbox messages
+        # First: inject external inbox messages (legacy path)
         self._read_inbox(board)
 
         # Pull from Matrix if transport is enabled
@@ -112,26 +126,38 @@ class CheckMessagesTool(ToolPlugin):
                     message=str(exc),
                 )
 
-        # Collect messages addressed to this agent via mailbox API
-        matching = board.messages_for(agent_id)
+        # Read messages from Mailbox v2
+        if clear:
+            structured = await board.claim_messages(agent_id, batch_size=batch_size)
+            ack_ids = [m.msg_id for m in structured]
+            for mid in ack_ids:
+                await board.ack_message(agent_id, mid)
+        else:
+            structured = await board.peek_mailbox(agent_id, limit=batch_size)
 
-        clear = params.get("clear", True)
-        if clear and matching:
-            board.clear_mail(agent_id)
+        all_messages: list[dict[str, Any]] = []
+        for m in structured:
+            all_messages.append({
+                "from": m.header.sender,
+                "content": m.text,
+                "type": m.header.msg_type.value,
+                "payload": m.payload,
+                "trace_id": m.header.trace_id,
+                "msg_id": m.msg_id,
+                "ts": m.header.created_at.timestamp(),
+            })
 
-        if not matching:
+        if not all_messages:
             return {
                 "message": "No new messages.",
                 "count": 0,
                 "messages": [],
             }
 
-        formatted = []
-        for m in matching:
-            formatted.append(f"From {m['from']}: {m['content']}")
+        formatted = [self._format_message(m) for m in structured]
 
         return {
-            "message": f"You have {len(matching)} message(s):\n" + "\n".join(formatted),
-            "count": len(matching),
-            "messages": matching,
+            "message": f"You have {len(all_messages)} message(s):\n" + "\n".join(formatted),
+            "count": len(all_messages),
+            "messages": all_messages,
         }

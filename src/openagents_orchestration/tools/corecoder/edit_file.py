@@ -16,9 +16,30 @@ from typing import Any
 from openagents.errors.exceptions import ModelRetryError, ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
-from openagents_orchestration.artifact_store import infer_task_id
+
+from openagents_orchestration.store.artifact_store import infer_task_id
 
 _MAX_DIFF_CHARS = 3000
+
+
+def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
+    """Resolve a file path relative to the agent's working directory."""
+    path = Path(file_path)
+    if path.is_absolute():
+        return path
+    base: Path | None = None
+    if context is not None:
+        cached = context.scratch.get("bash_cwd")
+        if isinstance(cached, str):
+            base = Path(cached)
+        else:
+            runner = getattr(getattr(context, "deps", None), "runner", None)
+            cwd = getattr(runner, "_current_work_dir", None)
+            if cwd is not None:
+                base = Path(cwd)
+    if base is None:
+        base = Path.cwd()
+    return base / path
 
 
 class EditFileTool(ToolPlugin):
@@ -68,7 +89,7 @@ class EditFileTool(ToolPlugin):
         if not isinstance(new_string, str):
             raise ToolError("new_string must be a string", tool_name=self.name)
 
-        path = Path(file_path).expanduser()
+        path = _resolve_path(file_path, context)
         if not path.exists():
             raise ToolError(f"File not found: {file_path}", tool_name=self.name)
         if not path.is_file():

@@ -1,27 +1,28 @@
-"""send_message — async message passing between agents via StateBoard."""
+"""send_message — async message passing between agents via StateBoard Mailbox v2."""
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from openagents.errors.exceptions import PermanentToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-from openagents_orchestration.collaboration import task_id_from_resident_id
+from openagents_orchestration.core.collaboration import (
+    parse_collaboration_message,
+    task_id_from_resident_id,
+)
+from openagents_orchestration.models.message import MessageType, StructuredMessage
 
 
 class SendMessageTool(ToolPlugin):
-    """Send a message to another agent (or all agents).
-
-    The message is stored in the StateBoard and will be delivered to the
-    recipient the next time they are spawned or check their mailbox.
-    """
+    """Send a message to another agent (or all agents) via StateBoard Mailbox v2."""
 
     name = "send_message"
     description = (
         "Send a message to another agent. Use for: requesting help, "
         "sharing findings, asking clarifying questions. The recipient "
-        "will receive this message the next time they run."
+        "will receive this message the next time they check their mailbox."
     )
     durable_idempotent = True
 
@@ -36,7 +37,8 @@ class SendMessageTool(ToolPlugin):
                     "type": "string",
                     "description": (
                         "Target agent ID or task ID. Use 'director' to message "
-                        "the orchestrator. Use '*' to broadcast to all agents."
+                        "the orchestrator. Use '*' to broadcast to all agents. "
+                        "Use 'topic:foo' to publish to a topic."
                     ),
                 },
                 "message": {
@@ -63,31 +65,72 @@ class SendMessageTool(ToolPlugin):
 
         from_agent = getattr(context, "agent_id", "unknown")
 
+        # Detect collaboration signals and emit structured messages
+        collab = parse_collaboration_message(
+            message, default_task_id=task_id_from_resident_id(from_agent)
+        )
+        if collab is not None:
+            msg = StructuredMessage.signal(
+                from_agent,
+                to_agent,
+                collab.signal.value,
+                collab.task_id,
+                text=message,
+                tests_passed=collab.tests_passed,
+            )
+        else:
+            msg = StructuredMessage.from_text(
+                from_agent,
+                to_agent,
+                message,
+                msg_type=MessageType.NOTIFICATION,
+            )
+
+        # Deliver via structured mailbox (v2) FIRST — if channel policy or
+        # back-pressure blocks it, don't deliver to resident either.  This
+        # prevents inconsistent state where the resident thinks it has a
+        # message but the system blocked it.
+        delivered = await board.send_structured(msg)
+        if not delivered:
+            return (
+                f"Message to {to_agent} was blocked by channel policy "
+                f"or mailbox is full."
+            )
+
         # If target is an active resident, deliver directly to its inbox
-        # for real-time collaboration. Otherwise fall back to mailbox.
+        # for real-time collaboration.  The resident processes messages from
+        # its asyncio.Queue, not from the mailbox, so this is the primary
+        # delivery path for active residents.
         resident_delivered = False
         if runner is not None and hasattr(runner, "_residents"):
             resident = runner._residents.get(to_agent)
             if resident is not None and getattr(resident, "_active", False):
-                try:
+                with contextlib.suppress(Exception):
                     resident.send_nowait({
                         "task": "",
                         "content": message,
                         "from": from_agent,
+                        "msg_id": msg.msg_id,
                     })
                     resident_delivered = True
-                except Exception:
-                    resident_delivered = False
+
+        # Ack the mailbox copy when delivered directly so check_messages
+        # won't deliver a duplicate.  Match by msg_id.
+        if resident_delivered:
+            with contextlib.suppress(Exception):
+                await board.ack_message(to_agent, msg.msg_id)
 
         board.log_event(
             "message.sent",
             agent_id=from_agent,
             message=f"to={to_agent}: {message[:200]}",
-            payload={"from": from_agent, "to": to_agent, "content": message, "resident_delivered": resident_delivered},
+            payload={
+                "from": from_agent,
+                "to": to_agent,
+                "content": message,
+                "resident_delivered": resident_delivered,
+            },
         )
-
-        # Always store in mailbox as well for audit / offline retrieval
-        board.send_mail(from_agent, to_agent, message)
 
         # Mirror to Matrix if transport is enabled
         matrix_transport = getattr(deps, "matrix_transport", None)
@@ -109,52 +152,6 @@ class SendMessageTool(ToolPlugin):
                     agent_id=from_agent,
                     message=f"to={to_agent}: {exc}",
                 )
-
-        # If this looks like a task collaboration thread message, also record
-        # it in the conversation thread so the orchestrator can parse state
-        # transitions (TASK_REVIEW_READY / TASK_APPROVED / TASK_FIX_NEEDED).
-        if to_agent != "director" and to_agent != "*":
-            thread_added = False
-            try:
-                thread_id_candidates = []
-                for tid, thread in board.conversation_threads.items():
-                    if from_agent in thread.participants and to_agent in thread.participants:
-                        thread_id_candidates.append(tid)
-                if not thread_id_candidates:
-                    for agent_id in (to_agent, from_agent):
-                        task_id = task_id_from_resident_id(agent_id)
-                        if task_id:
-                            thread_id_candidates.append(f"task-{task_id}")
-                for tid in dict.fromkeys(thread_id_candidates):
-                    thread = board.conversation_threads.get(tid)
-                    if thread is not None:
-                        if from_agent in thread.participants and to_agent in thread.participants:
-                            thread.add_message(from_agent, message, task_id=tid.replace("task-", ""))
-                            thread_added = True
-                            break
-                        else:
-                            board.log_event(
-                                "thread.skip_participants",
-                                agent_id=from_agent,
-                                message=f"tid={tid} participants={list(thread.participants)}",
-                            )
-                    else:
-                        board.log_event(
-                            "thread.skip_missing",
-                            agent_id=from_agent,
-                            message=f"tid={tid} candidates={thread_id_candidates}",
-                        )
-            except Exception as exc:
-                board.log_event(
-                    "thread.add_error",
-                    agent_id=from_agent,
-                    message=f"{exc}",
-                )
-            board.log_event(
-                "thread.add_attempt",
-                agent_id=from_agent,
-                message=f"to={to_agent} added={thread_added}",
-            )
 
         if resident_delivered:
             return f"Message delivered directly to resident {to_agent} and stored in mailbox."

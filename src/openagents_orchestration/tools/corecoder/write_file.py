@@ -14,7 +14,36 @@ from typing import Any
 from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
-from openagents_orchestration.artifact_store import infer_task_id
+
+from openagents_orchestration.store.artifact_store import infer_task_id
+
+
+def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
+    """Resolve a file path relative to the agent's working directory.
+
+    Priority:
+    1. Already absolute → use as-is
+    2. bash_cwd cached in scratch → resolve relative to that
+    3. runner._current_work_dir → resolve relative to that
+    4. Fallback to Path.cwd()
+    """
+    path = Path(file_path)
+    if path.is_absolute():
+        return path
+
+    base: Path | None = None
+    if context is not None:
+        cached = context.scratch.get("bash_cwd")
+        if isinstance(cached, str):
+            base = Path(cached)
+        else:
+            runner = getattr(getattr(context, "deps", None), "runner", None)
+            cwd = getattr(runner, "_current_work_dir", None)
+            if cwd is not None:
+                base = Path(cwd)
+    if base is None:
+        base = Path.cwd()
+    return base / path
 
 
 class WriteFileTool(ToolPlugin):
@@ -56,7 +85,7 @@ class WriteFileTool(ToolPlugin):
         if not isinstance(content, str):
             raise ToolError("content must be a string", tool_name=self.name)
 
-        path = Path(file_path)
+        path = _resolve_path(file_path, context)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         n_lines = content.count("\n") + (0 if content.endswith("\n") or not content else 1)

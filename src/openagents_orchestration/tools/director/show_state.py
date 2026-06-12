@@ -49,9 +49,19 @@ class ShowStateTool(ToolPlugin):
 
         payload = snapshot[section] if section and section in snapshot else snapshot
 
+        # Append DLQ summary so Director can spot stuck messages
+        dlq_summary = await board.inspect_dlq()
+        if dlq_summary:
+            payload["dlq_summary"] = dlq_summary
+
         # Append suggested tools based on current state
         suggested_tools = board.suggest_tools()
         if suggested_tools:
+            payload["suggested_next_tools"] = suggested_tools
+
+        # If there are DLQ messages, suggest check_dlq
+        if dlq_summary and "check_dlq" not in suggested_tools:
+            suggested_tools.insert(0, "check_dlq")
             payload["suggested_next_tools"] = suggested_tools
 
         # Append fallback suggestions for failed tasks

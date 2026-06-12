@@ -1,0 +1,1 @@
+"""Resident agent management tools."""
