@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.state_board import AgentStatus, Budget, StateBoard
+from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
 
 
 class TestStateBoard:
@@ -39,6 +39,7 @@ class TestStateBoard:
         assert len(ready) == 1
         assert ready[0].task_id == "t1"
 
+        board.update_task("t1", status=TaskStatus.RUNNING)
         board.update_task("t1", status=TaskStatus.COMPLETED)
         ready = board.tasks_ready()
         assert len(ready) == 1
@@ -53,6 +54,7 @@ class TestStateBoard:
                 TaskNode("t2", "task 2", "coder", dependencies=["t1"]),
             ],
         ))
+        board.update_task("t1", status=TaskStatus.RUNNING)
         board.update_task("t1", status=TaskStatus.FAILED)
         blocked = board.tasks_blocked()
         assert len(blocked) == 1
@@ -100,22 +102,18 @@ class TestStateBoard:
         assert board.has_actionable()
         assert not board.all_terminal()
 
-    def test_roundtrip_preserves_budget_threads_context_and_residents(self):
+    def test_roundtrip_preserves_budget_context_and_residents(self):
         board = StateBoard("obj", budget=Budget(token_limit=1000, time_limit_s=1800, max_steps=99))
         board.budget.start_time = 123.0
         board.add_error_log("t1", "needs fix")
-        thread = board.get_or_create_thread("task-api-auth", ["coder-api-auth", "reviewer-api-auth"])
-        thread.add_message("coder-api-auth", "TASK_REVIEW_READY[api-auth]: tests passed = 1", task_id="api-auth")
 
-        from openagents_orchestration.resident import ResidentState
+        from openagents_orchestration.core.resident import ResidentState
         board.register_resident(ResidentState(resident_id="coder-api-auth", agent_type="coder", latest_output="done"))
 
         restored = StateBoard.from_dict(board.to_dict(), reset_budget_clock=False)
 
         assert restored.budget.time_limit_s == 1800
         assert restored.budget.start_time == 123.0
-        assert "task-api-auth" in restored.conversation_threads
-        assert restored.conversation_threads["task-api-auth"].messages[0]["content"].startswith("TASK_REVIEW_READY")
         assert restored.get_project_context()["recent_errors"][0]["error"] == "needs fix"
         assert restored.get_resident("coder-api-auth").latest_output == "done"
 
@@ -156,7 +154,9 @@ class TestStateBoard:
             ],
         ))
         assert not board.all_terminal()
+        board.update_task("t1", status=TaskStatus.RUNNING)
         board.update_task("t1", status=TaskStatus.COMPLETED)
+        board.update_task("t2", status=TaskStatus.RUNNING)
         board.update_task("t2", status=TaskStatus.FAILED)
         assert board.all_terminal()
 
@@ -166,6 +166,7 @@ class TestStateBoard:
             objective="obj",
             tasks=[TaskNode("t1", "task 1", "coder")],
         ))
+        board.update_task("t1", status=TaskStatus.RUNNING)
         board.update_task("t1", status=TaskStatus.COMPLETED, result_output="done")
         report = board.to_report()
         assert report.objective == "obj"

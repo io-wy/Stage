@@ -16,12 +16,24 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+from openagents_orchestration.models.message import StructuredMessage
+
 
 class AgentLifecycle(StrEnum):
-    """Four-state lifecycle for resident agents."""
+    """Five-state lifecycle for resident agents.
+
+    States:
+    - idle:     waiting for messages
+    - busy:     processing a message
+    - updating: configuration reload / hot update in progress
+    - error:    last message processing failed
+    - sleeping: paused, not consuming messages
+    - stopped:  terminated
+    """
 
     IDLE = "idle"
     BUSY = "busy"
+    UPDATING = "updating"
     ERROR = "error"
     STOPPED = "stopped"
     SLEEPING = "sleeping"
@@ -33,7 +45,7 @@ class ResidentState:
 
     resident_id: str
     agent_type: str
-    status: str = AgentLifecycle.IDLE  # idle | busy | error | stopped | sleeping
+    status: str = AgentLifecycle.IDLE  # idle | busy | updating | error | stopped | sleeping
     latest_output: str = ""
     latest_task: str = ""
     token_used: int = 0
@@ -76,6 +88,7 @@ class ResidentAgent:
         max_idle_s: float = 300.0,
         persist_dir: Path | None = None,
         run_budget: Any | None = None,
+        max_consecutive_errors: int = 3,
     ):
         self.resident_id = resident_id
         self.agent_type = agent_type
@@ -83,6 +96,8 @@ class ResidentAgent:
         self._board = board
         self._max_idle_s = max_idle_s
         self._run_budget = run_budget
+        self._max_consecutive_errors = max_consecutive_errors
+        self._consecutive_errors = 0
         self._inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._task: asyncio.Task[Any] | None = None
         self._active = False
@@ -307,6 +322,7 @@ class ResidentAgent:
 
             try:
                 result = await self._process_message(msg)
+                self._consecutive_errors = 0  # Reset on success
                 self._state.latest_output = result[:500]
                 self._state.status = AgentLifecycle.IDLE
                 self._state.last_active = time.time()
@@ -318,6 +334,7 @@ class ResidentAgent:
                 )
             except Exception as exc:
                 self._state.error_count += 1
+                self._consecutive_errors += 1
                 self._state.status = AgentLifecycle.ERROR
                 self._board.update_resident(
                     self.resident_id,
@@ -334,6 +351,18 @@ class ResidentAgent:
                     to=msg.get("from", "director"),
                     content=f"[Error processing your request: {exc}]",
                 )
+                # Circuit breaker: auto-stop on consecutive errors
+                if self._consecutive_errors >= self._max_consecutive_errors:
+                    self._board.log_event(
+                        "resident.circuit_breaker",
+                        agent_id=self.resident_id,
+                        message=f"Auto-stopping after {self._consecutive_errors} consecutive errors",
+                    )
+                    self._active = False
+                    self._sleeping = False
+                    self._state.status = AgentLifecycle.STOPPED
+                    self._board.update_resident(self.resident_id, status=AgentLifecycle.STOPPED)
+                    break
 
     async def _process_message(self, msg: dict[str, Any]) -> str:
         """Run one-shot CoreCoderPattern for a single message.
@@ -435,8 +464,19 @@ class ResidentAgent:
         return "\n".join(parts)
 
     async def _send_reply(self, *, to: str, content: str) -> None:
-        """Send reply back via StateBoard mailbox."""
-        self._board.send_mail(self.resident_id, to, content[:2000])
+        """Send reply back via StateBoard structured mailbox as a SIGNAL.
+
+        This ensures collaboration-message parsing picks it up on the receiver
+        side and the resident doesn't lose it in a text-only notification.
+        """
+        msg = StructuredMessage.signal(
+            self.resident_id,
+            to,
+            signal_type="reply",
+            task_id=self._bound_task_id or "",
+            text=content[:2000],
+        )
+        await self._board.send_structured(msg)
         self._board.log_event(
             "resident.replied",
             agent_id=self.resident_id,

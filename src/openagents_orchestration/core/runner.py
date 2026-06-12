@@ -10,7 +10,9 @@ Extends CoreCoderLocalRunner patterns to support:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import os
 import sys
 import time
 import uuid
@@ -33,27 +35,46 @@ from openagents.plugins.builtin.events.async_event_bus import AsyncEventBus
 from openagents.plugins.loader import LoadedAgentPlugins, load_agent_plugins
 from pydantic import BaseModel, Field
 
-from openagents_orchestration.artifact_store import ArtifactStore, LocalArtifactStore
-from openagents_orchestration.matrix_transport import MatrixConfig, MatrixTransport, MatrixClient
-from openagents_orchestration.sub_state_board import SubStateBoard
-from openagents_orchestration.collaboration import (
+from openagents_orchestration.store.artifact_store import ArtifactStore, LocalArtifactStore
+from openagents_orchestration.core.collaboration import (
     CollaborationSignal,
-    parse_collaboration_message,
+    collaboration_message_from_structured,
+)
+from openagents_orchestration.core.collaboration_state_machine import (
+    CollaborationAction,
+    CollaborationDecision,
+    CollaborationStateMachine,
+)
+from openagents_orchestration.core.collaboration_executor import (
+    CollaborationDecisionExecutor,
+)
+from openagents_orchestration.core.resident_prompts import (
+    coder_initial_prompt,
+    coder_fix_prompt,
+    reviewer_initial_prompt,
 )
 from openagents_orchestration.intent_classifier import IntentClassifier, IntentResult
+from openagents_orchestration.transport.matrix_transport import (
+    MatrixClient,
+    MatrixConfig,
+    MatrixTransport,
+)
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.persistence import (
     EventRecorder,
     SessionResumer,
     StateSnapshotter,
 )
+from openagents_orchestration.enterprise.project import Project
 from openagents_orchestration.reporting import (
     build_verification_report,
     summarize_agent_run,
     summarize_board,
 )
-from openagents_orchestration.resident import ResidentAgent
-from openagents_orchestration.state_board import Budget, StateBoard
+from openagents_orchestration.core.resident import ResidentAgent
+from openagents_orchestration.core.decision_history import DecisionRecord
+from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
+from openagents_orchestration.core.sub_state_board import SubStateBoard
 from openagents_orchestration.utils.runtime_compat import (
     apply_sdk_patches,
     extract_result_error_message,
@@ -94,7 +115,9 @@ class _AgentBundle:
 
 @dataclass
 class _SessionStore:
-    """In-memory session store."""
+    """In-memory session store with bounded transcript retention."""
+
+    MAX_MESSAGES = 2000  # prevent unbounded transcript growth
 
     _messages: dict[str, list[dict[str, Any]]] = None
     _artifacts: dict[str, list[Any]] = None
@@ -110,6 +133,13 @@ class _SessionStore:
         return list(self._artifacts.get(session_id, []))
 
     def save(self, session_id: str, *, messages: list[dict[str, Any]], artifacts: list[Any]) -> None:
+        # Keep only the most recent messages to prevent unbounded growth
+        if len(messages) > self.MAX_MESSAGES:
+            # Preserve system/user messages from the start for context,
+            # keep the most recent turns for continuity
+            system_msgs = [m for m in messages if m.get("role") == "system"]
+            tail = messages[-(self.MAX_MESSAGES - len(system_msgs)):]
+            messages = system_msgs + tail
         self._messages[session_id] = list(messages)
         self._artifacts[session_id] = list(artifacts)
 
@@ -139,10 +169,17 @@ class OrchestratorRunner:
         *,
         persist_dir: str | None = None,
         collaborative_mode: str = "auto",
+        enable_monitor_resident: bool = True,
+        max_concurrent_spawns: int = 3,
+        max_concurrent_residents: int = 2,
+        resident_stuck_threshold_s: float = 120.0,
     ):
         if collaborative_mode not in {"auto", "on", "off"}:
             raise ValueError("collaborative_mode must be one of: auto, on, off")
         self._collaborative_mode = collaborative_mode
+        self._max_concurrent_spawns = max_concurrent_spawns
+        self._max_concurrent_residents = max_concurrent_residents
+        self._resident_stuck_threshold_s = resident_stuck_threshold_s
         self._config_path = Path(config_path)
         self._config = load_config(self._config_path)
         self._agents_by_id = {a.id: a for a in self._config.agents}
@@ -156,9 +193,12 @@ class OrchestratorRunner:
         else:
             self._event_bus = AsyncEventBus()
         self._state_board: StateBoard | None = None
+        self._project: Project | None = None
         self._deps: RunnerDeps | None = None
-        self._spawn_sem = asyncio.Semaphore(3)
+        self._spawn_sem = asyncio.Semaphore(max_concurrent_spawns)
         self._monitor_resident_id: str | None = None
+        self._enable_monitor_resident = enable_monitor_resident
+        self._collab_wake_event = asyncio.Event()  # signals collaboration loop to wake
         # Persistence layer
         self._persist_dir = Path(persist_dir) if persist_dir else None
         self._session_id: str | None = None
@@ -172,10 +212,29 @@ class OrchestratorRunner:
     def state_board(self) -> StateBoard | None:
         return self._state_board
 
+    @property
+    def project(self) -> Project | None:
+        return self._project
+
+    def _create_project(
+        self,
+        objective: str,
+        budget: Budget | None = None,
+        *,
+        work_dir: Path | None = None,
+    ) -> Project:
+        """Create the default Project for this runner."""
+        project = Project(
+            objective=objective,
+            budget=budget,
+            work_dir=work_dir,
+        )
+        self._project = project
+        self._state_board = project.state_board
+        return project
+
     async def _init_matrix_transport(self) -> MatrixTransport | None:
         """Initialize Matrix transport from environment if configured."""
-        import os
-
         homeserver = os.environ.get("MATRIX_HOMESERVER", "").strip()
         user_id = os.environ.get("MATRIX_USER_ID", "").strip()
         access_token = os.environ.get("MATRIX_ACCESS_TOKEN", "").strip()
@@ -186,8 +245,8 @@ class OrchestratorRunner:
             user_id=user_id,
             access_token=access_token,
         )
+        client = MatrixClient(config)
         try:
-            client = MatrixClient(config)
             # Verify connection with a quick sync
             await client.sync(timeout_ms=1000)
             print(
@@ -197,11 +256,16 @@ class OrchestratorRunner:
             )
             return MatrixTransport(client)
         except Exception as exc:
+            # Degrade gracefully: log and close partial connection
             print(
-                f"[Orchestrator] Matrix transport init failed: {exc}",
+                f"[Orchestrator] Matrix transport init failed: {exc}; continuing without Matrix.",
                 file=sys.stderr,
                 flush=True,
             )
+            try:
+                await client.close()
+            except Exception:
+                pass
             return None
 
     # -- public API ----------------------------------------------------------
@@ -264,13 +328,31 @@ class OrchestratorRunner:
                         file=sys.stderr,
                         flush=True,
                     )
-                    self._state_board = StateBoard.from_dict(
-                        loaded.snapshot,
-                        recorder=self._recorder,
-                        snapshotter=self._snapshotter,
-                    )
+                    # Detect snapshot format: new Project format has "state_board" key
+                    if "state_board" in loaded.snapshot:
+                        project = Project.from_dict(loaded.snapshot)
+                    else:
+                        # Legacy StateBoard snapshot: wrap into a default Project
+                        state_board = StateBoard.from_dict(
+                            loaded.snapshot,
+                            recorder=self._recorder,
+                            snapshotter=self._snapshotter,
+                            mailbox_backend=os.environ.get("MAILBOX_BACKEND", "memory"),
+                            redis_url=os.environ.get("REDIS_URL"),
+                        )
+                        project = Project(
+                            objective=state_board.objective,
+                            budget=state_board.budget,
+                            state_board=state_board,
+                        )
+                    self._project = project
+                    self._state_board = project.state_board
+                    # Re-attach persistence hooks
+                    if self._state_board is not None:
+                        self._state_board._recorder = self._recorder
+                        self._state_board._snapshotter = self._snapshotter
                     # Replay events after snapshot
-                    if loaded.events_after:
+                    if loaded.events_after and self._state_board is not None:
                         from openagents_orchestration.persistence import EventReplayer
                         EventReplayer().replay(self._state_board, loaded.events_after)
                         print(
@@ -301,18 +383,23 @@ class OrchestratorRunner:
             task_graph = await self._initial_decompose(objective)
             print(f"[Orchestrator] Decomposed into {len(task_graph.tasks)} task(s)", file=sys.stderr, flush=True)
 
-            # 3. StateBoard (with persistence hooks)
-            self._state_board = StateBoard(
-                objective=objective,
-                budget=budget or Budget(
-                    token_limit=500_000,
-                    time_limit_s=1800.0,
-                    max_steps=100,
-                ),
-                recorder=self._recorder,
-                snapshotter=self._snapshotter,
+            # 3. Project + StateBoard (with persistence hooks + mailbox backend)
+            project_budget = budget or Budget(
+                token_limit=500_000,
+                time_limit_s=1800.0,
+                max_steps=100,
             )
-            self._state_board.add_tasks(task_graph)
+            project = self._create_project(
+                objective=objective,
+                budget=project_budget,
+                work_dir=self._current_work_dir,
+            )
+            # Wire persistence hooks into the project's StateBoard
+            project.state_board._recorder = self._recorder
+            project.state_board._snapshotter = self._snapshotter
+            await project.state_board.validate_redis()
+            project.state_board.add_tasks(task_graph)
+            project.start()
 
             return await self._continue_run(objective, intent=intent)
 
@@ -343,7 +430,14 @@ class OrchestratorRunner:
             matrix_transport=matrix_transport,
         )
 
-        # 4. Choose execution mode based on task characteristics
+        # 4. Wire collaboration wake hook into StateBoard's mail-sent path.
+        # Without this, the collaboration loop relies solely on 30s polling
+        # timeouts because resident _send_reply (via send_structured) doesn't
+        # wake the loop.
+        if self._state_board is not None:
+            self._state_board.on_mail_sent(lambda: self._collab_wake_event.set())
+
+        # 5. Choose execution mode based on task characteristics
         # Collaborative mode: resident agents work together iteratively
         # Director mode: Director makes every decision (fallback)
         use_collaborative = self._should_use_collaborative_mode()
@@ -463,14 +557,9 @@ class OrchestratorRunner:
     async def _run_collaborative(self) -> None:
         """Collaborative orchestration: resident agents work directly together.
 
-        Flow:
-        1. For each ready task, spawn a resident Coder bound to the task
-        2. Coder writes code and runs tests (self-verify)
-        3. When Coder marks task REVIEW, spawn a resident Reviewer
-        4. Reviewer inspects code via thread messages, gives feedback
-        5. If Reviewer approves → task COMPLETED
-        6. If Reviewer finds issues → task FIX_NEEDED → Coder fixes
-        7. Director is only woken up on exceptions or budget issues
+        Event-driven: uses ``_collab_wake_event`` instead of polling sleeps.
+        The wake event is set whenever a collaboration signal changes task state,
+        so the loop reacts immediately instead of burning polling cycles.
         """
         import sys
 
@@ -500,8 +589,13 @@ class OrchestratorRunner:
             if not ready_tasks and not review_tasks and not fix_tasks:
                 if self._state_board.all_terminal():
                     break
-                # Wait a bit for residents to finish current work
-                await asyncio.sleep(2)
+                # Wait for a signal to arrive (event-driven) with a fallback
+                # timeout of 30s to guard against missed events
+                self._collab_wake_event.clear()
+                try:
+                    await asyncio.wait_for(self._collab_wake_event.wait(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    pass  # fallback: re-enter loop to check for stuck tasks
                 continue
 
             # 1. Spawn resident coders for ready tasks
@@ -527,15 +621,24 @@ class OrchestratorRunner:
 
                     await resident.send({
                         "task": f"Fix task {task.task_id}",
-                        "content": f"Reviewer feedback:\n{feedback}\n\nPlease fix the issues and run tests again.",
+                        "content": coder_fix_prompt(
+                            task_id=task.task_id,
+                            description=task.description,
+                            feedback=feedback,
+                            iteration_history_json=json.dumps(task.iteration_history[-3:], ensure_ascii=False),
+                        ),
                         "from": "reviewer",
                         "context": f"Task: {task.description}\nHistory: {json.dumps(task.iteration_history[-3:], ensure_ascii=False)}",
                     })
                     self._state_board.update_task(task.task_id, status=TaskStatus.RUNNING)
                     task.record_iteration(task.assigned_agent, "fix_requested", feedback)
 
-            # Wait for residents to process
-            await asyncio.sleep(3)
+            # Event-driven: wait for next signal arrival with a short fallback
+            self._collab_wake_event.clear()
+            try:
+                await asyncio.wait_for(self._collab_wake_event.wait(), timeout=10.0)
+            except asyncio.TimeoutError:
+                pass  # re-enter loop to check resident health
 
             # Check for stuck/broken residents
             await self._check_resident_health()
@@ -543,98 +646,90 @@ class OrchestratorRunner:
         print("[Orchestrator] Collaborative loop ended.", file=sys.stderr, flush=True)
 
     async def _process_collaborative_messages(self) -> None:
-        """Read conversation thread messages to advance tasks."""
+        """Claim structured SIGNAL messages from mailboxes to advance tasks.
+
+        The state machine is driven exclusively by Mailbox v2 SIGNAL messages.
+        """
         if self._state_board is None:
             return
 
-        all_threads = list(self._state_board.conversation_threads.keys())
         self._state_board.log_event(
             "collab.process_messages",
-            message=f"threads={all_threads} tasks={[(t.task_id, t.status.value) for t in self._state_board.tasks.values()]}",
+            message=f"tasks={[(t.task_id, t.status.value) for t in self._state_board.tasks.values()]}",
         )
 
         for task in list(self._state_board.tasks.values()):
-            task_id = task.task_id
-            thread_id = f"task-{task_id}"
-            thread = self._state_board.conversation_threads.get(thread_id)
-            if thread is None:
-                self._state_board.log_event(
-                    "collab.no_thread",
-                    task_id=task_id,
-                    message=f"No thread for {thread_id}",
-                )
-                continue
-            self._state_board.log_event(
-                "collab.thread_check",
-                task_id=task_id,
-                message=f"thread={thread_id} msgs={len(thread.messages)} participants={list(thread.participants)}",
-            )
+            await self._process_signals_from_mailbox(task)
 
-            # Check the latest messages in the thread
-            for msg in thread.messages:
-                if msg.get("_processed"):
-                    continue
-                content = (msg.get("content") or "").strip()
-                if not content:
-                    continue
-                from_id = msg.get("from", "")
-                parsed = parse_collaboration_message(content, default_task_id=task_id)
+    async def _process_signals_from_mailbox(self, task: Any) -> None:
+        """Claim structured SIGNAL messages from task agents' mailboxes.
+
+        Uses peek→targeted peek approach: scans for SIGNAL messages without
+        touching non-signal messages, then claims each signal individually.
+        Non-signal messages stay in the queue for the agent's own check_messages.
+        """
+        if self._state_board is None:
+            return
+
+        task_id = task.task_id
+        agents_to_check: list[str] = []
+        if task.assigned_agent:
+            agents_to_check.append(task.assigned_agent)
+        # Also check any reviewer resident associated with this task
+        reviewer_id = f"reviewer-{task_id}"
+        if reviewer_id in self._residents:
+            agents_to_check.append(reviewer_id)
+
+        for agent_id in agents_to_check:
+            # Peek for SIGNAL messages only — don't touch non-signal messages
+            signal_msgs = await self._state_board.peek_mailbox(
+                agent_id, limit=10, msg_type="signal",
+            )
+            if not signal_msgs:
+                continue
+
+            for signal_msg in signal_msgs:
+                parsed = collaboration_message_from_structured(signal_msg)
                 if parsed is None or parsed.task_id != task_id:
                     continue
+                # Claim the exact signal by msg_id.  This avoids popping non-signal
+                # messages that may be ahead of the signal in the priority queue.
+                claimed = await self._state_board.claim_message(agent_id, signal_msg.msg_id)
+                if claimed is not None:
+                    await self._apply_collaboration_signal(task, agent_id, parsed, claimed.text or "")
+                    await self._state_board.ack_message(agent_id, claimed.msg_id)
 
-                # Coder signals ready for review
-                if (
-                    task.status == TaskStatus.RUNNING
-                    and from_id == task.assigned_agent
-                    and parsed.signal == CollaborationSignal.REVIEW_READY
-                ):
-                    self._state_board.update_task(task_id, status=TaskStatus.REVIEW)
-                    task.record_iteration(from_id, "coder_ready_for_review", content)
-                    self._state_board.add_test_report(
-                        module=task_id,
-                        result=content,
-                        passed=parsed.tests_passed,
-                        failed=0,
-                    )
-                    msg["_processed"] = True
+    async def _apply_collaboration_signal(
+        self,
+        task: Any,
+        from_id: str,
+        parsed: Any,
+        content: str,
+    ) -> bool:
+        """Apply a parsed collaboration signal to a task. Returns True if handled.
 
-                # Reviewer signals approval
-                elif (
-                    task.status == TaskStatus.REVIEW
-                    and from_id.startswith("reviewer-")
-                    and parsed.signal == CollaborationSignal.APPROVED
-                ):
-                    self._state_board.update_task(task_id, status=TaskStatus.COMPLETED)
-                    task.record_iteration(from_id, "reviewer_approved", content)
-                    # Stop both residents
-                    coder = self._residents.get(task.assigned_agent)
-                    reviewer = self._residents.get(from_id)
-                    if coder is not None:
-                        await coder.stop()
-                        self._residents.pop(coder.resident_id, None)
-                    if reviewer is not None:
-                        await reviewer.stop()
-                        self._residents.pop(reviewer.resident_id, None)
-                    task.assigned_agent = ""
-                    msg["_processed"] = True
+        Delegates decision logic to CollaborationStateMachine and side-effect
+        execution to CollaborationDecisionExecutor — both independently testable.
+        """
+        csm = CollaborationStateMachine(
+            max_iterations=getattr(task, "max_iterations", 5) or 5
+        )
+        decision = csm.decide(
+            task=task,
+            signal=parsed.signal,
+            from_id=from_id,
+            content=content,
+            tests_passed=parsed.tests_passed,
+        )
 
-                # Reviewer requests fix
-                elif (
-                    task.status == TaskStatus.REVIEW
-                    and from_id.startswith("reviewer-")
-                    and parsed.signal == CollaborationSignal.FIX_NEEDED
-                ):
-                    self._state_board.update_task(task_id, status=TaskStatus.FIX_NEEDED)
-                    task.record_iteration(from_id, "reviewer_requested_fix", content)
-                    self._state_board.add_error_log(
-                        source=task_id,
-                        error=content,
-                    )
-                    # Sleep reviewer until coder fixes (preserve context)
-                    reviewer = self._residents.get(from_id)
-                    if reviewer is not None:
-                        await reviewer.sleep(reason="waiting for coder fix")
-                    msg["_processed"] = True
+        if decision.action == CollaborationAction.NONE:
+            return False
+
+        executor = CollaborationDecisionExecutor(self._state_board, self._residents)
+        handled = await executor.execute(decision, task, from_id, content)
+        if handled:
+            self._collab_wake_event.set()  # wake the collaboration loop immediately
+        return handled
 
     async def _spawn_resident_for_task(self, task: Any, agent_type: str) -> ResidentAgent | None:
         """Spawn a resident agent bound to a specific task."""
@@ -692,25 +787,15 @@ class OrchestratorRunner:
                 thread_id = f"task-{task.task_id}"
                 initial_msg = {
                     "task": task.description,
-                    "content": (
-                        f"You are assigned to task {task.task_id}.\n\n"
-                        f"Description: {task.description}\n"
-                        f"Expected artifacts: {', '.join(task.expected_artifacts)}\n\n"
-                        f"CRITICAL RULES:\n"
-                        f"- If the target directory does not exist, CREATE it first using `bash` (mkdir -p).\n"
-                        f"- Do NOT look for existing code elsewhere. Implement from scratch in the specified work directory.\n"
-                        f"- Run tests with `pytest` after EVERY code change.\n"
-                        f"- If tests fail, READ the error output and FIX the code. Keep iterating until tests pass.\n"
-                        f"- ONLY when ALL tests pass, use send_message with EXACTLY to_agent='{reviewer_id}' and message starting with:\n"
-                        f"   'TASK_REVIEW_READY[{task.task_id}]: tests passed = N'\n"
-                        f"- NEVER send completion messages to 'director'. Always send to '{reviewer_id}'.\n\n"
-                        f"Do not declare the task complete until tests pass and the reviewer approves."
+                    "content": coder_initial_prompt(
+                        task_id=task.task_id,
+                        description=task.description,
+                        expected_artifacts=task.expected_artifacts,
+                        reviewer_id=reviewer_id,
                     ),
                     "from": "director",
                     "context": task.input_context,
                 }
-                # Ensure thread exists for this task
-                self._state_board.get_or_create_thread(thread_id, [resident_id, reviewer_id])
                 self._state_board.update_task(task.task_id, status=TaskStatus.RUNNING)
                 task.record_iteration(resident_id, "spawned_coder", task.description)
 
@@ -722,27 +807,16 @@ class OrchestratorRunner:
                 thread_id = f"task-{task.task_id}"
                 initial_msg = {
                     "task": f"Review task {task.task_id}",
-                    "content": (
-                        f"Please review the implementation of task {task.task_id}.\n\n"
-                        f"Description: {task.description}\n\n"
-                        f"CRITICAL: You must use `send_message` to communicate directly with the coder.\n"
-                        f"Do NOT just return a report.\n\n"
-                        f"If you APPROVE, send_message with EXACTLY to_agent='{coder_id}' and message starting with:\n"
-                        f"  'TASK_APPROVED[{task.task_id}]: LGTM'\n\n"
-                        f"If you find issues, send_message with EXACTLY to_agent='{coder_id}' and message starting with:\n"
-                        f"  'TASK_FIX_NEEDED[{task.task_id}]: ' followed by specific file/line and fix instructions.\n\n"
-                        f"Instructions:\n"
-                        f"1. Read the code files produced by the coder\n"
-                        f"2. Check for correctness, style, and edge cases\n"
-                        f"3. Run tests to verify (pytest ...)\n"
-                        f"4. Use send_message(to_agent='{coder_id}', message='TASK_APPROVED[...]: ...') to approve\n"
-                        f"5. Use send_message(to_agent='{coder_id}', message='TASK_FIX_NEEDED[...]: ...') for issues\n"
+                    "content": reviewer_initial_prompt(
+                        task_id=task.task_id,
+                        description=task.description,
+                        coder_id=coder_id,
+                        thread_id=thread_id,
+                        iteration_history=json.dumps(task.iteration_history, ensure_ascii=False),
                     ),
                     "from": "director",
                     "context": f"Coder: {coder_id}\nThread: {thread_id}\nHistory: {json.dumps(task.iteration_history, ensure_ascii=False)}",
                 }
-                # Ensure thread exists so messages route correctly
-                self._state_board.get_or_create_thread(thread_id, [coder_id, resident_id])
                 task.record_iteration(resident_id, "spawned_reviewer", "")
 
             await resident.send(initial_msg)
@@ -764,7 +838,7 @@ class OrchestratorRunner:
         if self._state_board is None:
             return
 
-        stuck_threshold_s = 120.0  # 2 minutes without activity = stuck
+        stuck_threshold_s = self._resident_stuck_threshold_s
         now = time.time()
 
         for resident_id, resident in list(self._residents.items()):
@@ -848,6 +922,8 @@ class OrchestratorRunner:
         """Spawn the monitor resident agent for continuous monitoring."""
         if self._state_board is None:
             return
+        if not self._enable_monitor_resident:
+            return
         try:
             if "monitor" not in self._agents_by_id:
                 print("[Orchestrator] Monitor agent not configured, skipping.", file=sys.stderr, flush=True)
@@ -881,6 +957,13 @@ class OrchestratorRunner:
         """
         import sys
         agent_id = agent_id or f"{agent_type}-{uuid.uuid4().hex[:6]}"
+
+        # Start a trace for this agent run
+        task_id = agent_id.replace(f"{agent_type}-", "", 1) if agent_id.startswith(f"{agent_type}-") else agent_id
+        if self._state_board is not None:
+            parent_trace = self._state_board.get_trace(task_id)
+            self._state_board.start_trace(agent_id, parent=parent_trace)
+
         print(
             f"[Orchestrator] Spawning {agent_type} ({agent_id})...",
             file=sys.stderr,
@@ -908,13 +991,11 @@ class OrchestratorRunner:
                 # Create Leader Room on Matrix if transport is enabled
                 mx = getattr(deps_override, "matrix_transport", None)
                 if mx is not None and mx.enabled:
-                    try:
+                    with contextlib.suppress(Exception):
                         await mx.create_room(
                             name=f"leader-{task_id}",
                             invite=[],
                         )
-                    except Exception:
-                        pass
 
         async with self._spawn_sem:
             result = await self._run_single(agent_id, agent_type, input_text, deps_override=deps_override)
@@ -932,7 +1013,61 @@ class OrchestratorRunner:
         if result.stop_reason == StopReason.FAILED:
             msg = extract_result_error_message(result)
             print(f"[Orchestrator] {agent_type} ({agent_id}) FAILED: {msg}", file=sys.stderr, flush=True)
+            # Record failed decision for Director's feedback loop
+            if self._state_board is not None:
+                task_id = self._task_id_from_agent_id(agent_type, agent_id)
+                self._state_board.decision_history.record(DecisionRecord(
+                    decision_type="spawn_agent",
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    agent_type=agent_type,
+                    reasoning=f"Spawned {agent_type} for task {task_id}",
+                    outcome="failed",
+                    error=msg[:300],
+                    token_spent=tokens,
+                    steps_used=int(steps) if isinstance(steps, int) else 0,
+                ))
             raise RuntimeError(msg)
+
+        # Step budget exhausted — treat as failure so the director can retry/replan.
+        if result.stop_reason == StopReason.MAX_STEPS:
+            if self._state_board is not None:
+                self._state_board.update_agent(
+                    agent_id,
+                    status=AgentStatus.FAILED,
+                    end_time=time.time(),
+                )
+                task_id = agent_id.replace(f"{agent_type}-", "", 1) if agent_id.startswith(f"{agent_type}-") else agent_id
+                task = self._state_board.get_task(task_id)
+                if task is not None and not task.is_terminal():
+                    self._state_board.update_task(
+                        task_id,
+                        status=TaskStatus.FAILED,
+                        error=(
+                            f"Agent step budget exhausted "
+                            f"({result.metadata.get('steps_used', '?')} steps)"
+                        ),
+                    )
+            print(
+                f"[Orchestrator] {agent_type} ({agent_id}) MAX_STEPS: step budget exhausted",
+                file=sys.stderr,
+                flush=True,
+            )
+            # Record decision outcome for Director's feedback loop
+            if self._state_board is not None:
+                task_id = self._task_id_from_agent_id(agent_type, agent_id)
+                self._state_board.decision_history.record(DecisionRecord(
+                    decision_type="spawn_agent",
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    agent_type=agent_type,
+                    reasoning=f"Spawned {agent_type} for task {task_id}",
+                    outcome="failed",
+                    error="step budget exhausted",
+                    token_spent=tokens,
+                    steps_used=int(steps) if isinstance(steps, int) else 0,
+                ))
+            return str(result.final_output or "")
 
         # Mark task as completed on success
         if self._state_board is not None:
@@ -983,6 +1118,22 @@ class OrchestratorRunner:
             flush=True,
         )
 
+        # Record decision outcome for Director's feedback loop
+        if self._state_board is not None:
+            task_id = self._task_id_from_agent_id(agent_type, agent_id)
+            artifact_paths = [getattr(a, "path", str(a)) for a in (result.artifacts or [])]
+            self._state_board.decision_history.record(DecisionRecord(
+                decision_type="spawn_agent",
+                task_id=task_id,
+                agent_id=agent_id,
+                agent_type=agent_type,
+                reasoning=f"Spawned {agent_type} for task {task_id}",
+                outcome="completed",
+                artifacts_produced=artifact_paths,
+                token_spent=tokens,
+                steps_used=int(steps) if isinstance(steps, int) else 0,
+            ))
+
         return str(result.final_output or "")
 
     # -- resident agents -----------------------------------------------------
@@ -996,17 +1147,20 @@ class OrchestratorRunner:
         if self._state_board is None:
             raise RuntimeError("StateBoard not initialized")
         # Limit concurrent residents to prevent token explosion
-        MAX_CONCURRENT_RESIDENTS = 2
         active_residents = sum(
             1 for r in self._residents.values()
             if r.state.status in ("idle", "busy")
         )
-        if active_residents >= MAX_CONCURRENT_RESIDENTS:
+        if active_residents >= self._max_concurrent_residents:
             raise RuntimeError(
-                f"Max concurrent residents ({MAX_CONCURRENT_RESIDENTS}) reached. "
+                f"Max concurrent residents ({self._max_concurrent_residents}) reached. "
                 f"Stop an existing resident before starting a new one."
             )
         resident_id = f"{agent_type}-resident-{uuid.uuid4().hex[:6]}"
+
+        # Start a trace for this resident
+        self._state_board.start_trace(resident_id)
+
         persist_dir = self._session_dir if self._session_dir is not None else None
         resident = ResidentAgent(
             resident_id=resident_id,
@@ -1355,6 +1509,11 @@ class OrchestratorRunner:
 
         ctx.state["final_output"] = str(final_output or "").strip()
 
+        # Detect step budget exhaustion signalled by the pattern.
+        stop_reason = StopReason.COMPLETED
+        if ctx.state.get("__step_budget_exhausted__"):
+            stop_reason = StopReason.MAX_STEPS
+
         # Memory writeback
         if memory is not None:
             try:
@@ -1401,7 +1560,7 @@ class OrchestratorRunner:
         result = RunResult(
             run_id=request.run_id,
             final_output=str(final_output or ""),
-            stop_reason=StopReason.COMPLETED,
+            stop_reason=stop_reason,
             usage=usage,
             artifacts=list(ctx.artifacts),
             metadata={
@@ -1461,14 +1620,26 @@ class OrchestratorRunner:
             if getattr(original_invoke, "__oa_thread_wrapped__", False):
                 continue
 
-            async def _wrapped(self, params, context, _orig=original_invoke):
-                def _sync_runner():
-                    return asyncio.run(_orig(params, context))
+            wrapped = OrchestratorRunner._make_thread_safe_invoke(original_invoke)
+            tool.invoke = types.MethodType(wrapped, tool)
 
-                return await asyncio.to_thread(_sync_runner)
+    @staticmethod
+    def _make_thread_safe_invoke(original_invoke: Any) -> Any:
+        """Factory: return an async invoke that runs the original in a thread.
 
-            _wrapped.__oa_thread_wrapped__ = True  # type: ignore[attr-defined]
-            tool.invoke = types.MethodType(_wrapped, tool)
+        Named function (not closure) for readability and testability.
+        The original_invoke is captured via default argument to avoid the
+        classic Python closure-over-loop-variable pitfall.
+        """
+
+        async def _thread_safe_invoke(self, params: Any, ctx: Any, _orig: Any = original_invoke) -> Any:
+            def _sync_runner():
+                return asyncio.run(_orig(params, ctx))
+
+            return await asyncio.to_thread(_sync_runner)
+
+        _thread_safe_invoke.__oa_thread_wrapped__ = True  # type: ignore[attr-defined]
+        return _thread_safe_invoke
 
     def _default_budget(self, agent: Any) -> RunBudget:
         return RunBudget(

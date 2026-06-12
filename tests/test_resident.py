@@ -7,8 +7,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openagents_orchestration.resident import ResidentAgent, ResidentState
-from openagents_orchestration.state_board import StateBoard
+from openagents_orchestration.core.resident import ResidentAgent, ResidentState
+from openagents_orchestration.core.state_board import StateBoard
 
 
 class MockRunner:
@@ -103,11 +103,12 @@ class TestResidentAgent:
         assert runner.calls[0]["resident_id"] == "coder-r1"
         assert "hello.py" in runner.calls[0]["input_text"]
 
-        # Verify reply was sent
-        assert len(board._pending_messages) >= 1
-        reply = board._pending_messages[-1]
-        assert reply["from"] == "coder-r1"
-        assert reply["to"] == "director"
+        # Verify reply was sent via Mailbox v2
+        replies = await board.claim_messages("director")
+        assert len(replies) >= 1
+        reply = replies[-1]
+        assert reply.header.sender == "coder-r1"
+        assert reply.header.recipient == "director"
 
     @pytest.mark.asyncio
     async def test_idle_timeout(self):
@@ -173,8 +174,9 @@ class TestResidentAgent:
         # Error should be recorded
         assert board.residents["coder-r1"].error_count == 1
         assert board.residents["coder-r1"].status == "stopped"
-        # Error reply should be sent
-        assert len(board._pending_messages) >= 1
+        # Error reply should be sent via Mailbox v2
+        replies = await board.claim_messages("director")
+        assert len(replies) >= 1
 
 
 class TestStateBoardResidents:

@@ -9,8 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openagents_orchestration.state_board import Budget, StateBoard
-from openagents_orchestration.models.task import TaskGraph
+from openagents_orchestration.core.state_board import Budget, StateBoard
 
 
 class SubStateBoard(StateBoard):

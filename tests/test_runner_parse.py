@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.runner import OrchestratorRunner
-from openagents_orchestration.state_board import StateBoard
-from openagents_orchestration.tools.spawn_agent import SpawnAgentTool
+from openagents_orchestration.core.runner import OrchestratorRunner
+from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
 
 class TestTaskGraphParsing:
@@ -86,9 +86,7 @@ class TestSpawnAgentBuildInput:
             objective="obj",
             tasks=[TaskNode("t1", "fix bug", "coder")],
         ))
-        board._pending_messages = [
-            {"from": "reviewer", "to": "coder", "content": "check line 42"},
-        ]
+        board.send_mail("reviewer", "coder", "check line 42")
 
         task = board.get_task("t1")
         inp = SpawnAgentTool._build_input(task, board)

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.collaboration import (
+from openagents_orchestration.transport.channel_policy import ChannelPolicy
+from openagents_orchestration.core.collaboration import (
     CollaborationSignal,
     parse_collaboration_message,
     task_id_from_resident_id,
 )
+from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.runner import OrchestratorRunner
-from openagents_orchestration.state_board import StateBoard
+from openagents_orchestration.core.runner import OrchestratorRunner
+from openagents_orchestration.core.state_board import StateBoard
 
 
 class _ResidentStub:
@@ -32,11 +34,10 @@ class _ResidentStub:
 
 
 def _runner_with_task(status: TaskStatus = TaskStatus.RUNNING) -> tuple[OrchestratorRunner, StateBoard, TaskNode]:
-    board = StateBoard("obj", echo=False)
+    board = StateBoard("obj", echo=False, channel_policy=ChannelPolicy({"*": {"*"}}))
     task = TaskNode("api-auth", "implement auth", "coder", status=status)
     task.assigned_agent = "coder-api-auth"
     board.add_tasks(TaskGraph(objective="obj", tasks=[task]))
-    board.get_or_create_thread("task-api-auth", ["coder-api-auth", "reviewer-api-auth"])
 
     runner = OrchestratorRunner("agent.json")
     runner._state_board = board
@@ -80,14 +81,17 @@ def test_collaborative_mode_can_be_forced_on_or_off():
 @pytest.mark.asyncio
 async def test_process_collaborative_messages_approves_task_and_stops_residents():
     runner, board, task = _runner_with_task(TaskStatus.REVIEW)
-    thread = board.conversation_threads["task-api-auth"]
-    thread.add_message("reviewer-api-auth", "TASK_APPROVED[api-auth]: LGTM", task_id="api-auth")
+    # Send APPROVED signal via Mailbox v2
+    await board.send_structured(
+        StructuredMessage.signal(
+            "reviewer-api-auth", "reviewer-api-auth", "approved", "api-auth", text="LGTM"
+        )
+    )
 
     await runner._process_collaborative_messages()
 
     assert task.status == TaskStatus.COMPLETED
     assert task.assigned_agent == ""
-    assert thread.messages[0]["_processed"] is True
     assert runner._residents == {}
     assert task.iteration_history[-1]["action"] == "reviewer_approved"
 
@@ -95,28 +99,37 @@ async def test_process_collaborative_messages_approves_task_and_stops_residents(
 @pytest.mark.asyncio
 async def test_process_collaborative_messages_requests_fix_once_and_preserves_coder():
     runner, board, task = _runner_with_task(TaskStatus.REVIEW)
-    thread = board.conversation_threads["task-api-auth"]
-    thread.add_message("reviewer-api-auth", "TASK_FIX_NEEDED[api-auth]: fix auth bug", task_id="api-auth")
+    # Send FIX_NEEDED signal via Mailbox v2
+    await board.send_structured(
+        StructuredMessage.signal(
+            "reviewer-api-auth",
+            "reviewer-api-auth",
+            "fix_needed",
+            "api-auth",
+            text="fix auth bug",
+        )
+    )
 
     await runner._process_collaborative_messages()
     await runner._process_collaborative_messages()
 
     assert task.status == TaskStatus.FIX_NEEDED
     assert task.assigned_agent == "coder-api-auth"
-    assert thread.messages[0]["_processed"] is True
     assert runner._residents["reviewer-api-auth"]._sleeping is True
     assert "coder-api-auth" in runner._residents
     assert len([h for h in task.iteration_history if h["action"] == "reviewer_requested_fix"]) == 1
-    assert board.get_project_context()["recent_errors"][0]["error"].startswith("TASK_FIX_NEEDED")
+    assert board.get_project_context()["recent_errors"][0]["error"].startswith("fix auth bug")
 
 
 @pytest.mark.asyncio
 async def test_process_collaborative_messages_ignores_wrong_task_marker():
-    runner, _board, task = _runner_with_task(TaskStatus.REVIEW)
-    thread = runner._state_board.conversation_threads["task-api-auth"]
-    thread.add_message("reviewer-api-auth", "TASK_APPROVED[other-task]: LGTM", task_id="api-auth")
+    runner, board, task = _runner_with_task(TaskStatus.REVIEW)
+    await board.send_structured(
+        StructuredMessage.signal(
+            "reviewer-api-auth", "reviewer-api-auth", "approved", "other-task", text="LGTM"
+        )
+    )
 
     await runner._process_collaborative_messages()
 
     assert task.status == TaskStatus.REVIEW
-    assert "_processed" not in thread.messages[0]

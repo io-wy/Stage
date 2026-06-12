@@ -29,6 +29,9 @@ class TaskNode:
     dependencies: list[str] = field(default_factory=list)
     expected_artifacts: list[str] = field(default_factory=list)
     estimated_complexity: int = 1  # 1–5
+    priority: int = 0  # higher = more urgent; Director sorts ready tasks by this
+    max_iterations: int = 5  # collaboration mode circuit breaker: max coder↔reviewer rounds
+    deadline_s: float = 0.0  # 0 = no deadline; >0 = absolute timestamp after which task is considered stale
     status: TaskStatus = TaskStatus.PENDING
     error: str | None = None
     retry_count: int = 0
@@ -75,6 +78,9 @@ class TaskNode:
             "dependencies": self.dependencies,
             "expected_artifacts": self.expected_artifacts,
             "estimated_complexity": self.estimated_complexity,
+            "priority": self.priority,
+            "max_iterations": self.max_iterations,
+            "deadline_s": self.deadline_s,
             "status": self.status.value,
             "error": self.error,
             "retry_count": self.retry_count,
@@ -97,6 +103,9 @@ class TaskNode:
             dependencies=list(data.get("dependencies", [])),
             expected_artifacts=list(data.get("expected_artifacts", [])),
             estimated_complexity=int(data.get("estimated_complexity", 1)),
+            priority=int(data.get("priority", 0)),
+            max_iterations=int(data.get("max_iterations", 5)),
+            deadline_s=float(data.get("deadline_s", 0.0)),
             status=TaskStatus(data.get("status", "pending")),
             error=data.get("error"),
             retry_count=int(data.get("retry_count", 0)),
