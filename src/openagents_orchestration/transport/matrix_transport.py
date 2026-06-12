@@ -7,11 +7,16 @@ Mirrors HiClaw's Matrix room model:
 
 Uses matrix-nio for async C/S API. Falls back to in-memory when Matrix is not
 configured so existing behaviour is unchanged.
+
+.. note::
+
+    This module has been manually verified against a local Synapse instance.
+    TODO: Add mock-homeserver integration tests so CI can exercise the full
+    create_room → send → sync → receive pipeline without a real Matrix server.
 """
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from typing import Any
 

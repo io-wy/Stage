@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openagents_orchestration.matrix_transport import (
+from openagents_orchestration.transport.matrix_transport import (
     MatrixClient,
     MatrixConfig,
     MatrixTransport,

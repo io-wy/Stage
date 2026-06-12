@@ -38,7 +38,7 @@ from openagents.interfaces.context import (
 )
 from pydantic import BaseModel
 
-from openagents_orchestration.token_counter import TokenCounter
+from openagents_orchestration.observability.token_counter import TokenCounter
 
 _DEFAULT_BUDGET_TOKENS = 12_000
 _DEFAULT_RESERVE = 2_000

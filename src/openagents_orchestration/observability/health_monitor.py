@@ -12,7 +12,7 @@ import contextlib
 import time
 from typing import Any
 
-from openagents_orchestration.state_board import AgentStatus, StateBoard
+from openagents_orchestration.core.state_board import AgentStatus, StateBoard
 
 
 class HealthMonitor:
@@ -103,6 +103,8 @@ class HealthMonitor:
 
     def _send_alert(self, agent_id: str, message: str) -> None:
         """Send an alert message to the Director via StateBoard mailbox."""
+        # Use the synchronous legacy API so alerts are visible immediately in
+        # both async and sync contexts (especially tests).
         self.board.send_mail("health_monitor", "director", message)
         self.board.log_event(
             "health.alert",

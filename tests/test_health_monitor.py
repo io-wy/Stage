@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from openagents_orchestration.health_monitor import HealthMonitor
-from openagents_orchestration.state_board import AgentStatus, StateBoard
+from openagents_orchestration.observability.health_monitor import HealthMonitor
+from openagents_orchestration.core.state_board import AgentStatus, StateBoard
 
 
 class TestHealthMonitor:
@@ -24,8 +24,9 @@ class TestHealthMonitor:
         monitor = HealthMonitor(board, check_interval=1.0, max_elapsed_s=300)
         monitor._check()
 
-        assert len(board._pending_messages) == 1
-        msg = board._pending_messages[0]
+        msgs = board.messages_for("director")
+        assert len(msgs) == 1
+        msg = msgs[0]
         assert msg["from"] == "health_monitor"
         assert msg["to"] == "director"
         assert "coder-t1" in msg["content"]
@@ -44,8 +45,9 @@ class TestHealthMonitor:
         monitor = HealthMonitor(board, check_interval=1.0)
         monitor._check()
 
-        assert len(board._pending_messages) == 1
-        assert "steps_used=30" in board._pending_messages[0]["content"]
+        msgs = board.messages_for("director")
+        assert len(msgs) == 1
+        assert "steps_used=30" in msgs[0]["content"]
 
     def test_detects_consecutive_tool_failures(self):
         board = StateBoard("obj")
@@ -60,8 +62,9 @@ class TestHealthMonitor:
         monitor = HealthMonitor(board, check_interval=1.0)
         monitor._check()
 
-        assert len(board._pending_messages) == 1
-        assert "连续 5 次工具失败" in board._pending_messages[0]["content"]
+        msgs = board.messages_for("director")
+        assert len(msgs) == 1
+        assert "连续 5 次工具失败" in msgs[0]["content"]
 
     def test_no_alert_for_idle_agent(self):
         board = StateBoard("obj")
@@ -71,7 +74,7 @@ class TestHealthMonitor:
         monitor = HealthMonitor(board, check_interval=1.0)
         monitor._check()
 
-        assert len(board._pending_messages) == 0
+        assert len(board.messages_for("director")) == 0
 
     def test_alert_once_per_agent(self):
         board = StateBoard("obj")
@@ -84,11 +87,11 @@ class TestHealthMonitor:
 
         monitor = HealthMonitor(board, check_interval=1.0)
         monitor._check()
-        assert len(board._pending_messages) == 1
+        assert len(board.messages_for("director")) == 1
 
         # Second check should not alert again
         monitor._check()
-        assert len(board._pending_messages) == 1
+        assert len(board.messages_for("director")) == 1
 
     def test_clears_alert_on_recovery(self):
         board = StateBoard("obj")
@@ -101,18 +104,18 @@ class TestHealthMonitor:
 
         monitor = HealthMonitor(board, check_interval=1.0)
         monitor._check()
-        assert len(board._pending_messages) == 1
+        assert len(board.messages_for("director")) == 1
 
         # Agent recovers
         board.update_agent("coder-t1", status=AgentStatus.DONE)
         monitor._check()
         # No new alert, and alert flag cleared
-        assert len(board._pending_messages) == 1
+        assert len(board.messages_for("director")) == 1
 
         # Agent goes bad again → should re-alert
         board.update_agent("coder-t1", status=AgentStatus.RUNNING)
         monitor._check()
-        assert len(board._pending_messages) == 2
+        assert len(board.messages_for("director")) == 2
 
     @pytest.mark.asyncio
     async def test_start_stop(self):

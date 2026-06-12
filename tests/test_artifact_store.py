@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from openagents_orchestration.artifact_store import LocalArtifactStore
+from openagents_orchestration.store.artifact_store import LocalArtifactStore
 
 
 @pytest.fixture

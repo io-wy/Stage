@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.token_counter import TokenCounter
+from openagents_orchestration.observability.token_counter import TokenCounter
 
 
 class TestTokenCounter:
