@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.sub_state_board import SubStateBoard
-from openagents_orchestration.state_board import StateBoard, Budget
+from openagents_orchestration.core.sub_state_board import SubStateBoard
+from openagents_orchestration.core.state_board import StateBoard, Budget
 
 
 class TestTaskNodeSubgraph:

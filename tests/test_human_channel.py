@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.state_board import StateBoard
+from openagents_orchestration.core.state_board import StateBoard
 
 
 class TestHumanChannel:
@@ -32,8 +32,9 @@ class TestHumanChannel:
     def test_human_post_creates_message(self):
         board = StateBoard("obj", echo=False)
         board.human_post("alice", "Please pause and switch priority")
-        assert len(board._human_messages) == 1
-        assert board._human_messages[0]["content"] == "Please pause and switch priority"
+        messages = board._human_channel.get_messages(project_id=board.project_id)
+        assert len(messages) == 1
+        assert messages[0].content == "Please pause and switch priority"
         # Routed to director via mailbox
         msgs = board.messages_for("director")
         assert any("pause" in m["content"] for m in msgs)
@@ -70,6 +71,8 @@ class TestHumanChannel:
         board.human_post("alice", "Switch priority")
         data = board.to_dict()
         restored = StateBoard.from_dict(data, echo=False)
-        assert len(restored._human_questions) == 1
-        assert len(restored._human_messages) == 1
-        assert restored._human_messages[0]["content"] == "Switch priority"
+        questions = restored._human_channel.get_pending_questions(project_id=restored.project_id)
+        messages = restored._human_channel.get_messages(project_id=restored.project_id)
+        assert len(questions) == 1
+        assert len(messages) == 1
+        assert messages[0].content == "Switch priority"
