@@ -105,11 +105,83 @@ class IntentClassifier:
     def _load_rules(self) -> list[dict]:
         """Load keyword-based classification rules.
 
-        Currently empty — all classification goes through LLM (L3) to avoid
-        false positives from keyword matching. Rules can be added later via
-        external YAML when patterns are well-understood.
+        These fast heuristic rules skip the LLM call for common task patterns.
+        Rules are matched in order; the first match wins. Confidence is kept
+        moderate so the Director can still override when context suggests
+        otherwise.
         """
-        return []
+        return [
+            {
+                "keywords": ["test", "pytest", "unit test", "write tests"],
+                "intent": {
+                    "task_type": "test",
+                    "complexity": "medium",
+                    "external": [],
+                    "priority": "normal",
+                },
+                "confidence": 0.85,
+            },
+            {
+                "keywords": ["bug", "fix", "repair", "broken"],
+                "intent": {
+                    "task_type": "bug_fix",
+                    "complexity": "medium",
+                    "external": [],
+                    "priority": "normal",
+                },
+                "confidence": 0.85,
+            },
+            {
+                "keywords": ["refactor", "restructure", "clean up"],
+                "intent": {
+                    "task_type": "refactor",
+                    "complexity": "medium",
+                    "external": [],
+                    "priority": "normal",
+                },
+                "confidence": 0.8,
+            },
+            {
+                "keywords": ["api", "service", "endpoint", "server", "backend"],
+                "intent": {
+                    "task_type": "feature",
+                    "complexity": "complex",
+                    "external": [],
+                    "priority": "normal",
+                },
+                "confidence": 0.85,
+            },
+            {
+                "keywords": ["function", "implement", "write a function", "solve"],
+                "intent": {
+                    "task_type": "feature",
+                    "complexity": "simple",
+                    "external": [],
+                    "priority": "normal",
+                },
+                "confidence": 0.85,
+            },
+            {
+                "keywords": ["review", "code review"],
+                "intent": {
+                    "task_type": "review",
+                    "complexity": "medium",
+                    "external": [],
+                    "priority": "normal",
+                },
+                "confidence": 0.85,
+            },
+            {
+                "keywords": ["readme", "documentation", "doc"],
+                "intent": {
+                    "task_type": "doc",
+                    "complexity": "simple",
+                    "external": [],
+                    "priority": "normal",
+                },
+                "confidence": 0.8,
+            },
+        ]
 
     async def classify(self, objective: str) -> IntentResult:
         """Classify task intent through L0-L3 funnel."""
