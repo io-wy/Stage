@@ -16,7 +16,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from openagents_orchestration.models.message import StructuredMessage
+from openagents_orchestration.models.message import Priority, StructuredMessage
 
 
 class AgentLifecycle(StrEnum):
@@ -297,10 +297,17 @@ class ResidentAgent:
                         )
                         continue
 
-                    # Any other messages are buffered for later processing after wake
-                    # Limit backlog to prevent unbounded memory growth
-                    if len(self._sleep_backlog) < 100:
-                        self._sleep_backlog.append(inner)
+                    # Any other messages are buffered for later processing after wake.
+                    # Use a circular buffer so the most recent 100 messages are kept
+                    # instead of silently dropping anything beyond the limit.
+                    if len(self._sleep_backlog) >= 100:
+                        dropped = self._sleep_backlog.pop(0)
+                        self._board.log_event(
+                            "resident.backlog_dropped",
+                            agent_id=self.resident_id,
+                            message=f"Sleep backlog full; dropped oldest message from {dropped.get('from', 'unknown')}",
+                        )
+                    self._sleep_backlog.append(inner)
                 continue
 
             if msg.get("__wake"):
@@ -397,11 +404,17 @@ class ResidentAgent:
             )
 
         stop_reason = getattr(result, "stop_reason", None)
-        if stop_reason is not None and getattr(stop_reason, "value", stop_reason) == "failed":
+        stop_reason_value = getattr(stop_reason, "value", stop_reason)
+        if stop_reason is not None and stop_reason_value == "failed":
             error = getattr(result, "error", None) or getattr(result, "error_message", None) or "resident run failed"
             raise RuntimeError(str(error))
 
         final_output = str(getattr(result, "final_output", "") or "")
+
+        if stop_reason_value == "max_steps":
+            fallback = await self._maybe_signal_review_ready_from_artifacts(result)
+            if fallback:
+                final_output = fallback
 
         # Persist transcript to disk
         self._save_transcript()
@@ -412,6 +425,49 @@ class ResidentAgent:
             await self._send_reply(to=reply_to, content=final_output)
 
         return final_output
+
+    async def _maybe_signal_review_ready_from_artifacts(self, result: Any) -> str:
+        """Use verified artifacts as a completion signal when max steps hit.
+
+        Collaborative coders can exhaust their CoreCoder step budget after
+        writing and testing artifacts but before emitting a final
+        TASK_REVIEW_READY marker.  Without this fallback the task stays RUNNING
+        until the global budget is exhausted.
+        """
+        if self.agent_type != "coder" or not self._bound_task_id:
+            return ""
+
+        artifacts = list(getattr(result, "artifacts", None) or [])
+        if not artifacts:
+            return ""
+
+        paths: list[str] = []
+        for artifact in artifacts:
+            path = getattr(artifact, "path", str(artifact))
+            if path:
+                paths.append(str(path))
+
+        if not paths:
+            return ""
+
+        self._board.claim_artifact(self._bound_task_id, paths)
+        for path in paths:
+            self._board.verify_artifact(path, exists=True)
+
+        reviewer_id = f"reviewer-{self._bound_task_id}"
+        summary = (
+            f"TASK_REVIEW_READY[{self._bound_task_id}]: "
+            f"step budget exhausted after producing artifacts: {', '.join(paths)}"
+        )
+        await self._send_reply(to=reviewer_id, content=summary)
+        self._board.log_event(
+            "resident.max_steps_artifact_fallback",
+            task_id=self._bound_task_id,
+            agent_id=self.resident_id,
+            message=summary[:300],
+            artifacts=paths,
+        )
+        return summary
 
     def _save_transcript(self) -> None:
         """Save persistent transcript to disk."""
@@ -468,15 +524,56 @@ class ResidentAgent:
 
         This ensures collaboration-message parsing picks it up on the receiver
         side and the resident doesn't lose it in a text-only notification.
+
+        If the reply content contains a collaboration marker (e.g.
+        ``TASK_REVIEW_READY[...]``), emit the corresponding typed signal so
+        the collaboration state machine can act on it even when the agent
+        returned the marker in its final output instead of calling
+        ``send_message``.
         """
-        msg = StructuredMessage.signal(
-            self.resident_id,
-            to,
-            signal_type="reply",
-            task_id=self._bound_task_id or "",
-            text=content[:2000],
+        from openagents_orchestration.core.collaboration import parse_collaboration_message
+
+        collab = parse_collaboration_message(
+            content, default_task_id=self._bound_task_id or ""
         )
+        if collab is not None:
+            msg = StructuredMessage.signal(
+                self.resident_id,
+                to,
+                collab.signal.value,
+                collab.task_id,
+                priority=Priority.CRITICAL,
+                text=content[:4000],
+                ttl_s=300.0,
+                tests_passed=collab.tests_passed,
+            )
+        else:
+            msg = StructuredMessage.signal(
+                self.resident_id,
+                to,
+                signal_type="reply",
+                task_id=self._bound_task_id or "",
+                text=content[:4000],
+            )
         await self._board.send_structured(msg)
+
+        # If the recipient is an active, awake resident and this is NOT a
+        # collaboration signal, deliver directly to its inbox for real-time
+        # chat and ack the mailbox copy.  Collaboration signals must flow
+        # through the mailbox so the orchestrator's state machine can act on
+        # them; direct inbox delivery would bypass that logic.
+        if collab is None:
+            resident = getattr(getattr(self, "_runner", None), "_residents", {}).get(to)
+            if resident is not None and getattr(resident, "_active", False):
+                with contextlib.suppress(Exception):
+                    resident.send_nowait({
+                        "task": "",
+                        "content": content[:4000],
+                        "from": self.resident_id,
+                        "msg_id": msg.msg_id,
+                    })
+                    await self._board.ack_message(to, msg.msg_id)
+
         self._board.log_event(
             "resident.replied",
             agent_id=self.resident_id,

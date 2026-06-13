@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+
 from openagents_orchestration.core.resident import ResidentAgent, ResidentState
 from openagents_orchestration.core.state_board import StateBoard
 
@@ -151,6 +152,78 @@ class TestResidentAgent:
         assert len(runner.calls) == 2
         # Transcript should be persistent (accumulated)
         assert len(resident._transcript) > 0
+
+    @pytest.mark.asyncio
+    async def test_sleep_backlog_circular_buffer(self):
+        board = StateBoard("obj")
+        runner = MockRunner()
+        resident = ResidentAgent(
+            resident_id="coder-r1",
+            agent_type="coder",
+            runner=runner,
+            board=board,
+            max_idle_s=10.0,
+        )
+
+        await resident.start()
+        await resident.sleep("waiting for review")
+
+        # Send 102 messages while sleeping
+        for i in range(102):
+            resident.send_nowait({"from": "director", "content": f"msg-{i}"})
+
+        await asyncio.sleep(0.1)
+
+        # Wake and let it process
+        await resident.wake()
+        await asyncio.sleep(0.5)
+        await resident.stop()
+
+        # Backlog should keep the 100 most recent, dropping msg-0 and msg-1
+        assert len(resident._sleep_backlog) == 0  # drained on wake
+        dropped_events = [e for e in board.events if e.event_type == "resident.backlog_dropped"]
+        assert len(dropped_events) == 2
+        # Verify the oldest remaining message in processed order would be msg-2
+        assert runner.calls[0]["input_text"].startswith("# Message from director\nmsg-2")
+
+    @pytest.mark.asyncio
+    async def test_max_steps_with_artifacts_signals_review_ready(self):
+        board = StateBoard("obj")
+        runner = MockRunner()
+
+        artifact = MagicMock()
+        artifact.path = "service_eval/app.py"
+        result = MagicMock()
+        result.final_output = "[CoreCoder] step budget exhausted before producing a final answer."
+        result.metadata = {"transcript": []}
+        result.usage = MagicMock()
+        result.usage.total_tokens = 100
+        result.stop_reason = type("Stop", (), {"value": "max_steps"})()
+        result.artifacts = [artifact]
+        runner._run_resident_single = AsyncMock(return_value=result)
+
+        resident = ResidentAgent(
+            resident_id="coder-t1",
+            agent_type="coder",
+            runner=runner,
+            board=board,
+            max_idle_s=1.0,
+        )
+        resident.bind_task("t1")
+
+        await resident.start()
+        await resident.send({"from": "director", "task": "implement service"})
+        await asyncio.sleep(0.2)
+        await resident.stop()
+
+        messages = await board.claim_messages("reviewer-t1")
+        assert len(messages) == 1
+        assert messages[0].header.sender == "coder-t1"
+        assert messages[0].msg_type == "signal"
+        assert messages[0].payload["signal"] == "review_ready"
+        assert messages[0].payload["task_id"] == "t1"
+        assert "TASK_REVIEW_READY[t1]" in messages[0].text
+        assert board.artifacts["service_eval/app.py"].status == "verified"
 
     @pytest.mark.asyncio
     async def test_error_handling(self):

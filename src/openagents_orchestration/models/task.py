@@ -36,6 +36,10 @@ class TaskNode:
     error: str | None = None
     retry_count: int = 0
 
+    # Collaboration pattern support
+    collaboration_pattern: str = "default"
+    collaboration_participants: dict[str, str] = field(default_factory=dict)
+
     # Mutable during execution
     input_context: str = ""
     result_output: str = ""
@@ -84,6 +88,8 @@ class TaskNode:
             "status": self.status.value,
             "error": self.error,
             "retry_count": self.retry_count,
+            "collaboration_pattern": self.collaboration_pattern,
+            "collaboration_participants": dict(self.collaboration_participants),
             "input_context": self.input_context,
             "result_output": self.result_output,
             "actual_artifacts": self.actual_artifacts,
@@ -109,6 +115,8 @@ class TaskNode:
             status=TaskStatus(data.get("status", "pending")),
             error=data.get("error"),
             retry_count=int(data.get("retry_count", 0)),
+            collaboration_pattern=data.get("collaboration_pattern", "default"),
+            collaboration_participants=dict(data.get("collaboration_participants", {})),
             input_context=data.get("input_context", ""),
             result_output=data.get("result_output", ""),
             actual_artifacts=list(data.get("actual_artifacts", [])),

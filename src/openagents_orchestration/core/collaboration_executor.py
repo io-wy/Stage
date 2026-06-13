@@ -79,7 +79,7 @@ class CollaborationDecisionExecutor:
             task_id=decision.task_id,
             message=f"Circuit breaker triggered: {decision.reason}",
         )
-        for rid in (decision.coder_id, decision.reviewer_id):
+        for rid in (decision.producer_id, decision.checker_id):
             resident = self._residents.get(rid)
             if resident is not None:
                 await resident.stop()
@@ -93,6 +93,8 @@ class CollaborationDecisionExecutor:
         from openagents_orchestration.models.task import TaskStatus
 
         self._board.update_task(decision.task_id, status=TaskStatus.REVIEW)
+        # Keep the legacy action name for compatibility with existing tests and
+        # dashboards, while the state machine also recognizes the generic name.
         task.record_iteration(from_id, "coder_ready_for_review", content)
         self._board.add_test_report(
             module=decision.task_id,
@@ -100,6 +102,12 @@ class CollaborationDecisionExecutor:
             passed=decision.tests_passed,
             failed=0,
         )
+        # Pause the producer while the checker is working. This prevents the
+        # stuck-resident watchdog from killing a producer that is legitimately
+        # waiting for feedback, and allows the fix-needed signal to wake it.
+        producer = self._residents.get(decision.producer_id)
+        if producer is not None:
+            await producer.sleep(reason="waiting for checker feedback")
         return True
 
     async def _transition_to_completed(
@@ -109,14 +117,14 @@ class CollaborationDecisionExecutor:
 
         self._board.update_task(decision.task_id, status=TaskStatus.COMPLETED)
         task.record_iteration(from_id, "reviewer_approved", content)
-        coder = self._residents.get(decision.coder_id)
-        reviewer = self._residents.get(decision.reviewer_id)
-        if coder is not None:
-            await coder.stop()
-            self._residents.pop(coder.resident_id, None)
-        if reviewer is not None:
-            await reviewer.stop()
-            self._residents.pop(reviewer.resident_id, None)
+        producer = self._residents.get(decision.producer_id)
+        checker = self._residents.get(decision.checker_id)
+        if producer is not None:
+            await producer.stop()
+            self._residents.pop(producer.resident_id, None)
+        if checker is not None:
+            await checker.stop()
+            self._residents.pop(checker.resident_id, None)
         task.assigned_agent = ""
         return True
 
@@ -131,7 +139,10 @@ class CollaborationDecisionExecutor:
             source=decision.task_id,
             error=content,
         )
-        reviewer = self._residents.get(decision.reviewer_id)
-        if reviewer is not None:
-            await reviewer.sleep(reason="waiting for coder fix")
+        checker = self._residents.get(decision.checker_id)
+        if checker is not None:
+            await checker.sleep(reason="waiting for producer fix")
+        producer = self._residents.get(decision.producer_id)
+        if producer is not None:
+            await producer.wake()
         return True

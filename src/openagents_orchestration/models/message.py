@@ -123,8 +123,10 @@ class StructuredMessage:
         signal_type: str,
         task_id: str,
         *,
+        priority: Priority = Priority.HIGH,
         trace_id: str = "",
         text: str = "",
+        ttl_s: float | None = None,
         **payload: Any,
     ) -> StructuredMessage:
         return cls(
@@ -132,8 +134,9 @@ class StructuredMessage:
                 sender=sender,
                 recipient=recipient,
                 msg_type=MessageType.SIGNAL,
-                priority=Priority.HIGH,
+                priority=priority,
                 trace_id=trace_id,
+                ttl_s=ttl_s,
             ),
             payload={"signal": signal_type, "task_id": task_id, **payload},
             text=text or f"SIGNAL[{signal_type}] task={task_id}",

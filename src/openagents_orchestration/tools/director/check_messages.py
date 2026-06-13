@@ -126,14 +126,32 @@ class CheckMessagesTool(ToolPlugin):
                     message=str(exc),
                 )
 
-        # Read messages from Mailbox v2
+        # Read messages from Mailbox v2.  Collaboration signals are handled by
+        # the orchestrator's collaboration loop, so we only surface non-signal
+        # messages to the agent. Signal messages stay in the mailbox for the
+        # loop to claim and act on.
         if clear:
-            structured = await board.claim_messages(agent_id, batch_size=batch_size)
-            ack_ids = [m.msg_id for m in structured]
-            for mid in ack_ids:
-                await board.ack_message(agent_id, mid)
+            # Peek a larger batch so we can skip signals and still return up to
+            # batch_size normal messages.  We only claim the non-signal messages
+            # we actually return; signals are never removed or re-queued here,
+            # preventing redundant mail-sent callbacks and duplicate processing.
+            peeked = await board.peek_mailbox(agent_id, limit=batch_size * 2)
+            non_signals = [
+                m for m in peeked
+                if m.header.msg_type.value != "signal"
+            ][:batch_size]
+            structured = []
+            for m in non_signals:
+                claimed = await board.claim_message(agent_id, m.msg_id)
+                if claimed is not None:
+                    await board.ack_message(agent_id, m.msg_id)
+                    structured.append(claimed)
         else:
-            structured = await board.peek_mailbox(agent_id, limit=batch_size)
+            all_structured = await board.peek_mailbox(agent_id, limit=batch_size)
+            structured = [
+                m for m in all_structured
+                if m.header.msg_type.value != "signal"
+            ]
 
         all_messages: list[dict[str, Any]] = []
         for m in structured:

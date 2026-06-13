@@ -74,8 +74,7 @@ def collaboration_message_from_structured(msg: Any) -> CollaborationMessage | No
 
 
 def task_id_from_resident_id(agent_id: str) -> str:
-    """Return the task id encoded in a resident id, preserving hyphenated ids."""
-    for prefix in ("coder-", "reviewer-", "tester-"):
-        if agent_id.startswith(prefix):
-            return agent_id[len(prefix):]
-    return ""
+    """Return the task id encoded in a resident id of form ``agent_type-task_id``."""
+    if "-" not in agent_id:
+        return ""
+    return agent_id.split("-", 1)[1]

@@ -30,6 +30,26 @@ class TestInMemoryMailbox:
         assert len(msgs) == 1
         assert msgs[0].text == "hello"
 
+    async def test_dequeue_specific(self, mailbox):
+        """dequeue_specific pops an exact message by msg_id without touching others."""
+        first = StructuredMessage.from_text("a", "b", "first")
+        second = StructuredMessage.from_text("a", "b", "second")
+        await mailbox.enqueue(first)
+        await mailbox.enqueue(second)
+
+        claimed = await mailbox.dequeue_specific(second.msg_id)
+        assert claimed is not None
+        assert claimed.msg_id == second.msg_id
+        assert claimed.text == "second"
+
+        # First message should still be claimable
+        remaining = await mailbox.dequeue(batch_size=10)
+        assert len(remaining) == 1
+        assert remaining[0].text == "first"
+
+    async def test_dequeue_specific_not_found(self, mailbox):
+        assert await mailbox.dequeue_specific("nonexistent") is None
+
     async def test_priority_ordering(self, mailbox):
         low = StructuredMessage(
             header=MessageHeader(sender="a", recipient="b", priority=Priority.LOW),

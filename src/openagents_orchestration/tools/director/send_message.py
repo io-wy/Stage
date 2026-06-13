@@ -12,7 +12,7 @@ from openagents_orchestration.core.collaboration import (
     parse_collaboration_message,
     task_id_from_resident_id,
 )
-from openagents_orchestration.models.message import MessageType, StructuredMessage
+from openagents_orchestration.models.message import MessageType, Priority, StructuredMessage
 
 
 class SendMessageTool(ToolPlugin):
@@ -75,7 +75,9 @@ class SendMessageTool(ToolPlugin):
                 to_agent,
                 collab.signal.value,
                 collab.task_id,
+                priority=Priority.CRITICAL,
                 text=message,
+                ttl_s=300.0,
                 tests_passed=collab.tests_passed,
             )
         else:
@@ -97,14 +99,20 @@ class SendMessageTool(ToolPlugin):
                 f"or mailbox is full."
             )
 
-        # If target is an active resident, deliver directly to its inbox
-        # for real-time collaboration.  The resident processes messages from
-        # its asyncio.Queue, not from the mailbox, so this is the primary
-        # delivery path for active residents.
+        # Collaboration signals are processed by the orchestrator's
+        # collaboration loop (state machine), not by the target resident
+        # directly.  Direct-inbox delivery would bypass the state machine and
+        # cause the signal to be consumed as ordinary chat.  Only non-signal
+        # messages are delivered directly to an active, awake resident.
+        is_signal = collab is not None
         resident_delivered = False
-        if runner is not None and hasattr(runner, "_residents"):
+        if runner is not None and hasattr(runner, "_residents") and not is_signal:
             resident = runner._residents.get(to_agent)
-            if resident is not None and getattr(resident, "_active", False):
+            if (
+                resident is not None
+                and getattr(resident, "_active", False)
+                and not getattr(resident, "_sleeping", False)
+            ):
                 with contextlib.suppress(Exception):
                     resident.send_nowait({
                         "task": "",

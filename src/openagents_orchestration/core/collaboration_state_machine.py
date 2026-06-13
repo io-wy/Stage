@@ -1,4 +1,4 @@
-"""CollaborationStateMachine — explicit state machine for coder↔reviewer loops.
+"""CollaborationStateMachine — explicit state machine for producer↔checker loops.
 
 Previously this logic was embedded as if/elif chains in
 OrchestratorRunner._apply_collaboration_signal(). Extracting it makes
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any
 
 
 class CollaborationAction(StrEnum):
@@ -24,10 +24,9 @@ class CollaborationAction(StrEnum):
     NONE = "none"                    # No action needed
     TRANSITION_TO_REVIEW = "review"  # Mark task REVIEW
     TRANSITION_TO_COMPLETED = "completed"  # Mark task COMPLETED, stop agents
-    TRANSITION_TO_FIX_NEEDED = "fix_needed"  # Mark task FIX_NEEDED, sleep reviewer
-    DISPATCH_FIX = "dispatch_fix"    # Send fix task to coder, mark RUNNING
+    TRANSITION_TO_FIX_NEEDED = "fix_needed"  # Mark task FIX_NEEDED, sleep checker
     CIRCUIT_BREAK = "circuit_break"  # Too many iterations, mark FAILED
-    SLEEP_REVIEWER = "sleep_reviewer"  # Pause reviewer until coder fixes
+    SLEEP_REVIEWER = "sleep_reviewer"  # Backward-compatible unused action
 
 
 @dataclass(frozen=True)
@@ -37,21 +36,32 @@ class CollaborationDecision:
     action: CollaborationAction
     task_id: str
     reason: str = ""
-    coder_id: str = ""      # resident_id of coder to stop/send to
-    reviewer_id: str = ""   # resident_id of reviewer to stop/sleep
-    fix_content: str = ""   # reviewer's feedback for the coder
-    tests_passed: int = 0   # from the REVIEW_READY signal
+    producer_id: str = ""  # resident_id of producer to stop/send to
+    checker_id: str = ""   # resident_id of checker to stop/sleep
+    fix_content: str = ""  # checker's feedback for the producer
+    tests_passed: int = 0  # from the REVIEW_READY signal
+
+    @property
+    def coder_id(self) -> str:
+        """Backward-compatible alias for legacy tests/callers."""
+        return self.producer_id
+
+    @property
+    def reviewer_id(self) -> str:
+        """Backward-compatible alias for legacy tests/callers."""
+        return self.checker_id
 
 
 class CollaborationStateMachine:
-    """State machine for a single coder↔reviewer task cycle.
+    """State machine for a single producer↔checker task cycle.
 
     Pure logic — no side effects. Returns CollaborationDecision;
     the caller (OrchestratorRunner) executes the decision.
     """
 
-    def __init__(self, max_iterations: int = 5):
+    def __init__(self, max_iterations: int = 5, role_map: dict[str, str] | None = None):
         self._max_iterations = max_iterations
+        self._role_map = role_map or {}
 
     def decide(
         self,
@@ -67,14 +77,16 @@ class CollaborationStateMachine:
 
         task_id = task.task_id if hasattr(task, "task_id") else ""
         status = task.status if hasattr(task, "status") else TaskStatus.PENDING
-        coder_id = task.assigned_agent if hasattr(task, "assigned_agent") else ""
-        reviewer_id = f"reviewer-{task_id}"
+        producer_id = self._role_map.get(
+            "producer",
+            task.assigned_agent if hasattr(task, "assigned_agent") else "",
+        )
+        checker_id = self._role_map.get("checker", f"reviewer-{task_id}")
 
-        # --- Circuit breaker: count fix iterations ---
         history = getattr(task, "iteration_history", []) or []
         fix_iterations = sum(
             1 for entry in history
-            if entry.get("action") == "reviewer_requested_fix"
+            if entry.get("action") in {"checker_requested_fix", "reviewer_requested_fix"}
         )
         max_iter = getattr(task, "max_iterations", self._max_iterations) or self._max_iterations
 
@@ -83,36 +95,36 @@ class CollaborationStateMachine:
                 action=CollaborationAction.CIRCUIT_BREAK,
                 task_id=task_id,
                 reason=f"{fix_iterations} fix iterations (max={max_iter})",
-                coder_id=coder_id,
-                reviewer_id=reviewer_id,
+                producer_id=producer_id,
+                checker_id=checker_id,
             )
 
-        # --- Coder says: tests pass, review me ---
-        if status == TaskStatus.RUNNING and from_id == coder_id and signal == CollaborationSignal.REVIEW_READY:
+        if status == TaskStatus.RUNNING and from_id == producer_id and signal == CollaborationSignal.REVIEW_READY:
             return CollaborationDecision(
                 action=CollaborationAction.TRANSITION_TO_REVIEW,
                 task_id=task_id,
-                reason="coder signaled review ready",
+                reason="producer signaled review ready",
+                producer_id=producer_id,
+                checker_id=checker_id,
                 tests_passed=tests_passed,
             )
 
-        # --- Reviewer says: LGTM ---
-        if status == TaskStatus.REVIEW and signal == CollaborationSignal.APPROVED:
+        if status == TaskStatus.REVIEW and from_id == checker_id and signal == CollaborationSignal.APPROVED:
             return CollaborationDecision(
                 action=CollaborationAction.TRANSITION_TO_COMPLETED,
                 task_id=task_id,
-                reason="reviewer approved",
-                coder_id=coder_id,
-                reviewer_id=reviewer_id,
+                reason="checker approved",
+                producer_id=producer_id,
+                checker_id=checker_id,
             )
 
-        # --- Reviewer says: fix these issues ---
-        if status == TaskStatus.REVIEW and signal == CollaborationSignal.FIX_NEEDED:
+        if status == TaskStatus.REVIEW and from_id == checker_id and signal == CollaborationSignal.FIX_NEEDED:
             return CollaborationDecision(
                 action=CollaborationAction.TRANSITION_TO_FIX_NEEDED,
                 task_id=task_id,
-                reason="reviewer requested fixes",
-                reviewer_id=reviewer_id,
+                reason="checker requested fixes",
+                producer_id=producer_id,
+                checker_id=checker_id,
                 fix_content=content,
             )
 

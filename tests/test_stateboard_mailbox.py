@@ -45,6 +45,26 @@ class TestStateBoardMailboxV2:
         assert len(c_msgs) == 1
         assert len(r_msgs) == 1
 
+    async def test_claim_message_specific(self, board):
+        board.register_agent("coder-1", "coder")
+        first = StructuredMessage.from_text("director", "coder-1", "first")
+        second = StructuredMessage.from_text("director", "coder-1", "second")
+        await board.send_structured(first)
+        await board.send_structured(second)
+
+        claimed = await board.claim_message("coder-1", second.msg_id)
+        assert claimed is not None
+        assert claimed.msg_id == second.msg_id
+
+        # First message remains
+        remaining = await board.claim_messages("coder-1", batch_size=10)
+        assert len(remaining) == 1
+        assert remaining[0].text == "first"
+
+    async def test_claim_message_specific_not_found(self, board):
+        board.register_agent("coder-1", "coder")
+        assert await board.claim_message("coder-1", "nonexistent") is None
+
     async def test_ack_message(self, board):
         board.register_agent("coder-1", "coder")
         msg = StructuredMessage.from_text("director", "coder-1", "work")
