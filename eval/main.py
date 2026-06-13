@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -47,6 +48,15 @@ SUITES = {
 
 
 def main():
+    # Load .env early so eval harnesses can initialize OrchestratorRunner.
+    env_path = Path(__file__).parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip())
+
     parser = argparse.ArgumentParser(
         description="Xitai Evaluation Suite",
         formatter_class=argparse.RawDescriptionHelpFormatter,

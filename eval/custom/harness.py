@@ -87,18 +87,18 @@ class CustomHarness(EvalHarness):
                     budget_exceeded,
                 ) = await self._run_orchestrator(task, work_path)
 
-            # ---- 客观指标收集 ------------------------------------------------
+                # ---- 客观指标收集 ------------------------------------------------
 
-            # 1. 验证规则通过率
-            verify_errors: dict[str, str] = {}
-            verify_scores = verify_task(
-                work_path, task.verification, errors_out=verify_errors
-            )
-            verify_pass_rate = (
-                sum(verify_scores.values()) / len(verify_scores)
-                if verify_scores
-                else 0.0
-            )
+                # 1. 验证规则通过率
+                verify_errors: dict[str, str] = {}
+                verify_scores = verify_task(
+                    work_path, task.verification, errors_out=verify_errors
+                )
+                verify_pass_rate = (
+                    sum(verify_scores.values()) / len(verify_scores)
+                    if verify_scores
+                    else 0.0
+                )
 
             # 2. Token 效率 — 共享方法
             token_efficiency = self.compute_token_efficiency(task, steps, tokens)

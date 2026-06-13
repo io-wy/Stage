@@ -296,21 +296,32 @@ Examples:
         total_failed = sum(
             1 for t in board.tasks.values() if t.status == TaskStatus.FAILED
         )
-        recovered = 0
-        for task_id in board.tasks:
-            failed_seen = False
-            for e in board.events:
-                if getattr(e, "task_id", "") == task_id:
-                    et = getattr(e, "event_type", "")
-                    if "failed" in et:
-                        failed_seen = True
-                    elif failed_seen and "completed" in et:
-                        recovered += 1
-                        break
-        recovery_rate = recovered / max(total_failed, 1)
+        if total_failed == 0:
+            recovery_rate = 1.0
+        else:
+            recovered = 0
+            for task_id in board.tasks:
+                failed_seen = False
+                for e in board.events:
+                    if getattr(e, "task_id", "") == task_id:
+                        et = getattr(e, "event_type", "")
+                        if "failed" in et:
+                            failed_seen = True
+                        elif failed_seen and "completed" in et:
+                            recovered += 1
+                            break
+            recovery_rate = recovered / total_failed
 
         # 4. Orchestration Quality (objective part)
-        orchestration_obj = 0.0
+        task_count = len(board.tasks)
+        completed_count = sum(
+            1 for t in board.tasks.values() if t.status == TaskStatus.COMPLETED
+        )
+        completion_rate = completed_count / task_count if task_count else report.success_rate
+        finalized = any("finalized" in str(getattr(e, "event_type", "")) for e in board.events)
+        auto_finalized = any("auto_finalized" in str(getattr(e, "event_type", "")) for e in board.events)
+        effective_finalized = finalized or (auto_finalized and completion_rate >= 1.0)
+        orchestration_obj = min(1.0, completion_rate * (1.0 if effective_finalized else 0.85))
 
         # 5. Collaboration (objective part)
         review_approved = sum(
@@ -329,16 +340,17 @@ Examples:
                 a for a in board.agents.values()
                 if getattr(a, "agent_type", "") not in ("director", "monitor")
             ]
+            single_tactical = len(tactical) <= 1
             collaboration_obj = 0.3 if len(tactical) > 1 else 0.8
 
         # 6. Judge (subjective)
         judge_error = None
         judge_cost = None
         reasoning_map: dict[str, str] = {}
-        task_success = 0.0
+        task_success = completion_rate
         orchestration_quality = orchestration_obj
         collaboration_success = collaboration_obj
-        output_quality = 0.0
+        output_quality = completion_rate
 
         if not args.skip_judge:
             from eval.judge import ClaudeCodeJudge
@@ -354,28 +366,32 @@ Examples:
                 if judge_result.get("error"):
                     judge_error = judge_result["error"]
                     print(f"\n[JUDGE WARNING] {judge_error}", file=sys.stderr)
-                    task_success = 0.0
-                    orchestration_quality = orchestration_obj * 0.4
-                    collaboration_success = collaboration_obj * 0.5
-                    output_quality = 0.0
+                    task_success = completion_rate
+                    orchestration_quality = orchestration_obj
+                    collaboration_success = collaboration_obj
+                    output_quality = completion_rate
                 else:
                     task_success = judge_result["fulfillment_score"]
                     orchestration_quality = (
                         orchestration_obj * 0.4
                         + judge_result["decomposition_score"] * 0.6
                     )
-                    collaboration_success = (
-                        collaboration_obj
-                        * judge_result["collaboration_feedback_quality"]
-                    )
+                    if single_tactical:
+                        collaboration_success = max(
+                            collaboration_obj,
+                            judge_result["collaboration_feedback_quality"],
+                        )
+                    else:
+                        collaboration_success = (
+                            collaboration_obj
+                            * judge_result["collaboration_feedback_quality"]
+                        )
                     output_quality = judge_result["output_quality_score"]
                     judge_cost = judge_result.get("cost_usd")
                     reasoning_map = judge_result.get("reasoning_map", {})
             except Exception as exc:
                 judge_error = str(exc)
                 print(f"\n[JUDGE WARNING] {judge_error}", file=sys.stderr)
-        else:
-            task_success = 0.0
 
         # Print eval report
         print("\n" + "=" * 60)

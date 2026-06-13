@@ -116,8 +116,8 @@ class EvalHarness(abc.ABC):
         """
         import asyncio
 
-        from openagents_orchestration.runner import OrchestratorRunner
-        from openagents_orchestration.state_board import Budget
+        from openagents_orchestration.core.runner import OrchestratorRunner
+        from openagents_orchestration.core.state_board import Budget
 
         runner = OrchestratorRunner(config_path=str(self.config_path))
 
@@ -199,7 +199,7 @@ class EvalHarness(abc.ABC):
         return self.results
 
     def report(self) -> dict[str, Any]:
-        """生成汇总报告."""
+        """生成评估报告."""
         if not self.results:
             return {}
 
@@ -209,53 +209,61 @@ class EvalHarness(abc.ABC):
             ]
             return sum(vals) / len(vals) if vals else 0.0
 
-        report = {
+        total = len(self.results)
+        passed = sum(1 for r in self.results if r.success)
+        summary = {
+            "total": total,
+            "passed": passed,
+            "pass_rate": passed / total if total else 0.0,
+            "avg_task_success": _avg("task_success"),
+            "avg_token_efficiency": _avg("token_efficiency"),
+            "avg_orchestration_quality": _avg("orchestration_quality"),
+            "avg_collaboration_success": _avg("collaboration_success"),
+            "avg_recovery_rate": _avg("recovery_rate"),
+            "avg_output_quality": _avg("output_quality"),
+            "avg_autonomy": _avg("autonomy"),
+            "avg_steps": _avg("steps_taken"),
+            "avg_tokens": _avg("tokens_used"),
+            "avg_duration_sec": _avg("duration_sec"),
+            "judge_errors": sum(1 for r in self.results if r.judge_error),
+        }
+
+        by_difficulty: dict[str, dict[str, Any]] = {}
+        for r in self.results:
+            by_difficulty.setdefault(r.difficulty, {"count": 0, "passed": 0, "scores": [], "output_qualities": []})
+            by_difficulty[r.difficulty]["count"] += 1
+            if r.success:
+                by_difficulty[r.difficulty]["passed"] += 1
+            by_difficulty[r.difficulty]["scores"].append(r.task_success)
+            by_difficulty[r.difficulty]["output_qualities"].append(r.output_quality)
+
+        return {
             "harness": self.name,
-            "summary": {
-                "total": len(self.results),
-                "passed": sum(1 for r in self.results if r.success),
-                "pass_rate": sum(1 for r in self.results if r.success)
-                / len(self.results),
-                "avg_task_success": _avg("task_success"),
-                "avg_token_efficiency": _avg("token_efficiency"),
-                "avg_orchestration_quality": _avg("orchestration_quality"),
-                "avg_collaboration_success": _avg("collaboration_success"),
-                "avg_recovery_rate": _avg("recovery_rate"),
-                "avg_output_quality": _avg("output_quality"),
-                "avg_autonomy": _avg("autonomy"),
-                "avg_steps": _avg("steps_taken"),
-                "avg_tokens": _avg("tokens_used"),
-                "avg_duration_sec": _avg("duration_sec"),
-                "judge_errors": sum(1 for r in self.results if r.judge_error),
+            "summary": summary,
+            "by_difficulty": {
+                diff: {
+                    "count": data["count"],
+                    "passed": data["passed"],
+                    "pass_rate": data["passed"] / data["count"] if data["count"] else 0.0,
+                    "avg_task_success": _avg_for_list(data["scores"]),
+                    "avg_output_quality": _avg_for_list(data["output_qualities"]),
+                }
+                for diff, data in by_difficulty.items()
             },
-            "by_difficulty": {},
             "tasks": [r.to_dict() for r in self.results],
         }
 
-        # 按难度分组
-        diffs: dict[str, list[EvalResult]] = {}
-        for r in self.results:
-            diffs.setdefault(r.difficulty, []).append(r)
-        for diff, rs in diffs.items():
-            report["by_difficulty"][diff] = {
-                "count": len(rs),
-                "passed": sum(1 for r in rs if r.success),
-                "pass_rate": sum(1 for r in rs if r.success) / len(rs),
-                "avg_task_success": _avg_for_list([r.task_success for r in rs]),
-                "avg_output_quality": _avg_for_list([r.output_quality for r in rs]),
-            }
-
-        return report
+    def save_report(self, path: str | Path) -> None:
+        """保存评估报告到 JSON 文件."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.report(), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _avg_for_list(vals: list[Any]) -> float:
     """过滤 None 后计算平均值."""
     filtered = [v for v in vals if v is not None]
     return sum(filtered) / len(filtered) if filtered else 0.0
-
-    def save_report(self, path: Path) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.report(), f, indent=2, ensure_ascii=False)
 
 
 class WorkDirSetup:

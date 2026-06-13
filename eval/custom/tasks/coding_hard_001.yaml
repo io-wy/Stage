@@ -1,0 +1,79 @@
+id: coding-hard-001
+category: coding
+difficulty: hard
+
+description: |
+  Build a production-ready FastAPI TODO API service in `src/todo_api`.
+
+  Requirements:
+  - `src/todo_api/main.py`: FastAPI app with endpoints:
+    - GET /todos: list all todos
+    - POST /todos: create a todo with `text` (str) and optional `done` (bool)
+    - GET /todos/{todo_id}: get a single todo
+    - PUT /todos/{todo_id}: update todo `text` and/or `done`
+    - DELETE /todos/{todo_id}: delete a todo
+  - Todos persist to `data/todos.json` as a JSON array with fields:
+    `id` (int), `text` (str), `done` (bool), `created_at` (ISO timestamp)
+  - Auto-incrementing integer IDs starting from 1
+  - `src/todo_api/__init__.py` makes the package importable
+  - `tests/test_api.py` uses `fastapi.testclient.TestClient` and covers all 5 endpoints
+  - `README.md` documents how to run the app and the endpoints
+  - All tests must pass with `pytest tests/test_api.py -q`
+
+initial_files:
+  src/todo_api/__init__.py: ""
+  src/todo_api/main.py: |
+    from fastapi import FastAPI
+
+    app = FastAPI()
+  data/.gitkeep: ""
+  README.md: |
+    # TODO API
+
+    FastAPI TODO service.
+
+initial_dirs:
+  - src/todo_api
+  - data
+  - tests
+
+verification:
+  - type: file_exists
+    path: src/todo_api/main.py
+  - type: file_exists
+    path: src/todo_api/__init__.py
+  - type: file_exists
+    path: tests/test_api.py
+  - type: file_contains
+    path: src/todo_api/main.py
+    patterns:
+      - "@app.get"
+      - "@app.post"
+      - "@app.put"
+      - "@app.delete"
+      - "TestClient"
+  - type: test_pass
+    command: "python -m pytest tests/test_api.py -q"
+    cwd: .
+    env:
+      PYTHONPATH: src
+    timeout: 60
+
+expected_graph:
+  tasks:
+    - id: design_api
+      agent_type: coder
+      dependencies: []
+    - id: implement_endpoints
+      agent_type: coder
+      dependencies: [design_api]
+    - id: write_tests
+      agent_type: tester
+      dependencies: [implement_endpoints]
+    - id: review
+      agent_type: reviewer
+      dependencies: [write_tests]
+
+max_steps: 80
+max_tokens: 300000
+timeout_sec: 600

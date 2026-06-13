@@ -9,9 +9,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from pydantic import BaseModel, Field
+
+from openagents.llm.registry import create_llm_client
+from openagents_orchestration.utils.structured_generate import structured_generate
 
 # ---------------------------------------------------------------------------
 # JSON Schema for the combined 4-dimension judgment
@@ -67,6 +73,32 @@ _JUDGE_SCHEMA = {
 }
 
 
+class _ScoreReason(BaseModel):
+    score: float = Field(ge=0, le=1)
+    reasoning: str
+
+
+class _CollaborationScore(BaseModel):
+    score: float = Field(ge=0, le=1)
+    feedback_quality: float = Field(ge=0, le=1)
+    reasoning: str
+
+
+class _OutputQualityScore(BaseModel):
+    correctness: float = Field(ge=1, le=5)
+    readability: float = Field(ge=1, le=5)
+    completeness: float = Field(ge=1, le=5)
+    efficiency: float = Field(ge=1, le=5)
+    reasoning: str
+
+
+class _JudgeOutput(BaseModel):
+    fulfillment: _ScoreReason
+    decomposition: _ScoreReason
+    collaboration: _CollaborationScore
+    output_quality: _OutputQualityScore
+
+
 class ClaudeCodeJudge:
     """用 Claude Code CLI 作为 Judge.
 
@@ -75,7 +107,7 @@ class ClaudeCodeJudge:
         result = await judge.evaluate(task, state_board, work_dir)
     """
 
-    def __init__(self, timeout_sec: int = 300):
+    def __init__(self, timeout_sec: int = 180):
         self.timeout_sec = timeout_sec
 
     # -- public API --------------------------------------------------------
@@ -182,8 +214,9 @@ class ClaudeCodeJudge:
         临时文件，prompt 中仅保留精简概览和文件引用。
         """
 
-        # 文件列表（让 judge 自己读）
+        # 文件列表 + 内嵌关键证据，避免 Claude Code Judge 卡在工具探索。
         file_list = self._list_work_dir_files(work_dir)
+        evidence = self._build_file_evidence(work_dir)
 
         # StateBoard 摘要 —— 写入临时文件避免 CLI 参数过长
         board_summary = self._build_board_summary(state_board)
@@ -191,10 +224,12 @@ class ClaudeCodeJudge:
         with contextlib.suppress(Exception):
             state_file.write_text(board_summary, encoding="utf-8")
 
-        # 只保留前 1500 字符的概览放入 prompt
-        board_preview = board_summary[:1500]
-        if len(board_summary) > 1500:
-            board_preview += "\n... (truncated; full summary in .judge_state.txt)"
+        # Keep the prompt compact; full summaries make Claude Code Judge spend
+        # minutes exploring instead of scoring. The file remains available for
+        # manual debugging, but the judge prompt should be self-contained.
+        board_preview = board_summary[:900]
+        if len(board_summary) > 900:
+            board_preview += "\n... (truncated; score from this summary unless essential)"
 
         verify_summary = (
             json.dumps(verify_scores, indent=2) if verify_scores else "(无验证规则)"
@@ -209,12 +244,13 @@ class ClaudeCodeJudge:
             "## 验证规则结果\n"
             f"{verify_summary}\n\n"
             "## 产出文件列表\n"
-            "以下文件位于当前工作目录中，请使用 Read 工具按需读取来评估。\n"
+            "以下是最多 12 个关键文件（内容摘要已内嵌，禁止再读文件）。\n"
             f"{file_list}\n\n"
+            "## 关键文件内容摘录\n"
+            f"{evidence}\n\n"
             "## 戏台执行摘要\n"
             f"{board_preview}\n\n"
-            "**注意**：完整的执行摘要已写入 `.judge_state.txt`，"
-            "请使用 Read 工具读取该文件获取全部任务、Agent、事件和预算细节。\n\n"
+            "**注意**：不要调用 Read/Bash/Grep/Glob 等工具；直接基于上方摘要和内嵌文件摘录评分。\n\n"
             "## 评估维度\n"
             "请对以下 4 个维度分别评分，输出严格遵循 JSON Schema。\n\n"
             "### 1. fulfillment（功能满足度）\n"
@@ -243,112 +279,73 @@ class ClaudeCodeJudge:
             "- efficiency (效率): 是否过度工程或过于简陋\n"
             "5 = 范例级，4 = 良好，3 = 合格，2 = 较差，1 = 不合格\n\n"
             "## 输出格式\n"
-            "严格输出 JSON，不要 markdown 代码块，不要额外文本。"
+            "严格输出 JSON，不要 markdown 代码块，不要额外文本。不要使用任何工具。"
         )
 
     # -- Claude CLI caller -------------------------------------------------
 
     async def _call_claude(self, prompt: str, work_dir: Path) -> dict[str, Any]:
-        """调用 claude CLI，返回解析后的 structured_output 或错误信息.
+        """Call the configured project LLM directly for structured judgment.
 
-        为了避免命令行参数过长（state board 摘要可能达数 MB），将完整摘要写入
-        work_dir 下的临时文件，prompt 中只保留精简概览和文件引用。
+        Older versions used `claude -p`, but Claude Code CLI brings agent
+        tools/hooks/session context that can hang or contaminate scoring.  The
+        judge only needs one structured LLM call over already-inlined evidence,
+        so use the same project LLM client as the orchestrator.
         """
-        schema_str = json.dumps(
-            _JUDGE_SCHEMA, ensure_ascii=False, separators=(",", ":")
-        )
-
-        cmd = [
-            "claude",
-            "-p",
-            "--output-format",
-            "json",
-            "--json-schema",
-            schema_str,
-            "--bare",
-            "--permission-mode",
-            "auto",
-            "--add-dir",
-            str(work_dir),
-            prompt,
-        ]
-
         try:
-            proc = await asyncio.to_thread(
-                subprocess.run,
-                cmd,
-                capture_output=True,
-                text=True,
+            from openagents.config.loader import load_config
+
+            env_path = Path(".env")
+            if env_path.exists():
+                for line in env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, value = line.split("=", 1)
+                        os.environ.setdefault(key.strip(), value.strip())
+
+            config_path = Path(os.environ.get("XITAI_JUDGE_CONFIG", "agent.json"))
+            config = load_config(config_path)
+            director = next((agent for agent in config.agents if agent.id == "director"), config.agents[0])
+            llm = create_llm_client(director.llm)
+            parsed, usage = await asyncio.wait_for(
+                structured_generate(
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are a strict software-evaluation judge. "
+                                "Use only the evidence in the user prompt. "
+                                "Do not assume files or facts not shown."
+                            ),
+                        },
+                        {"role": "user", "content": prompt},
+                    ],
+                    response_model=_JudgeOutput,
+                    llm_client=llm,
+                    temperature=0.0,
+                    max_tokens=2048,
+                    max_retries=1,
+                ),
                 timeout=self.timeout_sec,
             )
-        except subprocess.TimeoutExpired:
             return {
-                "error": f"Claude Code CLI timed out after {self.timeout_sec}s",
+                "error": None,
                 "cost_usd": None,
-                "data": {},
+                "data": parsed.model_dump(),
+                "usage": usage,
             }
-        except FileNotFoundError:
+        except TimeoutError:
             return {
-                "error": "Claude Code CLI not found. Is `claude` installed and in PATH?",
+                "error": f"LLM Judge timed out after {self.timeout_sec}s",
                 "cost_usd": None,
                 "data": {},
             }
         except Exception as exc:
             return {
-                "error": f"Failed to run Claude Code CLI: {exc}",
+                "error": f"Failed to run LLM Judge: {exc}",
                 "cost_usd": None,
                 "data": {},
             }
-
-        if proc.returncode != 0:
-            stderr_preview = proc.stderr[:500] if proc.stderr else "(no stderr)"
-            return {
-                "error": f"Claude Code CLI exited with code {proc.returncode}. stderr: {stderr_preview}",
-                "cost_usd": None,
-                "data": {},
-            }
-
-        # Parse JSON output
-        stdout = proc.stdout.strip()
-        if not stdout:
-            return {
-                "error": "Claude Code CLI produced empty stdout",
-                "cost_usd": None,
-                "data": {},
-            }
-
-        try:
-            outer = json.loads(stdout)
-        except json.JSONDecodeError as exc:
-            return {
-                "error": f"Claude Code CLI output is not valid JSON: {exc}. Output preview: {stdout[:300]}",
-                "cost_usd": None,
-                "data": {},
-            }
-
-        structured = outer.get("structured_output")
-        if structured is None:
-            return {
-                "error": "Claude Code CLI output missing 'structured_output' field. "
-                f"Output preview: {stdout[:300]}",
-                "cost_usd": outer.get("total_cost_usd"),
-                "data": {},
-            }
-
-        # Schema validation
-        validation_err = self._validate_judge_output(structured)
-        if validation_err:
-            return {
-                "error": f"Judge output schema validation failed: {validation_err}",
-                "cost_usd": outer.get("total_cost_usd"),
-                "data": {},
-            }
-
-        return {
-            "error": None,
-            "cost_usd": outer.get("total_cost_usd"),
-            "data": structured,
-        }
 
     @staticmethod
     def _validate_judge_output(data: dict[str, Any]) -> str | None:
@@ -416,24 +413,65 @@ class ClaudeCodeJudge:
             ".artifacts",
         }
 
-        lines: list[str] = []
+        candidates: list[tuple[int, str]] = []
+        priority_suffixes = (".py", ".toml", ".json", ".yaml", ".yml")
+        priority_names = ("test", "tests", "cli", "main", "app", "api", "service", "model", "schema")
+
         for path in sorted(work_dir.rglob("*")):
             if not path.is_file():
                 continue
             rel = path.relative_to(work_dir)
+            rel_str = str(rel)
             if any(part in skip_dirs for part in rel.parts):
                 continue
-            if any(str(rel).endswith(suffix) for suffix in skip_suffixes):
+            if any(rel_str.endswith(suffix) for suffix in skip_suffixes):
+                continue
+            if rel_str.startswith(".agent_memory/") or rel.name == ".judge_state.txt":
+                continue
+            if not rel_str.endswith(priority_suffixes):
                 continue
             try:
                 size = path.stat().st_size
-                lines.append(f"  - {rel} ({size} bytes)")
             except Exception:
-                pass
+                continue
+            if size > 20_000:
+                continue
+            score = 0
+            lowered = rel_str.lower()
+            if lowered.endswith(".py"):
+                score -= 20
+            if any(name in lowered for name in priority_names):
+                score -= 10
+            if "test" in lowered:
+                score -= 8
+            score += len(rel.parts)
+            candidates.append((score, f"  - {rel} ({size} bytes)"))
 
+        lines = [line for _, line in sorted(candidates)[:12]]
         if not lines:
             return "(no readable files found)"
         return "\n".join(lines)
+
+    @staticmethod
+    def _build_file_evidence(work_dir: Path) -> str:
+        """Inline compact evidence so Judge does not need file tools."""
+        listing = ClaudeCodeJudge._list_work_dir_files(work_dir)
+        if listing.startswith("("):
+            return listing
+
+        evidence_parts: list[str] = []
+        for line in listing.splitlines()[:8]:
+            rel = line.strip().split(" (", 1)[0].removeprefix("- ").strip()
+            path = work_dir / rel
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            if len(content) > 2500:
+                content = content[:2500] + "\n... (truncated)"
+            evidence_parts.append(f"### {rel}\n```text\n{content}\n```")
+
+        return "\n\n".join(evidence_parts) if evidence_parts else "(no evidence files readable)"
 
     @staticmethod
     def _build_board_summary(state_board: Any) -> str:

@@ -8,6 +8,7 @@ Inspired by Instructor and PydanticAI:
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, TypeVar
 
@@ -84,12 +85,24 @@ async def structured_generate(
     schema = response_model.model_json_schema()
     messages = _inject_schema(messages, schema)
 
-    response = await llm_client.generate(
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        tools=None,
-    )
+    async def _generate_with_retry(current_messages: list[dict[str, Any]]) -> Any:
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            try:
+                return await llm_client.generate(
+                    messages=current_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=None,
+                )
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= max_retries:
+                    raise
+                await asyncio.sleep(0.5 * (attempt + 1))
+        raise last_exc  # type: ignore[misc]
+
+    response = await _generate_with_retry(messages)
 
     last_error: ValidationError | None = None
 
@@ -114,11 +127,6 @@ async def structured_generate(
                         ),
                     },
                 ]
-                response = await llm_client.generate(
-                    messages=retry_messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    tools=None,
-                )
+                response = await _generate_with_retry(retry_messages)
 
     raise last_error  # type: ignore[return-value]
