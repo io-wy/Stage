@@ -48,11 +48,7 @@ from openagents_orchestration.core.collaboration_state_machine import (
 from openagents_orchestration.core.collaboration_executor import (
     CollaborationDecisionExecutor,
 )
-from openagents_orchestration.core.resident_prompts import (
-    coder_initial_prompt,
-    coder_fix_prompt,
-    reviewer_initial_prompt,
-)
+from openagents_orchestration.core.resident_prompts import get_prompt
 from openagents_orchestration.intent_classifier import IntentClassifier, IntentResult
 from openagents_orchestration.transport.matrix_transport import (
     MatrixClient,
@@ -171,7 +167,7 @@ class OrchestratorRunner:
         collaborative_mode: str = "auto",
         enable_monitor_resident: bool = True,
         max_concurrent_spawns: int = 3,
-        max_concurrent_residents: int = 2,
+        max_concurrent_residents: int = 4,
         resident_stuck_threshold_s: float = 120.0,
     ):
         if collaborative_mode not in {"auto", "on", "off"}:
@@ -450,6 +446,24 @@ class OrchestratorRunner:
                 print(f"[Orchestrator] Collaborative mode failed: {exc}, falling back to Director.", file=sys.stderr, flush=True)
                 self._state_board.log_event("orchestrator.collab_failed", message=str(exc))
                 await self._run_director_mode(objective, intent=intent)
+            # If collaborative mode exited with unfinished work, let the Director
+            # recover failed tasks or drive remaining pending tasks.
+            if (
+                self._state_board is not None
+                and not self._state_board.all_terminal()
+                and not self._state_board.budget.exhausted
+            ):
+                pending = [t.task_id for t in self._state_board.tasks.values() if not t.is_terminal()]
+                print(
+                    f"[Orchestrator] Collaborative loop finished with unfinished tasks {pending}; "
+                    "falling back to Director.",
+                    file=sys.stderr, flush=True,
+                )
+                self._state_board.log_event(
+                    "orchestrator.collab_fallback_director",
+                    message=f"Unfinished tasks: {pending}",
+                )
+                await self._run_director_mode(objective, intent=intent)
         else:
             await self._run_director_mode(objective, intent=intent)
 
@@ -501,23 +515,86 @@ class OrchestratorRunner:
         return report
 
     def _should_use_collaborative_mode(self) -> bool:
-        """Determine whether resident coder/reviewer collaboration should run.
+        """Determine whether resident collaboration should run.
 
         Modes:
         - ``off``: always use Director scheduling.
-        - ``on``: use collaborative mode for any coder task graph.
-        - ``auto``: use collaborative mode for multi-coder graphs that benefit
-          from an implementation -> review -> fix loop.
+        - ``on``: use collaborative mode for any collaborative task graph.
+        - ``auto``: use collaborative mode for multi-collaborative graphs that
+          benefit from a producer -> checker -> fix loop.
         """
         if self._state_board is None or self._collaborative_mode == "off":
             return False
-        coding_tasks = [
+        collaborative_tasks = [
             t for t in self._state_board.tasks.values()
-            if t.agent_type == "coder"
+            if self._resolve_pattern(t) != "default"
         ]
         if self._collaborative_mode == "on":
-            return bool(coding_tasks)
-        return len(coding_tasks) >= 2
+            return bool(collaborative_tasks)
+        return len(collaborative_tasks) >= 2
+
+    def _resolve_pattern(self, task: Any) -> str:
+        """Return the collaboration pattern for a task."""
+        pattern = getattr(task, "collaboration_pattern", "default") or "default"
+        if pattern != "default":
+            return pattern
+        if getattr(task, "agent_type", "") == "coder":
+            return "coder_reviewer"
+        return "default"
+
+    def _resolve_producer_type(self, task: Any, pattern: str | None = None) -> str:
+        """Return the agent_type that produces work for this collaborative task."""
+        participants = getattr(task, "collaboration_participants", {}) or {}
+        producer = participants.get("producer")
+        if producer:
+            return producer
+        return getattr(task, "agent_type", "")
+
+    def _resolve_checker_type(self, task: Any, pattern: str | None = None) -> str:
+        """Return the agent_type that checks work for this collaborative task."""
+        participants = getattr(task, "collaboration_participants", {}) or {}
+        checker = participants.get("checker")
+        if checker:
+            return checker
+        if (pattern or self._resolve_pattern(task)) == "coder_reviewer":
+            return "reviewer"
+        return "reviewer"
+
+    def _resident_id_for(self, task: Any, agent_type: str) -> str:
+        """Return the deterministic resident id for an agent type bound to a task."""
+        return f"{agent_type}-{task.task_id}"
+
+    def _role_map_for_task(self, task: Any) -> dict[str, str]:
+        """Return producer/checker resident ids for a collaborative task."""
+        pattern = self._resolve_pattern(task)
+        producer_type = self._resolve_producer_type(task, pattern)
+        checker_type = self._resolve_checker_type(task, pattern)
+        return {
+            "producer": self._resident_id_for(task, producer_type),
+            "checker": self._resident_id_for(task, checker_type),
+        }
+
+    def _collaborative_tasks_needing_action(self) -> tuple[list[Any], list[Any], list[Any]]:
+        """Return ready/review/fix task buckets for configured collaboration patterns."""
+        if self._state_board is None:
+            return [], [], []
+        ready_tasks = [
+            t for t in self._state_board.tasks_ready()
+            if self._resolve_pattern(t) != "default"
+        ]
+        review_tasks = [
+            t for t in self._state_board.tasks.values()
+            if t.status == TaskStatus.REVIEW and self._resolve_pattern(t) != "default"
+        ]
+        fix_tasks = [
+            t for t in self._state_board.tasks.values()
+            if (
+                t.status == TaskStatus.FIX_NEEDED
+                and t.assigned_agent
+                and self._resolve_pattern(t) != "default"
+            )
+        ]
+        return ready_tasks, review_tasks, fix_tasks
 
     async def _run_director_mode(self, objective: str, *, intent: IntentResult | None = None) -> None:
         """Original Director-driven orchestration."""
@@ -570,75 +647,95 @@ class OrchestratorRunner:
             # TASK_REVIEW_READY while we were sleeping)
             await self._process_collaborative_messages()
 
+            # 0.5 Detect residents that died while their task is still RUNNING.
+            # Without this, a failed LLM call or crashed resident leaves the
+            # task stuck in RUNNING and the loop spins forever.
+            for task in list(self._state_board.tasks.values()):
+                if task.status != TaskStatus.RUNNING or not task.assigned_agent:
+                    continue
+                resident = self._residents.get(task.assigned_agent)
+                if resident is None or not getattr(resident, "_active", False):
+                    print(
+                        f"[Orchestrator] Resident {task.assigned_agent} died while "
+                        f"task {task.task_id} was running; marking failed.",
+                        file=sys.stderr, flush=True,
+                    )
+                    self._state_board.update_task(
+                        task.task_id,
+                        status=TaskStatus.FAILED,
+                        error=f"Resident {task.assigned_agent} stopped or crashed",
+                    )
+                    task.record_iteration(
+                        task.assigned_agent,
+                        "resident_died",
+                        f"Resident {task.assigned_agent} no longer active",
+                    )
+                    if resident is not None:
+                        await resident.stop()
+                        self._residents.pop(task.assigned_agent, None)
+
             # Find tasks needing action after message processing, since thread
             # messages can change RUNNING/REVIEW/FIX_NEEDED state.
-            ready_tasks = [
-                t for t in self._state_board.tasks_ready()
-                if t.agent_type == "coder"
-            ]
-            review_tasks = [
-                t for t in self._state_board.tasks.values()
-                if t.status == TaskStatus.REVIEW and t.agent_type == "coder"
-            ]
-            fix_tasks = [
-                t for t in self._state_board.tasks.values()
-                if t.status == TaskStatus.FIX_NEEDED and t.assigned_agent and t.agent_type == "coder"
-            ]
+            ready_tasks, review_tasks, fix_tasks = self._collaborative_tasks_needing_action()
 
             # Nothing to do?
             if not ready_tasks and not review_tasks and not fix_tasks:
                 if self._state_board.all_terminal():
                     break
-                # Wait for a signal to arrive (event-driven) with a fallback
-                # timeout of 30s to guard against missed events
-                self._collab_wake_event.clear()
+
+                # If tasks have failed, the collaborative loop cannot unblock
+                # downstream work on its own. Exit so the Director can recover.
+                failed_tasks = [
+                    t for t in self._state_board.tasks.values()
+                    if t.status == TaskStatus.FAILED
+                ]
+                if failed_tasks:
+                    failed_ids = [t.task_id for t in failed_tasks]
+                    print(
+                        f"[Orchestrator] Failed tasks {failed_ids} detected; "
+                        "exiting collaborative loop for Director recovery.",
+                        file=sys.stderr, flush=True,
+                    )
+                    self._state_board.log_event(
+                        "orchestrator.collab_fallback",
+                        message=f"Failed tasks {failed_ids}; handing off to Director",
+                    )
+                    break
+
+                # Wait for a signal to arrive (event-driven) with a short fallback
+                # timeout to guard against missed events.  Clear only after wait
+                # returns so a set() that fires just before we block is not lost.
                 try:
-                    await asyncio.wait_for(self._collab_wake_event.wait(), timeout=30.0)
+                    await asyncio.wait_for(self._collab_wake_event.wait(), timeout=10.0)
                 except asyncio.TimeoutError:
                     pass  # fallback: re-enter loop to check for stuck tasks
+                self._collab_wake_event.clear()
                 continue
 
-            # 1. Spawn resident coders for ready tasks
+            # 1. Spawn resident producers for ready tasks
             for task in ready_tasks:
-                await self._spawn_resident_for_task(task, "coder")
+                pattern = self._resolve_pattern(task)
+                producer_type = self._resolve_producer_type(task, pattern)
+                await self._spawn_resident_for_task(task, producer_type, pattern=pattern)
 
-            # 2. Spawn resident reviewers for tasks in REVIEW state
+            # 2. Spawn resident checkers for tasks in REVIEW state
             for task in review_tasks:
-                await self._spawn_resident_for_task(task, "reviewer")
+                pattern = self._resolve_pattern(task)
+                checker_type = self._resolve_checker_type(task, pattern)
+                await self._spawn_resident_for_task(task, checker_type, pattern=pattern)
 
-            # 3. Send fix instructions to bound coders
+            # 3. Send fix instructions to bound producers
             for task in fix_tasks:
-                resident = self._residents.get(task.assigned_agent)
-                if resident is not None:
-                    # Get review feedback from project context
-                    ctx = self._state_board.get_project_context()
-                    recent_errors = ctx.get("recent_errors", [])
-                    feedback = ""
-                    for err in recent_errors:
-                        if err.get("source") == task.task_id:
-                            feedback = err.get("error", "")
-                            break
+                await self._send_fix_to_producer(task)
 
-                    await resident.send({
-                        "task": f"Fix task {task.task_id}",
-                        "content": coder_fix_prompt(
-                            task_id=task.task_id,
-                            description=task.description,
-                            feedback=feedback,
-                            iteration_history_json=json.dumps(task.iteration_history[-3:], ensure_ascii=False),
-                        ),
-                        "from": "reviewer",
-                        "context": f"Task: {task.description}\nHistory: {json.dumps(task.iteration_history[-3:], ensure_ascii=False)}",
-                    })
-                    self._state_board.update_task(task.task_id, status=TaskStatus.RUNNING)
-                    task.record_iteration(task.assigned_agent, "fix_requested", feedback)
-
-            # Event-driven: wait for next signal arrival with a short fallback
-            self._collab_wake_event.clear()
+            # Event-driven: wait for next signal arrival with a short fallback.
+            # Clear only after wait returns so a set() just before blocking is
+            # not discarded.
             try:
-                await asyncio.wait_for(self._collab_wake_event.wait(), timeout=10.0)
+                await asyncio.wait_for(self._collab_wake_event.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 pass  # re-enter loop to check resident health
+            self._collab_wake_event.clear()
 
             # Check for stuck/broken residents
             await self._check_resident_health()
@@ -649,6 +746,8 @@ class OrchestratorRunner:
         """Claim structured SIGNAL messages from mailboxes to advance tasks.
 
         The state machine is driven exclusively by Mailbox v2 SIGNAL messages.
+        Tasks are processed concurrently because each task's signal handling
+        only mutates its own task state and is independent of other tasks.
         """
         if self._state_board is None:
             return
@@ -658,8 +757,14 @@ class OrchestratorRunner:
             message=f"tasks={[(t.task_id, t.status.value) for t in self._state_board.tasks.values()]}",
         )
 
-        for task in list(self._state_board.tasks.values()):
-            await self._process_signals_from_mailbox(task)
+        tasks = list(self._state_board.tasks.values())
+        if not tasks:
+            return
+
+        await asyncio.gather(
+            *(self._process_signals_from_mailbox(task) for task in tasks),
+            return_exceptions=True,
+        )
 
     async def _process_signals_from_mailbox(self, task: Any) -> None:
         """Claim structured SIGNAL messages from task agents' mailboxes.
@@ -675,10 +780,17 @@ class OrchestratorRunner:
         agents_to_check: list[str] = []
         if task.assigned_agent:
             agents_to_check.append(task.assigned_agent)
-        # Also check any reviewer resident associated with this task
-        reviewer_id = f"reviewer-{task_id}"
-        if reviewer_id in self._residents:
-            agents_to_check.append(reviewer_id)
+
+        pattern = self._resolve_pattern(task)
+        if pattern != "default":
+            role_map = self._role_map_for_task(task)
+            for resident_id in role_map.values():
+                if resident_id not in agents_to_check:
+                    agents_to_check.append(resident_id)
+            for agent_type in (getattr(task, "collaboration_participants", {}) or {}).values():
+                resident_id = self._resident_id_for(task, agent_type)
+                if resident_id not in agents_to_check:
+                    agents_to_check.append(resident_id)
 
         for agent_id in agents_to_check:
             # Peek for SIGNAL messages only — don't touch non-signal messages
@@ -696,7 +808,11 @@ class OrchestratorRunner:
                 # messages that may be ahead of the signal in the priority queue.
                 claimed = await self._state_board.claim_message(agent_id, signal_msg.msg_id)
                 if claimed is not None:
-                    await self._apply_collaboration_signal(task, agent_id, parsed, claimed.text or "")
+                    # Use the message's actual sender, not the mailbox owner.
+                    # Signals are delivered to the recipient's mailbox, but the
+                    # state machine validates who sent them (coder vs reviewer).
+                    real_sender = claimed.header.sender
+                    await self._apply_collaboration_signal(task, real_sender, parsed, claimed.text or "")
                     await self._state_board.ack_message(agent_id, claimed.msg_id)
 
     async def _apply_collaboration_signal(
@@ -712,7 +828,8 @@ class OrchestratorRunner:
         execution to CollaborationDecisionExecutor — both independently testable.
         """
         csm = CollaborationStateMachine(
-            max_iterations=getattr(task, "max_iterations", 5) or 5
+            max_iterations=getattr(task, "max_iterations", 5) or 5,
+            role_map=self._role_map_for_task(task),
         )
         decision = csm.decide(
             task=task,
@@ -731,7 +848,58 @@ class OrchestratorRunner:
             self._collab_wake_event.set()  # wake the collaboration loop immediately
         return handled
 
-    async def _spawn_resident_for_task(self, task: Any, agent_type: str) -> ResidentAgent | None:
+    async def _send_fix_to_producer(self, task: Any) -> None:
+        """Send checker feedback back to the producer for a FIX_NEEDED task."""
+        if self._state_board is None or not task.assigned_agent:
+            return
+
+        resident = self._residents.get(task.assigned_agent)
+        if resident is None:
+            return
+
+        pattern = self._resolve_pattern(task)
+        ctx = self._state_board.get_project_context()
+        recent_errors = ctx.get("recent_errors", [])
+        feedback = ""
+        for err in recent_errors:
+            if err.get("source") == task.task_id:
+                feedback = err.get("error", "")
+                break
+
+        prompt_factory = get_prompt(pattern, "producer_fix")
+        if pattern == "coder_reviewer":
+            content = prompt_factory(
+                task_id=task.task_id,
+                description=task.description,
+                feedback=feedback,
+                iteration_history_json=json.dumps(task.iteration_history[-3:], ensure_ascii=False),
+            )
+            sender = "reviewer"
+        else:
+            content = prompt_factory(
+                task_id=task.task_id,
+                description=task.description,
+                feedback=feedback,
+                iteration_history_json=json.dumps(task.iteration_history[-3:], ensure_ascii=False),
+            )
+            sender = "checker"
+
+        await resident.send({
+            "task": f"Fix task {task.task_id}",
+            "content": content,
+            "from": sender,
+            "context": f"Task: {task.description}\nHistory: {json.dumps(task.iteration_history[-3:], ensure_ascii=False)}",
+        })
+        self._state_board.update_task(task.task_id, status=TaskStatus.RUNNING)
+        task.record_iteration(task.assigned_agent, "fix_requested", feedback)
+
+    async def _spawn_resident_for_task(
+        self,
+        task: Any,
+        agent_type: str,
+        *,
+        pattern: str | None = None,
+    ) -> ResidentAgent | None:
         """Spawn a resident agent bound to a specific task."""
         import sys
 
@@ -742,7 +910,11 @@ class OrchestratorRunner:
         if self._state_board.budget.exhausted:
             return None
 
-        resident_id = f"{agent_type}-{task.task_id}"
+        pattern = pattern or self._resolve_pattern(task)
+        producer_type = self._resolve_producer_type(task, pattern)
+        checker_type = self._resolve_checker_type(task, pattern)
+        role = "producer" if agent_type == producer_type else "checker"
+        resident_id = self._resident_id_for(task, agent_type)
 
         # Don't spawn if already exists and active or sleeping
         if resident_id in self._residents:
@@ -753,16 +925,15 @@ class OrchestratorRunner:
                 return resident
 
         print(
-            f"[Orchestrator] Spawning resident {resident_id} for task {task.task_id}",
+            f"[Orchestrator] Spawning resident {resident_id} ({role}) for task {task.task_id}",
             file=sys.stderr, flush=True,
         )
 
-        # Collaborative agents need more steps for iterative work
         run_budget = None
-        if agent_type == "coder":
-            run_budget = RunBudget(max_steps=50, max_duration_ms=600_000)
-        elif agent_type == "reviewer":
-            run_budget = RunBudget(max_steps=20, max_duration_ms=300_000)
+        if role == "producer":
+            run_budget = RunBudget(max_steps=80, max_duration_ms=600_000)
+        elif role == "checker":
+            run_budget = RunBudget(max_steps=50, max_duration_ms=300_000)
 
         try:
             resident = ResidentAgent(
@@ -774,50 +945,75 @@ class OrchestratorRunner:
                 persist_dir=str(self._session_dir) if self._session_dir else None,
                 run_budget=run_budget,
             )
-            if agent_type == "coder":
+            if role == "producer":
                 resident.bind_task(task.task_id, auto_verify=True)
             else:
                 resident._bound_task_id = task.task_id
             await resident.start()
             self._residents[resident_id] = resident
 
-            # Build initial message based on agent type
-            if agent_type == "coder":
-                reviewer_id = f"reviewer-{task.task_id}"
-                thread_id = f"task-{task.task_id}"
-                initial_msg = {
-                    "task": task.description,
-                    "content": coder_initial_prompt(
+            if role == "producer":
+                checker_id = self._resident_id_for(task, checker_type)
+                prompt_factory = get_prompt(pattern, "producer")
+                if pattern == "coder_reviewer":
+                    content = prompt_factory(
                         task_id=task.task_id,
                         description=task.description,
                         expected_artifacts=task.expected_artifacts,
-                        reviewer_id=reviewer_id,
-                    ),
+                        reviewer_id=checker_id,
+                    )
+                    action = "spawned_coder"
+                else:
+                    content = prompt_factory(
+                        task_id=task.task_id,
+                        description=task.description,
+                        expected_artifacts=task.expected_artifacts,
+                        checker_id=checker_id,
+                    )
+                    action = "spawned_producer"
+                initial_msg = {
+                    "task": task.description,
+                    "content": content,
                     "from": "director",
                     "context": task.input_context,
                 }
                 self._state_board.update_task(task.task_id, status=TaskStatus.RUNNING)
-                task.record_iteration(resident_id, "spawned_coder", task.description)
+                task.assigned_agent = resident_id
+                task.record_iteration(resident_id, action, task.description)
 
-            elif agent_type == "reviewer":
-                # Find the coder's output
-                coder_id = task.assigned_agent
-                if not coder_id:
-                    raise RuntimeError(f"Task {task.task_id} has no assigned coder")
+            else:
+                producer_id = task.assigned_agent or self._resident_id_for(task, producer_type)
+                if not producer_id:
+                    raise RuntimeError(f"Task {task.task_id} has no assigned producer")
                 thread_id = f"task-{task.task_id}"
-                initial_msg = {
-                    "task": f"Review task {task.task_id}",
-                    "content": reviewer_initial_prompt(
+                prompt_factory = get_prompt(pattern, "checker")
+                if pattern == "coder_reviewer":
+                    content = prompt_factory(
                         task_id=task.task_id,
                         description=task.description,
-                        coder_id=coder_id,
+                        coder_id=producer_id,
                         thread_id=thread_id,
                         iteration_history=json.dumps(task.iteration_history, ensure_ascii=False),
-                    ),
+                    )
+                    action = "spawned_reviewer"
+                    context_label = "Coder"
+                else:
+                    content = prompt_factory(
+                        task_id=task.task_id,
+                        description=task.description,
+                        producer_id=producer_id,
+                        thread_id=thread_id,
+                        iteration_history=json.dumps(task.iteration_history, ensure_ascii=False),
+                    )
+                    action = "spawned_checker"
+                    context_label = "Producer"
+                initial_msg = {
+                    "task": f"Review task {task.task_id}",
+                    "content": content,
                     "from": "director",
-                    "context": f"Coder: {coder_id}\nThread: {thread_id}\nHistory: {json.dumps(task.iteration_history, ensure_ascii=False)}",
+                    "context": f"{context_label}: {producer_id}\nThread: {thread_id}\nHistory: {json.dumps(task.iteration_history, ensure_ascii=False)}",
                 }
-                task.record_iteration(resident_id, "spawned_reviewer", "")
+                task.record_iteration(resident_id, action, "")
 
             await resident.send(initial_msg)
             return resident
@@ -844,6 +1040,10 @@ class OrchestratorRunner:
         for resident_id, resident in list(self._residents.items()):
             state = resident.state
             idle_s = now - state.last_active
+
+            # Sleeping residents are intentionally idle; don't flag them as stuck.
+            if state.status == "sleeping":
+                continue
 
             if state.status == "error" or idle_s > stuck_threshold_s:
                 # Resident is stuck — wake up Director
@@ -881,11 +1081,13 @@ class OrchestratorRunner:
             payload = dict(runtime_event.payload)
             agent_id = payload.get("agent_id", "unknown")
 
-            if name in ("llm.succeeded", "llm.failed"):
+            if name in ("llm.succeeded", "llm.failed", "llm.cancelled"):
                 metrics = payload.get("_metrics")
                 if metrics and self._state_board is not None:
                     agent = self._state_board.get_agent(agent_id)
-                    if agent:
+                    if agent and name != "llm.cancelled":
+                        # Cancelled calls are lifecycle events, not consumed API
+                        # calls, so don't count them against the agent.
                         agent.llm_call_count += 1
                         agent.total_llm_latency_ms += getattr(metrics, "latency_ms", 0)
                         agent.token_used += getattr(metrics, "input_tokens", 0) + getattr(metrics, "output_tokens", 0)
@@ -1075,22 +1277,29 @@ class OrchestratorRunner:
             task_id = agent_id.replace(f"{agent_type}-", "", 1) if agent_id.startswith(f"{agent_type}-") else agent_id
             task = self._state_board.get_task(task_id)
             if task is not None and task.status != TaskStatus.COMPLETED:
+                result_output = str(result.final_output or "")
+                result_artifacts = list(result.artifacts or [])
+                if agent_type == "team_leader" and deps_override is not None:
+                    sub_board = getattr(deps_override, "state_board", None)
+                    summary, artifact_paths = self._summarize_team_sub_board(sub_board)
+                    if summary:
+                        result_output = summary
+                    if artifact_paths:
+                        result_artifacts.extend(artifact_paths)
+
                 self._state_board.update_task(
                     task_id,
                     status=TaskStatus.COMPLETED,
-                    result_output=str(result.final_output or "")[:2000],
+                    result_output=result_output[:2000],
                 )
                 # Verify and record artifacts (strict: must exist and be non-empty)
-                for art in result.artifacts:
+                for art in result_artifacts:
                     art_path = getattr(art, "path", str(art)) if hasattr(art, "path") else str(art)
-                    if art_path:
-                        full_path = Path(art_path)
-                        if not full_path.is_absolute():
-                            # Try to resolve relative to current working context
-                            full_path = Path.cwd() / art_path
-                        exists = full_path.exists() and full_path.stat().st_size > 0
+                    resolved = self._resolve_artifact_path(str(art_path)) if art_path else None
+                    if resolved is not None:
+                        exists = resolved.exists() and resolved.stat().st_size > 0
                         self._state_board.verify_artifact(str(art_path), exists=exists)
-                        self._state_board.claim_artifact(task_id, [art_path])
+                        self._state_board.claim_artifact(task_id, [str(art_path)])
 
             # Merge sub-board budget back to parent for team leaders
             if agent_type == "team_leader" and deps_override is not None:
@@ -1135,6 +1344,65 @@ class OrchestratorRunner:
             ))
 
         return str(result.final_output or "")
+
+    def _resolve_artifact_path(self, artifact_path: str) -> Path | None:
+        """Resolve an artifact path against known working directories."""
+        raw = str(artifact_path or "").strip()
+        if not raw or any(ch in raw for ch in ("\n", "\r")):
+            return None
+        # Ignore natural-language snippets accidentally extracted as paths.
+        if " " in raw or raw.startswith(("bash:", "pytest:")):
+            return None
+
+        path = Path(raw)
+        if path.is_absolute():
+            return path
+
+        candidates: list[Path] = []
+        if self._current_work_dir is not None:
+            candidates.append(Path(self._current_work_dir) / path)
+            # Some agents include the work-dir basename in artifact paths even
+            # though writes were already rooted at work_dir. Strip that prefix.
+            parts = path.parts
+            work_name = Path(self._current_work_dir).name
+            if parts and parts[0].lstrip(".") == work_name.lstrip("."):
+                candidates.append(Path(self._current_work_dir).joinpath(*parts[1:]))
+        candidates.append(Path.cwd() / path)
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0] if candidates else path
+
+    def _summarize_team_sub_board(self, sub_board: Any) -> tuple[str, list[str]]:
+        """Build parent task output/artifacts from a completed team sub-board."""
+        if sub_board is None or not hasattr(sub_board, "tasks"):
+            return "", []
+
+        completed = [
+            task for task in sub_board.tasks.values()
+            if getattr(task, "status", None) == TaskStatus.COMPLETED
+        ]
+        if not completed:
+            return "", []
+
+        lines = [f"Team completed {len(completed)}/{len(sub_board.tasks)} subtask(s)."]
+        artifacts: list[str] = []
+        for task in completed:
+            output = str(getattr(task, "result_output", "") or "").strip()
+            if output:
+                lines.append(f"- {task.task_id}: {output[:300]}")
+            else:
+                lines.append(f"- {task.task_id}: completed")
+            for path in getattr(task, "actual_artifacts", []) or []:
+                if path and path not in artifacts:
+                    artifacts.append(str(path))
+
+        for path, record in getattr(sub_board, "artifacts", {}).items():
+            if getattr(record, "status", "") == "verified" and path not in artifacts:
+                artifacts.append(str(path))
+
+        return "\n".join(lines), artifacts
 
     # -- resident agents -----------------------------------------------------
 
@@ -1223,7 +1491,13 @@ class OrchestratorRunner:
     # -- internals -----------------------------------------------------------
 
     async def _classify_intent(self, objective: str) -> IntentResult:
-        """Classify task intent before decomposition."""
+        """Classify task intent before decomposition.
+
+        Transient LLM errors are caught and surfaced as a low-confidence
+        fallback so that orchestration always proceeds.  Intent is a
+        hint — not a gating decision — so a failed classification
+        should never crash the run.
+        """
         director_agent = self._agents_by_id.get("director")
         if director_agent is None or director_agent.llm is None:
             return IntentResult(
@@ -1233,7 +1507,21 @@ class OrchestratorRunner:
             )
         llm = create_llm_client(director_agent.llm)
         classifier = IntentClassifier(llm_client=llm)
-        return await classifier.classify(objective)
+        try:
+            return await asyncio.wait_for(classifier.classify(objective), timeout=25.0)
+        except (asyncio.TimeoutError, Exception) as exc:
+            import sys
+            print(
+                f"[Orchestrator] Intent classification failed: {exc}; using fallback.",
+                file=sys.stderr, flush=True,
+            )
+            return IntentResult(
+                task_type="unknown", complexity="medium",
+                external=[], priority="normal",
+                confidence=0.0,
+                reason=f"LLM error: {exc}",
+                source="fallback",
+            )
 
     async def _initial_decompose(self, objective: str) -> TaskGraph:
         """Use structured generation to decompose the objective into a TaskGraph."""
@@ -1270,10 +1558,13 @@ class OrchestratorRunner:
             "1. Each task has a unique task_id (t1, t2, ...)\n"
             "2. List dependencies explicitly\n"
             "3. EACH TASK SHOULD HAVE AT MOST 3-5 expected_artifacts. Split large tasks.\n"
-            "4. Keep the graph shallow (2-4 layers)\n"
-            "5. input_context: detailed instructions for the agent\n"
+            "4. Keep the graph shallow (2-4 layers). Prefer fewer tasks.\n"
+            "5. input_context: detailed instructions for the agent, including file paths and tests to write\n"
             "6. coder agents have a step budget of ~30 steps.\n"
-            "7. For complex features that benefit from internal coder+reviewer loops, "
+            "7. EVERY coder task MUST produce runnable source code and/or tests. "
+            "Do NOT create tasks that only produce analysis, README, or design documents.\n"
+            "8. For simple features, use a single coder task that implements code + tests together.\n"
+            "9. For complex features that benefit from internal coder+reviewer loops, "
             "set agent_type='team_leader' and provide subtasks (2-4 sub-tasks with dependencies)."
         )
 
@@ -1305,13 +1596,18 @@ class OrchestratorRunner:
             )
             # Convert subtasks to subgraph for team_leader delegation
             if item.subtasks:
+                sub_ids = {str(sub.task_id) for sub in item.subtasks}
                 sub_tasks = []
                 for sub in item.subtasks:
+                    # Subgraph dependencies must reference only sibling subtasks.
+                    # Dependencies on parent-level tasks are satisfied implicitly
+                    # because the parent task already waits for them.
+                    deps = [d for d in sub.dependencies if d in sub_ids]
                     sub_tasks.append(TaskNode(
                         task_id=str(sub.task_id),
                         description=str(sub.description),
                         agent_type=str(sub.agent_type),
-                        dependencies=list(sub.dependencies),
+                        dependencies=deps,
                         expected_artifacts=list(sub.expected_artifacts),
                         input_context=f"Subtask of {item.task_id}: {sub.description}",
                     ))

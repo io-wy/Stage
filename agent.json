@@ -60,7 +60,7 @@
         "model": "${LLM_MODEL}",
         "temperature": 0.2,
         "max_tokens": 4096,
-        "timeout_ms": 120000
+        "timeout_ms": 180000
       },
       "tools": [
         {
@@ -84,14 +84,6 @@
           "impl": "openagents_orchestration.tools.director.replan.ReplanTool"
         },
         {
-          "id": "recover_task",
-          "impl": "openagents_orchestration.tools.director.recover_task.RecoverTaskTool"
-        },
-        {
-          "id": "correct_task_status",
-          "impl": "openagents_orchestration.tools.director.correct_task_status.CorrectTaskStatusTool"
-        },
-        {
           "id": "finalize",
           "impl": "openagents_orchestration.tools.director.finalize.FinalizeTool"
         },
@@ -100,8 +92,8 @@
           "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
         },
         {
-          "id": "send_message",
-          "impl": "openagents_orchestration.tools.director.send_message.SendMessageTool"
+          "id": "check_messages",
+          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
         },
         {
           "id": "spawn_resident",
@@ -118,14 +110,6 @@
         {
           "id": "stop_resident",
           "impl": "openagents_orchestration.tools.resident.stop_resident.StopResidentTool"
-        },
-        {
-          "id": "check_messages",
-          "impl": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool"
-        },
-        {
-          "id": "check_dlq",
-          "impl": "openagents_orchestration.tools.monitor.check_dlq.CheckDLQTool"
         }
       ],
       "runtime": {

@@ -483,6 +483,25 @@ class CoreCoderPattern(PatternPlugin):
                     await asyncio.sleep(1.5 * (attempt + 1))
             if response is None and last_exc is not None:
                 raise last_exc
+        except asyncio.CancelledError:
+            # Resident was stopped while an LLM call was in flight. This is a
+            # normal lifecycle event, not an API failure. Emit a distinct event
+            # and re-raise so the caller (resident loop) can shut down cleanly.
+            latency_ms = (time.monotonic() - started) * 1000.0
+            metrics = LLMCallMetrics(
+                model=model or "",
+                latency_ms=latency_ms,
+                input_tokens=0,
+                output_tokens=0,
+                cached_tokens=0,
+                error="cancelled",
+            )
+            await self.emit(
+                "llm.cancelled",
+                model=model,
+                _metrics=metrics,
+            )
+            raise
         except BaseException as exc:
             latency_ms = (time.monotonic() - started) * 1000.0
             ctx.state["__api_error_count__"] = ctx.state.get("__api_error_count__", 0) + 1

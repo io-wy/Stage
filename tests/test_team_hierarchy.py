@@ -7,6 +7,7 @@ import pytest
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.core.sub_state_board import SubStateBoard
 from openagents_orchestration.core.state_board import StateBoard, Budget
+from openagents_orchestration.core.runner import OrchestratorRunner
 
 
 class TestTaskNodeSubgraph:
@@ -73,3 +74,22 @@ class TestSubStateBoard:
         assert len(parent.tasks) == 1
         assert len(sub.tasks) == 1
         assert "s1" not in parent.tasks
+
+
+class TestTeamLeaderMerge:
+    def test_summarize_team_sub_board_collects_outputs_and_artifacts(self):
+        parent = StateBoard("obj", echo=False)
+        sub = SubStateBoard(parent=parent, objective="team task")
+        task = TaskNode("s1", "build module", "coder", status=TaskStatus.COMPLETED)
+        task.result_output = "implemented registry and tests"
+        task.actual_artifacts = ["pipeline_eval/registry.py"]
+        sub.add_tasks(TaskGraph("team task", [task]))
+        sub.claim_artifact("s1", ["pipeline_eval/cli.py"])
+        sub.verify_artifact("pipeline_eval/cli.py", exists=True)
+
+        runner = OrchestratorRunner("agent.json")
+        summary, artifacts = runner._summarize_team_sub_board(sub)
+
+        assert "Team completed 1/1 subtask" in summary
+        assert "implemented registry and tests" in summary
+        assert artifacts == ["pipeline_eval/registry.py", "pipeline_eval/cli.py"]
