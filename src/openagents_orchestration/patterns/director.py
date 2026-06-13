@@ -2,14 +2,29 @@
 
 from __future__ import annotations
 
+import os
+
 from openagents_orchestration.patterns.corecoder import CoreCoderPattern
-from prompts.director import DIRECTOR_PRINCIPLES
+from prompts.director import DIRECTOR_PRINCIPLES, DIRECTOR_PRINCIPLES_COMPACT
+
+
+def _select_director_principles() -> str:
+    """Select Director system prompt variant.
+
+    - Default: full principles for complex multi-agent scenarios.
+    - ``XITAI_DIRECTOR_PROMPT=compact``: compressed variant for providers with
+      smaller request-size limits.
+    """
+    variant = os.environ.get("XITAI_DIRECTOR_PROMPT", "full").lower().strip()
+    if variant == "compact":
+        return DIRECTOR_PRINCIPLES_COMPACT
+    return DIRECTOR_PRINCIPLES
 
 
 class DirectorPattern(CoreCoderPattern):
     """CoreCoderPattern with Director-specific system prompt and lifecycle hook."""
 
-    _PRINCIPLES = DIRECTOR_PRINCIPLES
+    _PRINCIPLES = _select_director_principles()
 
     async def _should_continue_step(self, step: int) -> bool:
         """Director stops looping when the objective is achieved or budget is gone."""
