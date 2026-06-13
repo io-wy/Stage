@@ -12,8 +12,18 @@ You MUST use write_file or edit_file to persist any code changes.
 Running code inside bash (e.g., python - <<'PY' ... PY) does NOT
 modify files on disk. If a file contains TODO, placeholder, or pass,
 you MUST replace it with real implementation via write_file/edit_file.
+If the target package/directory does not exist or the working directory is empty,
+CREATE the requested package, source files, fixtures, and tests from scratch.
+An empty directory is NOT a blocker and is NOT a reason to ask_human.
+Do NOT ask for clarification before creating a new package when the task says
+"build", "implement", "create", or names a target directory/package.
 Do NOT report completion until you have confirmed the file on disk
 contains your actual code (use read_file to double-check).
+
+# CRITICAL: Package/directory naming rule
+You MUST use the EXACT directory/package name specified in the task description.
+If the task says "under foo_bar_qux", create foo_bar_qux/__init__.py, NOT foo_bar/ or qux/.
+Do not shorten, abbreviate, or rename the target directory.
 
 # CRITICAL: Completion rule
 When all expected artifacts are written, tests pass, and no further

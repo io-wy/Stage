@@ -26,6 +26,10 @@ def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
     2. bash_cwd cached in scratch → resolve relative to that
     3. runner._current_work_dir → resolve relative to that
     4. Fallback to Path.cwd()
+
+    Also strips the work-dir basename prefix when the agent accidentally
+    includes it in the relative path (e.g. writing to
+    `.eval_work/src/foo.py` while cwd is already `.eval_work`).
     """
     path = Path(file_path)
     if path.is_absolute():
@@ -43,6 +47,14 @@ def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
                 base = Path(cwd)
     if base is None:
         base = Path.cwd()
+
+    # Agents sometimes include the work-dir basename even though writes are
+    # already rooted at work_dir. Strip that leading segment to avoid
+    # creating nested work directories.
+    parts = path.parts
+    if parts and parts[0] == base.name:
+        path = Path(*parts[1:])
+
     return base / path
 
 

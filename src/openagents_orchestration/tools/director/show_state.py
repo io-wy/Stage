@@ -44,37 +44,45 @@ class ShowStateTool(ToolPlugin):
         if board is None:
             raise PermanentToolError("StateBoard not available", tool_name=self.name)
 
-        section = params.get("section")
-        snapshot = board.snapshot()
+        try:
+            section = params.get("section")
+            snapshot = board.snapshot()
 
-        payload = snapshot[section] if section and section in snapshot else snapshot
+            payload = snapshot[section] if section and section in snapshot else snapshot
 
-        # Append DLQ summary so Director can spot stuck messages
-        dlq_summary = await board.inspect_dlq()
-        if dlq_summary:
-            payload["dlq_summary"] = dlq_summary
+            # Append DLQ summary so Director can spot stuck messages
+            dlq_summary = await board.inspect_dlq()
+            if dlq_summary:
+                payload["dlq_summary"] = dlq_summary
 
-        # Append suggested tools based on current state
-        suggested_tools = board.suggest_tools()
-        if suggested_tools:
-            payload["suggested_next_tools"] = suggested_tools
+            # Append suggested tools based on current state
+            suggested_tools = board.suggest_tools()
+            if suggested_tools:
+                payload["suggested_next_tools"] = suggested_tools
 
-        # If there are DLQ messages, suggest check_dlq
-        if dlq_summary and "check_dlq" not in suggested_tools:
-            suggested_tools.insert(0, "check_dlq")
-            payload["suggested_next_tools"] = suggested_tools
+            # If there are DLQ messages, suggest check_dlq
+            if dlq_summary and "check_dlq" not in suggested_tools:
+                suggested_tools.insert(0, "check_dlq")
+                payload["suggested_next_tools"] = suggested_tools
 
-        # Append fallback suggestions for failed tasks
-        failed_tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
-        extra_lines: list[str] = []
-        if isinstance(failed_tasks, list):
-            for task in failed_tasks:
-                if task.get("status") == "failed":
-                    suggestion = board.suggest_fallback(task["id"])
-                    if suggestion:
-                        extra_lines.append(suggestion)
+            # Append fallback suggestions for failed tasks
+            failed_tasks = payload.get("tasks", []) if isinstance(payload, dict) else []
+            extra_lines: list[str] = []
+            if isinstance(failed_tasks, list):
+                for task in failed_tasks:
+                    if task.get("status") == "failed":
+                        suggestion = board.suggest_fallback(task["id"])
+                        if suggestion:
+                            extra_lines.append(suggestion)
 
-        text = json.dumps(payload, indent=2, ensure_ascii=False)
-        if extra_lines:
-            text += "\n" + "\n".join(extra_lines)
-        return text
+            text = json.dumps(payload, indent=2, ensure_ascii=False)
+            if extra_lines:
+                text += "\n" + "\n".join(extra_lines)
+            return text
+        except Exception as exc:
+            # Surface internal errors to the Director instead of failing silently.
+            # This prevents the Director from getting stuck on transient snapshot
+            # or mailbox inspection issues.
+            import traceback
+            error_text = f"show_state internal error: {exc}\n{traceback.format_exc()}"
+            return error_text

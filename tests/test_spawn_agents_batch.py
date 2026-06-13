@@ -92,6 +92,36 @@ class TestSpawnAgentBatch:
         assert "required" not in schema
 
     @pytest.mark.asyncio
+    async def test_completed_task_keeps_existing_result_output(self):
+        board = StateBoard("obj")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "team task", "team_leader")],
+        ))
+
+        async def delegate(*args, **kwargs):
+            board.update_task(
+                "t1",
+                status="completed",
+                result_output="Team completed 1/1 subtask(s).\n- s1: rich summary",
+            )
+            return "[CoreCoder] loop terminated by pattern condition."
+
+        ctx = MockContext(
+            deps=MockContext(state_board=board, runner_delegate=delegate),
+            agent_id="director",
+        )
+
+        tool = SpawnAgentTool()
+        result = await tool.invoke({"task_id": "t1"}, ctx)
+
+        assert result["status"] == "completed"
+        task = board.get_task("t1")
+        assert task is not None
+        assert task.result_output.startswith("Team completed 1/1 subtask")
+        assert "loop terminated" not in task.result_output
+
+    @pytest.mark.asyncio
     async def test_single_task_fails_when_agent_failed(self):
         """If the runner marks the agent as FAILED, task must not be COMPLETED."""
         board = StateBoard("obj")
@@ -119,3 +149,28 @@ class TestSpawnAgentBatch:
         assert task is not None
         assert task.status.value == "failed"
         assert "step budget" in task.error
+
+
+def test_artifact_resolution_strips_work_dir_prefix(tmp_path):
+    from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
+
+    work_dir = tmp_path / ".stage_loop_eval_metrics_full"
+    target = work_dir / "metrics_eval_full" / "models.py"
+    target.parent.mkdir(parents=True)
+    target.write_text("class MetricSample: pass")
+
+    resolved = SpawnAgentTool._resolve_artifact_path(
+        "stage_loop_eval_metrics_full/metrics_eval_full/models.py",
+        work_dir,
+    )
+
+    assert resolved == target
+
+
+def test_artifact_resolution_filters_natural_language(tmp_path):
+    from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
+
+    assert SpawnAgentTool._resolve_artifact_path(
+        "bash: find output showed no files",
+        tmp_path,
+    ) is None

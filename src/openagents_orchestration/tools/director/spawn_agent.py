@@ -263,10 +263,15 @@ class SpawnAgentTool(ToolPlugin):
         artifacts = self._extract_artifacts(result_text)
         board.claim_artifact(task_id, artifacts)
 
-        # Verify each artifact actually exists on disk
+        # Verify each artifact against the orchestration work_dir first.
         verified = []
+        runner = getattr(getattr(context, "deps", None), "runner", None)
+        work_dir = Path(getattr(runner, "_current_work_dir", "") or ".")
         for art_path in artifacts:
-            real = os.path.exists(art_path)
+            resolved = self._resolve_artifact_path(art_path, work_dir)
+            if resolved is None:
+                continue
+            real = resolved.exists() and resolved.stat().st_size > 0
             board.verify_artifact(art_path, exists=real)
             if real:
                 verified.append(art_path)
@@ -286,13 +291,14 @@ class SpawnAgentTool(ToolPlugin):
                 actual_artifacts=verified,
             )
         elif task is not None:
-            # Task already completed — just backfill verified artifacts
-            board.update_task(
-                task_id,
-                actual_artifacts=verified,
-                result_output=result_text,
-                _force=True,
-            )
+            # Task already completed — just backfill verified artifacts.  Keep a
+            # richer result_output that runner/team-leader may have written
+            # instead of overwriting it with a generic tool-loop termination.
+            updates = {"actual_artifacts": verified, "_force": True}
+            existing_output = str(getattr(task, "result_output", "") or "").strip()
+            if not existing_output:
+                updates["result_output"] = result_text
+            board.update_task(task_id, **updates)
         agent_state = board.get_agent(agent_id)
         summary = summarize_agent_run(
             agent_id=agent_id,
@@ -509,6 +515,30 @@ class SpawnAgentTool(ToolPlugin):
             parts.append(REVIEWER_CONSTRAINT)
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _resolve_artifact_path(artifact_path: str, work_dir: Path) -> Path | None:
+        raw = str(artifact_path or "").strip()
+        if not raw or any(ch in raw for ch in ("\n", "\r")):
+            return None
+        if " " in raw or raw.startswith(("bash:", "pytest:")):
+            return None
+
+        path = Path(raw)
+        if path.is_absolute():
+            return path
+
+        candidates = [work_dir / path]
+        parts = path.parts
+        work_name = work_dir.name
+        if parts and parts[0].lstrip(".") == work_name.lstrip("."):
+            candidates.append(work_dir.joinpath(*parts[1:]))
+        candidates.append(Path.cwd() / path)
+
+        for candidate in candidates:
+            if candidate.exists():
+                return candidate
+        return candidates[0]
 
     @staticmethod
     def _extract_artifacts(output: str) -> list[str]:

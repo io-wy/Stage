@@ -137,3 +137,18 @@ class TestArtifactExtraction:
         output = "FILES_CREATED: a.py\nFILES_CREATED: a.py"
         arts = SpawnAgentTool._extract_artifacts(output)
         assert arts == ["a.py"]
+
+
+def test_coder_input_requires_creating_missing_target_package():
+    from openagents_orchestration.models.task import TaskNode
+    from openagents_orchestration.core.state_board import StateBoard
+    from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
+
+    board = StateBoard("obj", echo=False)
+    task = TaskNode("t1", "Build a package under webhook_eval_full", "coder")
+
+    input_text = SpawnAgentTool._build_input(task, board)
+
+    assert "empty directory is NOT a blocker" in input_text
+    assert "CREATE the requested package" in input_text
+    assert "NOT a reason to ask_human" in input_text

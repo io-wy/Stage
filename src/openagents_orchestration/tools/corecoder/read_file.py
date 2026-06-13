@@ -36,6 +36,14 @@ def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
                 base = Path(cwd)
     if base is None:
         base = Path.cwd()
+
+    # Agents sometimes include the work-dir basename even though paths are
+    # already resolved relative to it. Strip that leading segment to avoid
+    # looking under a nested work directory.
+    parts = path.parts
+    if parts and parts[0] == base.name:
+        path = Path(*parts[1:])
+
     return base / path
 
 
