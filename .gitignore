@@ -6,15 +6,19 @@
 # VS Code (contains secrets in launch.json/settings.json)
 .vscode/
 
+# Local code intelligence index
+.codegraph/
+
 # Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-
+.ruff_cache/
 # Test / coverage
 .pytest_cache/
 .coverage
+
 
 # Orchestrator runtime data
 .agent_memory/
@@ -23,12 +27,20 @@ __pycache__/
 tmp/
 output_phased/
 examples/
+.projects/
+.artifacts/
 
 # Eval artifacts
 .eval_cache/
 .eval_work/
+.eval_simple_test/
+.eval_work_hard/
+.eval_run_simple/
 eval_*.log
 eval_report_*.json
+example/
+examples/
+
 
 # Package build
 *.egg-info/
