@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-
 from openagents_orchestration.core.resident import ResidentAgent, ResidentState
 from openagents_orchestration.core.state_board import StateBoard
 

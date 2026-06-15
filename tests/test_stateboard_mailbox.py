@@ -6,12 +6,10 @@ import asyncio
 
 import pytest
 
+from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.models.message import (
-    MessageType,
-    Priority,
     StructuredMessage,
 )
-from openagents_orchestration.core.state_board import Budget, StateBoard
 
 
 @pytest.fixture

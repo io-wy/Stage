@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.tools.director.check_messages import CheckMessagesTool
 from openagents_orchestration.tools.director.finalize import FinalizeTool
 from openagents_orchestration.tools.director.replan import ReplanTool

@@ -1,9 +1,8 @@
 """Tests for TaskStateMachine — validated state transitions."""
 from __future__ import annotations
 
-import pytest
-from openagents_orchestration.models.task import TaskNode, TaskStatus
 from openagents_orchestration.core.task_state_machine import TaskStateMachine
+from openagents_orchestration.models.task import TaskNode, TaskStatus
 
 
 class TestTaskStateMachine:

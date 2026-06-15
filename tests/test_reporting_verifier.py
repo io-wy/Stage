@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.reporting.verifier import build_verification_report
 from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.reporting.verifier import build_verification_report
 
 
 def test_verification_report_detects_tests_and_artifacts(tmp_path):

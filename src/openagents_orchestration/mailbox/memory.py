@@ -51,7 +51,9 @@ class InMemoryMailbox(Mailbox):
         self._lock = asyncio.Lock()
         self._sync_lock = threading.Lock()  # guards sync wrapper access from non-async callers
         # Lazy-import MailboxMetrics to avoid circular import with observability
-        from openagents_orchestration.observability.mailbox_metrics import MailboxMetrics as _MM
+        from openagents_orchestration.observability.mailbox_metrics import (
+            MailboxMetrics as _MM,
+        )
         self.metrics = _MM()
         # Token bucket rate limiter (0 = disabled)
         self._rate_limit_per_s = rate_limit_per_s

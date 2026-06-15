@@ -53,7 +53,7 @@ class _Counter:
         return [
             MetricValue(
                 name=self.name,
-                labels=dict(zip(self.label_names, key)),
+                labels=dict(zip(self.label_names, key, strict=True)),
                 value=v,
             )
             for key, v in self._values.items()
@@ -92,7 +92,7 @@ class _Gauge:
         return [
             MetricValue(
                 name=self.name,
-                labels=dict(zip(self.label_names, key)),
+                labels=dict(zip(self.label_names, key, strict=True)),
                 value=v,
             )
             for key, v in self._values.items()
@@ -143,7 +143,7 @@ class _Histogram:
     def collect(self) -> list[MetricValue]:
         results: list[MetricValue] = []
         for key, counts in self._counts.items():
-            labels = dict(zip(self.label_names, key))
+            labels = dict(zip(self.label_names, key, strict=True))
             for i, bucket in enumerate(self.buckets):
                 bucket_labels = {**labels, "le": str(bucket)}
                 results.append(

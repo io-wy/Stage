@@ -17,6 +17,7 @@ class TaskStatus(StrEnum):
     SKIPPED = "skipped"
     REVIEW = "review"           # 代码已提交，等待 review
     FIX_NEEDED = "fix_needed"   # review 发现问题，需要修复
+    WAITING_FOR_HUMAN = "waiting_for_human"  # 等待人类回复/确认
 
 
 @dataclass

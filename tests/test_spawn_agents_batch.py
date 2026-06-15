@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode
 from openagents_orchestration.core.state_board import AgentStatus, StateBoard
+from openagents_orchestration.models.task import TaskGraph, TaskNode
 from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
 

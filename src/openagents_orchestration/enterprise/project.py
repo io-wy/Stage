@@ -14,10 +14,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from openagents_orchestration.store.artifact_store import ArtifactStore, LocalArtifactStore
+from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.models.delivery import DeliveryReport
 from openagents_orchestration.models.task import TaskGraph
-from openagents_orchestration.core.state_board import Budget, StateBoard
+from openagents_orchestration.store.artifact_store import (
+    ArtifactStore,
+    LocalArtifactStore,
+)
 
 
 class ProjectStatus(StrEnum):

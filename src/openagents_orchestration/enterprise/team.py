@@ -7,20 +7,18 @@ reports progress upward to the Project / GlobalDirector.
 
 from __future__ import annotations
 
-import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+from openagents_orchestration.core.resident import ResidentAgent
+from openagents_orchestration.core.sub_state_board import SubStateBoard
+from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.transport.channel_policy import (
     DEFAULT_TEAM_POLICY,
     ChannelPolicy,
 )
-from openagents_orchestration.models.message import StructuredMessage
-from openagents_orchestration.core.resident import ResidentAgent
-from openagents_orchestration.core.state_board import Budget
-from openagents_orchestration.core.sub_state_board import SubStateBoard
 
 
 class TeamStatus(StrEnum):
@@ -212,7 +210,7 @@ class Team:
             sub_board.events = parent_board.events
         else:
             # Fallback: create minimal sub-board (parent will be wired later)
-            from openagents_orchestration.core.state_board import StateBoard, Budget
+            from openagents_orchestration.core.state_board import Budget, StateBoard
             dummy_parent = StateBoard(
                 objective=data.get("name", ""),
                 budget=Budget(),

@@ -6,8 +6,16 @@ from openagents_orchestration.transport.channel_policy import (
     ChannelPolicy,
     ChannelPolicyError,
 )
-from openagents_orchestration.transport.matrix_transport import MatrixClient, MatrixConfig, MatrixTransport
-from openagents_orchestration.transport.routing import RouteEntry, RoutingTable, TopologyType
+from openagents_orchestration.transport.matrix_transport import (
+    MatrixClient,
+    MatrixConfig,
+    MatrixTransport,
+)
+from openagents_orchestration.transport.routing import (
+    RouteEntry,
+    RoutingTable,
+    TopologyType,
+)
 
 __all__ = [
     "DEFAULT_GLOBAL_POLICY",

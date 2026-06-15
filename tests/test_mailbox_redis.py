@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -86,13 +87,13 @@ class TestRedisMailbox:
         assert msgs[0].text == "peek"
 
     async def test_expired_enqueue_dropped(self, fake_redis):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         msg = StructuredMessage(
             header=__import__("openagents_orchestration.models.message", fromlist=["MessageHeader"]).MessageHeader(
                 sender="a",
                 recipient="agent-1",
-                created_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+                created_at=datetime.now(UTC) - timedelta(seconds=10),
                 ttl_s=1.0,
             ),
             text="old",

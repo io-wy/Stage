@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from openagents_orchestration.core.state_board import StateBoard
 
 

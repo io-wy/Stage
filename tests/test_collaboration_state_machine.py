@@ -1,13 +1,12 @@
 """Tests for CollaborationStateMachine — coder↔reviewer protocol."""
 from __future__ import annotations
 
-import pytest
-from openagents_orchestration.models.task import TaskNode, TaskStatus
 from openagents_orchestration.core.collaboration import CollaborationSignal
 from openagents_orchestration.core.collaboration_state_machine import (
     CollaborationAction,
     CollaborationStateMachine,
 )
+from openagents_orchestration.models.task import TaskNode, TaskStatus
 
 
 class TestCollaborationStateMachine:

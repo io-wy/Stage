@@ -16,13 +16,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from openagents_orchestration.models.message import (
-    MessageType,
-    StructuredMessage,
-)
 from openagents_orchestration.core.resident import ResidentAgent
 
 
@@ -172,17 +168,13 @@ class MonitorAgent:
         # Try to stop the resident gracefully
         resident = self._find_resident(resident_id)
         if resident is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await resident.stop()
-            except Exception:
-                pass
 
         # Notify orchestrator
         if self._orchestrator is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._orchestrator.on_agent_timeout(resident_id)
-            except Exception:
-                pass
 
     # -- DLQ monitoring --------------------------------------------------------
 

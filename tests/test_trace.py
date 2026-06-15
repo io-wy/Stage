@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
+from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.models.trace import TraceContext
-from openagents_orchestration.core.state_board import Budget, StateBoard
 
 
 class TestTraceContext:
@@ -65,7 +63,7 @@ class TestStateBoardTracing:
 
     async def test_trace_propagated_from_task(self):
         board = StateBoard("test", budget=Budget())
-        from openagents_orchestration.models.task import TaskNode, TaskStatus
+        from openagents_orchestration.models.task import TaskNode
         task = TaskNode(task_id="t1", description="test", agent_type="coder")
         board.tasks["t1"] = task
         board.register_agent("coder-t1", "coder")

@@ -63,6 +63,12 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
         summary_max_words: int = 200
         summary_model: str | None = None
 
+        # Layer 2 — deduplication config
+        dedup_enabled: bool = True
+        dedup_threshold: float = 0.6
+        dedup_min_bytes: int = 200
+        dedup_lookback: int = 20
+
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config or {})
         self._cfg = self.Config.model_validate(self.config)
@@ -98,7 +104,17 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
         after_layer1 = self._count_total(transcript)
         ratio = after_layer1 / self._budget if self._budget else 0.0
 
-        # ---- Layer 2: LLM summarize older half (>= 70%) -------------------
+        # ---- Layer 2: deduplicate repeated tool results (>= 60%) ----------
+        deduped_count = 0
+        if self._cfg.dedup_enabled and ratio >= self._cfg.dedup_threshold:
+            transcript, deduped_count = self._deduplicate_transcript(transcript)
+            if deduped_count > 0:
+                layers_fired.append("dedup")
+
+        after_layer2 = self._count_total(transcript)
+        ratio = after_layer2 / self._budget if self._budget else 0.0
+
+        # ---- Layer 3: LLM summarize older half (>= 70%) -------------------
         summarize_tokens = 0
         if ratio >= self._cfg.summarize_threshold:
             transcript, summarize_tokens = await self._summarize_old_half(llm_client, transcript)
@@ -129,6 +145,7 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
                 "tokens_before": original_tokens,
                 "tokens_after": final_tokens,
                 "layers_fired": layers_fired,
+                "deduped_messages": deduped_count,
                 "summarize_tokens": summarize_tokens,
                 "omitted_artifacts": omitted_artifacts,
                 "token_counter": self._counter.name,
@@ -179,7 +196,55 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
             new_transcript.append(new_msg)
         return new_transcript, saved
 
-    # ---- Layer 2: LLM summarize ------------------------------------------
+    # ---- Layer 2: deduplicate repeated tool results ----------------------
+
+    def _deduplicate_transcript(
+        self, transcript: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Remove repeated tool results within a recent lookback window.
+
+        Only exact matches are collapsed, and only for tool results whose
+        content is long enough to benefit. User/assistant text is never
+        deduplicated.
+        """
+        min_bytes = self._cfg.dedup_min_bytes
+        lookback = max(1, self._cfg.dedup_lookback)
+        deduped = 0
+        new_transcript: list[dict[str, Any]] = []
+        # fingerprint -> index in new_transcript where it last appeared
+        recent: dict[str, int] = {}
+
+        for msg in transcript:
+            tool_name, content = _extract_tool_result_content(msg)
+            if tool_name is None or content is None:
+                new_transcript.append(msg)
+                continue
+
+            normalized = _normalize_for_dedup(content)
+            if len(normalized) < min_bytes:
+                new_transcript.append(msg)
+                continue
+
+            fingerprint = f"{tool_name}::{normalized}"
+            last_idx = recent.get(fingerprint)
+            if last_idx is not None and (len(new_transcript) - last_idx) <= lookback:
+                placeholder = {
+                    "role": "system",
+                    "content": (
+                        f"[Duplicate {tool_name} result omitted; "
+                        f"identical to result at index {last_idx}]"
+                    ),
+                }
+                new_transcript.append(placeholder)
+                deduped += 1
+                continue
+
+            recent[fingerprint] = len(new_transcript)
+            new_transcript.append(msg)
+
+        return new_transcript, deduped
+
+    # ---- Layer 3: LLM summarize ------------------------------------------
 
     async def _summarize_old_half(
         self, llm_client: Any, transcript: list[dict[str, Any]]
@@ -272,6 +337,38 @@ class CompressingContextAssembler(ContextAssemblerPlugin):
             ),
         }
         return head + [placeholder] + tail
+
+
+def _extract_tool_result_content(msg: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return (tool_name, raw_content) if msg is a tool result, else (None, None)."""
+    role = msg.get("role")
+    content = msg.get("content")
+
+    # OpenAI / normalized tool result format.
+    if role == "tool":
+        tool_name = msg.get("name") or "tool"
+        if isinstance(content, str):
+            return str(tool_name), content
+        return str(tool_name), _content_to_text(content)
+
+    # Anthropic-style list-of-blocks inside a user message.
+    if role in ("user", "assistant") and isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_result":
+                payload = block.get("content")
+                if isinstance(payload, str):
+                    return "tool", payload
+                return "tool", _content_to_text(payload)
+
+    return None, None
+
+
+def _normalize_for_dedup(content: str) -> str:
+    """Normalize tool result content for deduplication comparison."""
+    text = content.replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in text.splitlines()).strip()
 
 
 # ---- module helpers -----------------------------------------------------

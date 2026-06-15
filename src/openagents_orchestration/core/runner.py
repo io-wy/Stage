@@ -35,42 +35,45 @@ from openagents.plugins.builtin.events.async_event_bus import AsyncEventBus
 from openagents.plugins.loader import LoadedAgentPlugins, load_agent_plugins
 from pydantic import BaseModel, Field
 
-from openagents_orchestration.store.artifact_store import ArtifactStore, LocalArtifactStore
 from openagents_orchestration.core.collaboration import (
-    CollaborationSignal,
     collaboration_message_from_structured,
-)
-from openagents_orchestration.core.collaboration_state_machine import (
-    CollaborationAction,
-    CollaborationDecision,
-    CollaborationStateMachine,
 )
 from openagents_orchestration.core.collaboration_executor import (
     CollaborationDecisionExecutor,
 )
-from openagents_orchestration.core.resident_prompts import get_prompt
-from openagents_orchestration.intent_classifier import IntentClassifier, IntentResult
-from openagents_orchestration.transport.matrix_transport import (
-    MatrixClient,
-    MatrixConfig,
-    MatrixTransport,
+from openagents_orchestration.core.collaboration_state_machine import (
+    CollaborationAction,
+    CollaborationStateMachine,
 )
+from openagents_orchestration.core.decision_history import DecisionRecord
+from openagents_orchestration.core.resident import ResidentAgent
+from openagents_orchestration.core.resident_prompts import get_prompt
+from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
+from openagents_orchestration.core.sub_state_board import SubStateBoard
+from openagents_orchestration.enterprise.project import Project
+from openagents_orchestration.intent_classifier import IntentClassifier, IntentResult
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.persistence import (
     EventRecorder,
     SessionResumer,
     StateSnapshotter,
 )
-from openagents_orchestration.enterprise.project import Project
 from openagents_orchestration.reporting import (
     build_verification_report,
     summarize_agent_run,
     summarize_board,
 )
-from openagents_orchestration.core.resident import ResidentAgent
-from openagents_orchestration.core.decision_history import DecisionRecord
-from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
-from openagents_orchestration.core.sub_state_board import SubStateBoard
+from openagents_orchestration.store.artifact_store import (
+    ArtifactStore,
+    LocalArtifactStore,
+)
+from openagents_orchestration.tools.mcp.adapter import build_mcp_tools
+from openagents_orchestration.tools.mcp.client import McpClientManager
+from openagents_orchestration.transport.matrix_transport import (
+    MatrixClient,
+    MatrixConfig,
+    MatrixTransport,
+)
 from openagents_orchestration.utils.runtime_compat import (
     apply_sdk_patches,
     extract_result_error_message,
@@ -179,6 +182,9 @@ class OrchestratorRunner:
         self._config_path = Path(config_path)
         self._config = load_config(self._config_path)
         self._agents_by_id = {a.id: a for a in self._config.agents}
+        self._mcp_servers = self._load_mcp_servers(self._config_path)
+        self._mcp_manager: McpClientManager | None = None
+        self._mcp_tools: dict[str, Any] = {}
         self._bundles: dict[str, _AgentBundle] = {}
         self._residents: dict[str, ResidentAgent] = {}
         self._sessions = _SessionStore()
@@ -207,6 +213,24 @@ class OrchestratorRunner:
     @property
     def state_board(self) -> StateBoard | None:
         return self._state_board
+
+    @staticmethod
+    def _load_mcp_servers(config_path: Path) -> dict[str, dict[str, Any]]:
+        """Load optional MCP server definitions from the raw agent.json.
+
+        The SDK's AppConfig ignores unknown top-level keys, so we read the raw
+        JSON to preserve ``mcp_servers`` without changing the schema.
+        """
+        try:
+            import json
+            with config_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+        except Exception:
+            return {}
+        servers = raw.get("mcp_servers") or {}
+        if isinstance(servers, dict):
+            return servers
+        return {}
 
     @property
     def project(self) -> Project | None:
@@ -258,10 +282,8 @@ class OrchestratorRunner:
                 file=sys.stderr,
                 flush=True,
             )
-            try:
+            with contextlib.suppress(Exception):
                 await client.close()
-            except Exception:
-                pass
             return None
 
     # -- public API ----------------------------------------------------------
@@ -302,102 +324,108 @@ class OrchestratorRunner:
         # Change to work_dir if provided; restore on exit
         cm = contextlib.chdir(work_dir) if work_dir else contextlib.nullcontext()
         with cm:
-            # Initialize persistence layer
-            if self._persist_dir is not None:
-                self._session_dir = self._persist_dir / self._session_id
-                self._session_dir.mkdir(parents=True, exist_ok=True)
-                self._recorder = EventRecorder(self._session_dir, self._session_id)
-                self._snapshotter = StateSnapshotter(self._session_dir / "snapshots")
-                self._resumer = SessionResumer(self._persist_dir)
-                print(
-                    f"[Orchestrator] Persistence: {self._session_dir}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-
-            # -- resume path -------------------------------------------------------
-            if resume and self._resumer is not None:
-                loaded = self._resumer.load(self._session_id)
-                if loaded.snapshot is not None:
+            await self._ensure_mcp_connected()
+            try:
+                # Initialize persistence layer
+                if self._persist_dir is not None:
+                    self._session_dir = self._persist_dir / self._session_id
+                    self._session_dir.mkdir(parents=True, exist_ok=True)
+                    self._recorder = EventRecorder(self._session_dir, self._session_id)
+                    self._snapshotter = StateSnapshotter(self._session_dir / "snapshots")
+                    self._resumer = SessionResumer(self._persist_dir)
                     print(
-                        "[Orchestrator] Resuming from snapshot...",
+                        f"[Orchestrator] Persistence: {self._session_dir}",
                         file=sys.stderr,
                         flush=True,
                     )
-                    # Detect snapshot format: new Project format has "state_board" key
-                    if "state_board" in loaded.snapshot:
-                        project = Project.from_dict(loaded.snapshot)
-                    else:
-                        # Legacy StateBoard snapshot: wrap into a default Project
-                        state_board = StateBoard.from_dict(
-                            loaded.snapshot,
-                            recorder=self._recorder,
-                            snapshotter=self._snapshotter,
-                            mailbox_backend=os.environ.get("MAILBOX_BACKEND", "memory"),
-                            redis_url=os.environ.get("REDIS_URL"),
-                        )
-                        project = Project(
-                            objective=state_board.objective,
-                            budget=state_board.budget,
-                            state_board=state_board,
-                        )
-                    self._project = project
-                    self._state_board = project.state_board
-                    # Re-attach persistence hooks
-                    if self._state_board is not None:
-                        self._state_board._recorder = self._recorder
-                        self._state_board._snapshotter = self._snapshotter
-                    # Replay events after snapshot
-                    if loaded.events_after and self._state_board is not None:
-                        from openagents_orchestration.persistence import EventReplayer
-                        EventReplayer().replay(self._state_board, loaded.events_after)
+
+                # -- resume path -------------------------------------------------------
+                if resume and self._resumer is not None:
+                    loaded = self._resumer.load(self._session_id)
+                    if loaded.snapshot is not None:
                         print(
-                            f"[Orchestrator] Replayed {len(loaded.events_after)} event(s)",
+                            "[Orchestrator] Resuming from snapshot...",
                             file=sys.stderr,
                             flush=True,
                         )
-                    print(
-                        f"[Orchestrator] Resumed: {self._state_board.progress_summary()}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    # Skip decomposition — tasks already loaded
-                    return await self._continue_run(objective)
+                        # Detect snapshot format: new Project format has "state_board" key
+                        if "state_board" in loaded.snapshot:
+                            project = Project.from_dict(loaded.snapshot)
+                        else:
+                            # Legacy StateBoard snapshot: wrap into a default Project
+                            state_board = StateBoard.from_dict(
+                                loaded.snapshot,
+                                recorder=self._recorder,
+                                snapshotter=self._snapshotter,
+                                mailbox_backend=os.environ.get("MAILBOX_BACKEND", "memory"),
+                                redis_url=os.environ.get("REDIS_URL"),
+                            )
+                            project = Project(
+                                objective=state_board.objective,
+                                budget=state_board.budget,
+                                state_board=state_board,
+                            )
+                        self._project = project
+                        self._state_board = project.state_board
+                        # Re-attach persistence hooks
+                        if self._state_board is not None:
+                            self._state_board._recorder = self._recorder
+                            self._state_board._snapshotter = self._snapshotter
+                        # Replay events after snapshot
+                        if loaded.events_after and self._state_board is not None:
+                            from openagents_orchestration.persistence import (
+                                EventReplayer,
+                            )
+                            EventReplayer().replay(self._state_board, loaded.events_after)
+                            print(
+                                f"[Orchestrator] Replayed {len(loaded.events_after)} event(s)",
+                                file=sys.stderr,
+                                flush=True,
+                            )
+                        print(
+                            f"[Orchestrator] Resumed: {self._state_board.progress_summary()}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        # Skip decomposition — tasks already loaded
+                        return await self._continue_run(objective)
 
-            # -- fresh run path ----------------------------------------------------
-            # 1. Intent classification
-            print("[Orchestrator] Classifying intent...", file=sys.stderr, flush=True)
-            intent = await self._classify_intent(objective)
-            print(
-                f"[Orchestrator] Intent: {intent.task_type}/{intent.complexity}, "
-                f"ext={intent.external}, conf={intent.confidence:.2f}",
-                file=sys.stderr, flush=True,
-            )
+                # -- fresh run path ----------------------------------------------------
+                # 1. Intent classification
+                print("[Orchestrator] Classifying intent...", file=sys.stderr, flush=True)
+                intent = await self._classify_intent(objective)
+                print(
+                    f"[Orchestrator] Intent: {intent.task_type}/{intent.complexity}, "
+                    f"ext={intent.external}, conf={intent.confidence:.2f}",
+                    file=sys.stderr, flush=True,
+                )
 
-            # 2. Initial decomposition (intent-guided)
-            print("[Orchestrator] Decomposing objective into tasks...", file=sys.stderr, flush=True)
-            task_graph = await self._initial_decompose(objective)
-            print(f"[Orchestrator] Decomposed into {len(task_graph.tasks)} task(s)", file=sys.stderr, flush=True)
+                # 2. Initial decomposition (intent-guided)
+                print("[Orchestrator] Decomposing objective into tasks...", file=sys.stderr, flush=True)
+                task_graph = await self._initial_decompose(objective)
+                print(f"[Orchestrator] Decomposed into {len(task_graph.tasks)} task(s)", file=sys.stderr, flush=True)
 
-            # 3. Project + StateBoard (with persistence hooks + mailbox backend)
-            project_budget = budget or Budget(
-                token_limit=500_000,
-                time_limit_s=1800.0,
-                max_steps=100,
-            )
-            project = self._create_project(
-                objective=objective,
-                budget=project_budget,
-                work_dir=self._current_work_dir,
-            )
-            # Wire persistence hooks into the project's StateBoard
-            project.state_board._recorder = self._recorder
-            project.state_board._snapshotter = self._snapshotter
-            await project.state_board.validate_redis()
-            project.state_board.add_tasks(task_graph)
-            project.start()
+                # 3. Project + StateBoard (with persistence hooks + mailbox backend)
+                project_budget = budget or Budget(
+                    token_limit=500_000,
+                    time_limit_s=1800.0,
+                    max_steps=100,
+                )
+                project = self._create_project(
+                    objective=objective,
+                    budget=project_budget,
+                    work_dir=self._current_work_dir,
+                )
+                # Wire persistence hooks into the project's StateBoard
+                project.state_board._recorder = self._recorder
+                project.state_board._snapshotter = self._snapshotter
+                await project.state_board.validate_redis()
+                project.state_board.add_tasks(task_graph)
+                project.start()
 
-            return await self._continue_run(objective, intent=intent)
+                return await self._continue_run(objective, intent=intent)
+            finally:
+                await self._close_mcp()
 
     async def _continue_run(self, objective: str, *, intent: IntentResult | None = None) -> Any:
         """Continue orchestration from an initialized StateBoard."""
@@ -705,10 +733,8 @@ class OrchestratorRunner:
                 # Wait for a signal to arrive (event-driven) with a short fallback
                 # timeout to guard against missed events.  Clear only after wait
                 # returns so a set() that fires just before we block is not lost.
-                try:
+                with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self._collab_wake_event.wait(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    pass  # fallback: re-enter loop to check for stuck tasks
                 self._collab_wake_event.clear()
                 continue
 
@@ -731,10 +757,8 @@ class OrchestratorRunner:
             # Event-driven: wait for next signal arrival with a short fallback.
             # Clear only after wait returns so a set() just before blocking is
             # not discarded.
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(self._collab_wake_event.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                pass  # re-enter loop to check resident health
             self._collab_wake_event.clear()
 
             # Check for stuck/broken residents
@@ -1271,6 +1295,38 @@ class OrchestratorRunner:
                 ))
             return str(result.final_output or "")
 
+        # Awaiting human reply — do not mark task as completed or failed.
+        awaiting_human = result.metadata.get("awaiting_human_reply") if result.metadata else None
+        if awaiting_human:
+            if self._state_board is not None:
+                self._state_board.update_agent(
+                    agent_id,
+                    status=AgentStatus.WAITING_FOR_HUMAN,
+                )
+                task_id = agent_id.replace(f"{agent_type}-", "", 1) if agent_id.startswith(f"{agent_type}-") else agent_id
+                task = self._state_board.get_task(task_id)
+                if task is not None and not task.is_terminal():
+                    self._state_board.update_task(
+                        task_id,
+                        status=TaskStatus.WAITING_FOR_HUMAN,
+                        result_output=str(result.final_output or "")[:2000],
+                    )
+                self._state_board.log_event(
+                    "agent.awaiting_human",
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    message=f"Awaiting human reply: {awaiting_human.get('question', '')[:100]}",
+                    question=awaiting_human.get("question", ""),
+                    qid=awaiting_human.get("qid"),
+                )
+            print(
+                f"[Orchestrator] {agent_type} ({agent_id}) WAITING_FOR_HUMAN: "
+                f"{awaiting_human.get('question', '')}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return str(result.final_output or "")
+
         # Mark task as completed on success
         if self._state_board is not None:
             # Extract task_id from agent_id (format: agent_type-task_id, e.g. coder-t1)
@@ -1509,7 +1565,7 @@ class OrchestratorRunner:
         classifier = IntentClassifier(llm_client=llm)
         try:
             return await asyncio.wait_for(classifier.classify(objective), timeout=25.0)
-        except (asyncio.TimeoutError, Exception) as exc:
+        except (TimeoutError, Exception) as exc:
             import sys
             print(
                 f"[Orchestrator] Intent classification failed: {exc}; using fallback.",
@@ -1646,22 +1702,16 @@ class OrchestratorRunner:
         m = re.search(r"```(?:json)?\s*\n(.*?)\n```", text, re.DOTALL)
         raw = m.group(1).strip() if m else text
 
-        # Find first JSON object
+        # Find first JSON object/array using the stdlib decoder so braces
+        # inside JSON strings do not throw off naive brace counting.
         brace = raw.find("{")
         if brace == -1:
             raise ValueError("No JSON object found in decomposition")
-        depth, end = 0, 0
-        for i, ch in enumerate(raw[brace:], start=brace):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-        raw = raw[brace:end]
+        try:
+            data, _ = json.JSONDecoder().raw_decode(raw, brace)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in decomposition: {exc}") from exc
 
-        data = json.loads(raw)
         tasks = []
         for item in data.get("tasks", []):
             tasks.append(TaskNode(
@@ -1805,13 +1855,15 @@ class OrchestratorRunner:
 
         ctx.state["final_output"] = str(final_output or "").strip()
 
-        # Detect step budget exhaustion signalled by the pattern.
+        # Detect step budget exhaustion or human-wait state signalled by the pattern.
         stop_reason = StopReason.COMPLETED
         if ctx.state.get("__step_budget_exhausted__"):
             stop_reason = StopReason.MAX_STEPS
 
+        awaiting_human = ctx.state.get("__awaiting_human_reply__")
+
         # Memory writeback
-        if memory is not None:
+        if memory is not None and not awaiting_human:
             try:
                 await memory.writeback(ctx)
                 await memory.compact(ctx)
@@ -1828,17 +1880,18 @@ class OrchestratorRunner:
 
         steps_used = ctx.state.get("__steps_used__", 0)
         tool_calls_used = ctx.state.get("__tool_calls_used__", 0)
-        if agent_type != "director":
+        if agent_type != "director" and not awaiting_human:
             self._print_agent_trace(agent_id, agent_type, ctx, final_output=final_output)
 
         # Track token usage on success
         if self._state_board is not None:
             self._state_board.add_tokens(usage.total_tokens)
             self._state_board.add_steps(steps_used)
+            status = "waiting_for_human" if awaiting_human else "completed"
             summary = summarize_agent_run(
                 agent_id=agent_id,
                 task_id=self._task_id_from_agent_id(agent_type, agent_id),
-                status="completed",
+                status=status,
                 output=str(final_output or ""),
                 transcript=list(ctx.transcript),
                 artifacts=list(ctx.artifacts),
@@ -1849,9 +1902,18 @@ class OrchestratorRunner:
                 "agent.run_summary",
                 task_id=summary["task_id"],
                 agent_id=agent_id,
-                message="completed",
+                message=status,
                 summary=summary,
             )
+
+        metadata: dict[str, Any] = {
+            "agent_id": agent_id,
+            "steps_used": steps_used,
+            "tool_calls_used": tool_calls_used,
+            "transcript": list(ctx.transcript),
+        }
+        if awaiting_human:
+            metadata["awaiting_human_reply"] = awaiting_human
 
         result = RunResult(
             run_id=request.run_id,
@@ -1859,12 +1921,7 @@ class OrchestratorRunner:
             stop_reason=stop_reason,
             usage=usage,
             artifacts=list(ctx.artifacts),
-            metadata={
-                "agent_id": agent_id,
-                "steps_used": steps_used,
-                "tool_calls_used": tool_calls_used,
-                "transcript": list(ctx.transcript),
-            },
+            metadata=metadata,
         )
         if context_assembler is not None:
             finalized = await context_assembler.finalize(
@@ -1882,6 +1939,51 @@ class OrchestratorRunner:
         prefix = f"{agent_type}-"
         return agent_id.replace(prefix, "", 1) if agent_id.startswith(prefix) else agent_id
 
+    async def _ensure_mcp_connected(self) -> None:
+        """Connect to configured MCP servers if not already connected.
+
+        Failures are logged but not fatal — agents continue with built-in tools.
+        """
+        if self._mcp_manager is not None:
+            return
+        if not self._mcp_servers:
+            return
+        self._mcp_manager = McpClientManager(self._mcp_servers)
+        try:
+            results = await self._mcp_manager.connect_all()
+            for name, status in results.items():
+                if status != "ok":
+                    print(
+                        f"[Orchestrator] MCP server '{name}' connection: {status}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"[Orchestrator] MCP server '{name}' connected",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            # Cache tool adapters so sync _ensure_bundle can inject them later.
+            tools_by_server = await self._mcp_manager.list_tools()
+            for server_name, tools in tools_by_server.items():
+                for adapter in build_mcp_tools(self._mcp_manager, server_name, tools):
+                    self._mcp_tools[adapter.name] = adapter
+        except Exception as exc:
+            print(
+                f"[Orchestrator] MCP connection failed: {exc}; continuing without MCP tools.",
+                file=sys.stderr,
+                flush=True,
+            )
+            self._mcp_manager = None
+            self._mcp_tools.clear()
+
+    async def _close_mcp(self) -> None:
+        if self._mcp_manager is not None:
+            await self._mcp_manager.close()
+            self._mcp_manager = None
+        self._mcp_tools.clear()
+
     def _ensure_bundle(self, agent_id: str) -> _AgentBundle:
         agent = self._agents_by_id.get(agent_id)
         if agent is None:
@@ -1893,6 +1995,9 @@ class OrchestratorRunner:
             raise ConfigError(f"Agent '{agent_id}' has no llm configured")
 
         plugins = load_agent_plugins(agent)
+        # Inject cached MCP tools if available.
+        if self._mcp_tools:
+            plugins.tools.update(self._mcp_tools)
         self._wrap_tool_invocations(plugins.tools)
         llm_client = create_llm_client(agent.llm)
         return _AgentBundle(agent=agent, plugins=plugins, llm_client=llm_client)

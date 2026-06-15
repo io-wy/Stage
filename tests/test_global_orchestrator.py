@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from openagents_orchestration.enterprise.global_orchestrator import GlobalOrchestrator
-from openagents_orchestration.enterprise.project import Project, ProjectStatus
 from openagents_orchestration.core.state_board import Budget
+from openagents_orchestration.enterprise.global_orchestrator import GlobalOrchestrator
+from openagents_orchestration.enterprise.project import ProjectStatus
 from openagents_orchestration.enterprise.team import TeamSpec
 
 
@@ -89,7 +87,7 @@ class TestGlobalOrchestrator:
     def test_terminate_project(self, orchestrator):
         project = asyncio.run(orchestrator.create_project("Test"))
         project.start()
-        report = asyncio.run(orchestrator.terminate_project(project.project_id))
+        asyncio.run(orchestrator.terminate_project(project.project_id))
         assert project.status == ProjectStatus.TERMINATED
 
     def test_human_channel(self, orchestrator):

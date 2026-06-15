@@ -26,7 +26,9 @@ def __getattr__(name: str):
         from openagents_orchestration.core.state_board import StateBoard
         return StateBoard
     if name == "GlobalOrchestrator":
-        from openagents_orchestration.enterprise.global_orchestrator import GlobalOrchestrator
+        from openagents_orchestration.enterprise.global_orchestrator import (
+            GlobalOrchestrator,
+        )
         return GlobalOrchestrator
     if name == "Project":
         from openagents_orchestration.enterprise.project import Project

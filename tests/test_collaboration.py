@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.transport.channel_policy import ChannelPolicy
 from openagents_orchestration.core.collaboration import (
     CollaborationSignal,
     parse_collaboration_message,
     task_id_from_resident_id,
 )
-from openagents_orchestration.models.message import StructuredMessage
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.core.runner import OrchestratorRunner
 from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.models.message import StructuredMessage
+from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.transport.channel_policy import ChannelPolicy
 
 
 class _ResidentStub:

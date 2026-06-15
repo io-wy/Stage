@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
+from datetime import UTC
 
 from openagents_orchestration.models.message import (
     MessageHeader,
@@ -29,11 +29,10 @@ class TestMessageHeader:
         assert h.delivery_count == 2
 
     def test_expired_with_ttl(self):
-        import time
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         h = MessageHeader(
-            created_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+            created_at=datetime.now(UTC) - timedelta(seconds=10),
             ttl_s=5.0,
         )
         assert h.is_expired

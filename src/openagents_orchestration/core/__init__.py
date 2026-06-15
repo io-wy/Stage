@@ -1,6 +1,9 @@
 """Core engine — single-project orchestration."""
 
-from openagents_orchestration.core.collaboration import CollaborationSignal, parse_collaboration_message
+from openagents_orchestration.core.collaboration import (
+    CollaborationSignal,
+    parse_collaboration_message,
+)
 from openagents_orchestration.core.collaboration_executor import (
     CollaborationDecisionExecutor,
 )
@@ -9,9 +12,23 @@ from openagents_orchestration.core.collaboration_state_machine import (
     CollaborationDecision,
     CollaborationStateMachine,
 )
-from openagents_orchestration.core.decision_history import DecisionHistory, DecisionRecord
-from openagents_orchestration.core.resident import AgentLifecycle, ResidentAgent, ResidentState
-from openagents_orchestration.core.state_board import AgentState, AgentStatus, ArtifactRecord, Budget, Event, StateBoard
+from openagents_orchestration.core.decision_history import (
+    DecisionHistory,
+    DecisionRecord,
+)
+from openagents_orchestration.core.resident import (
+    AgentLifecycle,
+    ResidentAgent,
+    ResidentState,
+)
+from openagents_orchestration.core.state_board import (
+    AgentState,
+    AgentStatus,
+    ArtifactRecord,
+    Budget,
+    Event,
+    StateBoard,
+)
 from openagents_orchestration.core.sub_state_board import SubStateBoard
 from openagents_orchestration.core.task_state_machine import TaskStateMachine
 

@@ -1,17 +1,27 @@
 """Enterprise extensions — multi-project orchestration."""
 
 from openagents_orchestration.enterprise.events import OrchestrationEvent
-from openagents_orchestration.enterprise.human_channel import HumanChannel, HumanMessage, HumanQuestion
+from openagents_orchestration.enterprise.human_channel import (
+    HumanChannel,
+    HumanMessage,
+    HumanQuestion,
+)
 from openagents_orchestration.enterprise.metrics import OrchestrationMetrics
 from openagents_orchestration.enterprise.monitor_agent import MonitorAgent
-from openagents_orchestration.enterprise.security import AgentIdentity, AuditLog, CapabilityToken
+from openagents_orchestration.enterprise.security import (
+    AgentIdentity,
+    AuditLog,
+    CapabilityToken,
+)
 
 # Lazy imports to avoid circular dependency with core.state_board.
 
 
 def __getattr__(name: str):
     if name == "GlobalOrchestrator":
-        from openagents_orchestration.enterprise.global_orchestrator import GlobalOrchestrator
+        from openagents_orchestration.enterprise.global_orchestrator import (
+            GlobalOrchestrator,
+        )
         return GlobalOrchestrator
     if name == "Project":
         from openagents_orchestration.enterprise.project import Project

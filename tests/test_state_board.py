@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
+from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 
 
 class TestStateBoard:

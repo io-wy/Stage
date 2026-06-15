@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode
-from openagents_orchestration.enterprise.project import Project, ProjectStatus
 from openagents_orchestration.core.state_board import Budget
+from openagents_orchestration.enterprise.project import Project, ProjectStatus
+from openagents_orchestration.models.task import TaskGraph, TaskNode
 
 
 class TestProject:

@@ -9,16 +9,21 @@ not an implementation detail of StateBoard.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from openagents_orchestration.models.task import TaskStatus
 
-
 # Allowed transitions: from → {to}
 _TRANSITIONS: dict[TaskStatus, set[TaskStatus]] = {
     TaskStatus.PENDING: {TaskStatus.RUNNING, TaskStatus.SKIPPED},
-    TaskStatus.RUNNING: {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.REVIEW},
+    TaskStatus.RUNNING: {
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.REVIEW,
+        TaskStatus.WAITING_FOR_HUMAN,
+    },
+    TaskStatus.WAITING_FOR_HUMAN: {TaskStatus.RUNNING, TaskStatus.FAILED},
     TaskStatus.REVIEW: {TaskStatus.COMPLETED, TaskStatus.FIX_NEEDED, TaskStatus.FAILED},
     TaskStatus.FIX_NEEDED: {TaskStatus.RUNNING, TaskStatus.FAILED},
     # Terminal states — no outgoing transitions (except for retry, see below)
@@ -35,6 +40,9 @@ _TRANSITION_REASONS: dict[tuple[TaskStatus, TaskStatus], str] = {
     (TaskStatus.RUNNING, TaskStatus.COMPLETED): "agent completed successfully",
     (TaskStatus.RUNNING, TaskStatus.FAILED): "agent execution failed",
     (TaskStatus.RUNNING, TaskStatus.REVIEW): "coder signaled review ready",
+    (TaskStatus.RUNNING, TaskStatus.WAITING_FOR_HUMAN): "agent asked for clarification",
+    (TaskStatus.WAITING_FOR_HUMAN, TaskStatus.RUNNING): "human replied",
+    (TaskStatus.WAITING_FOR_HUMAN, TaskStatus.FAILED): "human did not reply",
     (TaskStatus.REVIEW, TaskStatus.COMPLETED): "reviewer approved",
     (TaskStatus.REVIEW, TaskStatus.FIX_NEEDED): "reviewer requested fixes",
     (TaskStatus.REVIEW, TaskStatus.FAILED): "circuit breaker or fatal review error",

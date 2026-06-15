@@ -531,7 +531,9 @@ class ResidentAgent:
         returned the marker in its final output instead of calling
         ``send_message``.
         """
-        from openagents_orchestration.core.collaboration import parse_collaboration_message
+        from openagents_orchestration.core.collaboration import (
+            parse_collaboration_message,
+        )
 
         collab = parse_collaboration_message(
             content, default_task_id=self._bound_task_id or ""

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import pytest
-
+from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.enterprise.metrics import OrchestrationMetrics
-from openagents_orchestration.core.state_board import Budget, StateBoard
 
 
 class TestOrchestrationMetrics:

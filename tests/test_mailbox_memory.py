@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 
 import pytest
 
@@ -130,14 +131,13 @@ class TestInMemoryMailbox:
         assert len(msgs) == 1
 
     async def test_expired_messages_dropped(self, mailbox):
-        import time
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         expired = StructuredMessage(
             header=MessageHeader(
                 sender="a",
                 recipient="b",
-                created_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+                created_at=datetime.now(UTC) - timedelta(seconds=10),
                 ttl_s=1.0,
             ),
             text="old",
@@ -152,14 +152,14 @@ class TestInMemoryMailbox:
         assert msgs[0].text == "fresh"
 
     async def test_clear_expired(self, mailbox):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         # Expired messages are dropped at enqueue time, so nothing to clear
         expired = StructuredMessage(
             header=MessageHeader(
                 sender="a",
                 recipient="b",
-                created_at=datetime.now(timezone.utc) - timedelta(seconds=10),
+                created_at=datetime.now(UTC) - timedelta(seconds=10),
                 ttl_s=1.0,
             ),
             text="old",
@@ -230,7 +230,6 @@ class TestInMemoryMailbox:
 
     async def test_payload_size_rejected(self, mailbox):
         """Oversized payloads are rejected."""
-        import json
         big_data = "x" * (MAX_PAYLOAD_BYTES + 1)  # exceeds 1MB
         msg = StructuredMessage.from_text("a", "b", big_data)
         assert await mailbox.enqueue(msg) is False
@@ -324,14 +323,14 @@ class TestInMemoryMailbox:
         mbox = InMemoryMailbox(max_size=10, nack_backoff_base_s=0)
         msg = StructuredMessage.from_text("a", "b", "low_prio")
         # Override to LOW priority
-        from openagents_orchestration.models.message import Priority, MessageHeader
+        from openagents_orchestration.models.message import MessageHeader, Priority
         msg.header = MessageHeader(
             msg_id=msg.header.msg_id, sender="a", recipient="b",
             priority=Priority.LOW,
         )
         await mbox.enqueue(msg)
 
-        for i in range(3):
+        for _ in range(3):
             claimed = await mbox.dequeue(batch_size=1)
             if claimed:
                 await mbox.nack(claimed[0].msg_id, "fail")

@@ -12,7 +12,11 @@ from openagents_orchestration.core.collaboration import (
     parse_collaboration_message,
     task_id_from_resident_id,
 )
-from openagents_orchestration.models.message import MessageType, Priority, StructuredMessage
+from openagents_orchestration.models.message import (
+    MessageType,
+    Priority,
+    StructuredMessage,
+)
 
 
 class SendMessageTool(ToolPlugin):

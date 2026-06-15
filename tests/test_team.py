@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.transport.channel_policy import (
-    DEFAULT_TEAM_POLICY,
-    ChannelPolicy,
-)
-from openagents_orchestration.models.message import StructuredMessage
-from openagents_orchestration.core.state_board import Budget, StateBoard
+from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.core.sub_state_board import SubStateBoard
 from openagents_orchestration.enterprise.team import Team, TeamSpec, TeamStatus
+from openagents_orchestration.transport.channel_policy import (
+    ChannelPolicy,
+)
 
 
 class TestTeamSpec:

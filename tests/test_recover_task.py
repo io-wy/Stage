@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.reporting import summarize_agent_run
-from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.tools.director.recover_task import RecoverTaskTool
 
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.core.runner import OrchestratorRunner
 from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
 
@@ -40,7 +40,11 @@ class TestTaskGraphParsing:
         graph = OrchestratorRunner._parse_task_graph(text, "obj")
         assert graph.tasks[0].input_context == "write hello.py with argparse"
 
-    def test_parse_invalid_json_raises(self):
+    def test_parse_with_braces_in_strings(self):
+        text = '{"tasks": [{"task_id": "t1", "description": "handle {foo} and }bar{", "agent_type": "coder"}]}'
+        graph = OrchestratorRunner._parse_task_graph(text, "obj")
+        assert len(graph.tasks) == 1
+        assert graph.tasks[0].description == "handle {foo} and }bar{"
         with pytest.raises(ValueError):
             OrchestratorRunner._parse_task_graph("not json", "obj")
 
@@ -140,8 +144,8 @@ class TestArtifactExtraction:
 
 
 def test_coder_input_requires_creating_missing_target_package():
-    from openagents_orchestration.models.task import TaskNode
     from openagents_orchestration.core.state_board import StateBoard
+    from openagents_orchestration.models.task import TaskNode
     from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
     board = StateBoard("obj", echo=False)

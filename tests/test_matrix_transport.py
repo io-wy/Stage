@@ -8,7 +8,6 @@ import pytest
 
 from openagents_orchestration.transport.matrix_transport import (
     MatrixClient,
-    MatrixConfig,
     MatrixTransport,
 )
 

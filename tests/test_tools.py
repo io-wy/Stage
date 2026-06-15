@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode
 from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.models.task import TaskGraph, TaskNode
 from openagents_orchestration.tools.director.ask_human import AskHumanTool
 from openagents_orchestration.tools.director.check_messages import CheckMessagesTool
 from openagents_orchestration.tools.director.finalize import FinalizeTool

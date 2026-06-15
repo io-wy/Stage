@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.reporting import summarize_agent_run, summarize_board
-from openagents_orchestration.core.state_board import Budget, StateBoard
 
 
 def test_agent_summary_records_failure_fields():

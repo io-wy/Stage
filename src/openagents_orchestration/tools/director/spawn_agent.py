@@ -17,9 +17,9 @@ from typing import Any
 from openagents.errors.exceptions import PermanentToolError, RetryableToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
+from openagents_orchestration.core.state_board import AgentStatus
 from openagents_orchestration.models.task import TaskStatus
 from openagents_orchestration.reporting import summarize_agent_run
-from openagents_orchestration.core.state_board import AgentStatus
 from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
 from prompts.corrections import build_hallucination_correction
 

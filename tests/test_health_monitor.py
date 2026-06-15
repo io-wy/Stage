@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from openagents_orchestration.observability.health_monitor import HealthMonitor
 from openagents_orchestration.core.state_board import AgentStatus, StateBoard
+from openagents_orchestration.observability.health_monitor import HealthMonitor
 
 
 class TestHealthMonitor:

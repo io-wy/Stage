@@ -15,12 +15,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from openagents_orchestration.transport.channel_policy import (
-    DEFAULT_GLOBAL_POLICY,
-    ChannelPolicy,
-    ChannelPolicyError,
+from openagents_orchestration.core.decision_history import (
+    DecisionHistory,
+    DecisionRecord,
 )
-from openagents_orchestration.core.decision_history import DecisionHistory, DecisionRecord
 from openagents_orchestration.core.task_state_machine import TaskStateMachine
 from openagents_orchestration.enterprise.human_channel import HumanChannel
 from openagents_orchestration.mailbox.base import Mailbox
@@ -29,6 +27,11 @@ from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
 from openagents_orchestration.models.message import MessageHeader, StructuredMessage
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.models.trace import TraceContext
+from openagents_orchestration.transport.channel_policy import (
+    DEFAULT_GLOBAL_POLICY,
+    ChannelPolicy,
+    ChannelPolicyError,
+)
 from openagents_orchestration.transport.routing import RoutingTable, TopologyType
 
 # Module-level thread pool singleton for _run_sync bridge calls.
@@ -39,6 +42,7 @@ class AgentStatus(StrEnum):
     IDLE = "idle"
     RUNNING = "running"
     STALLED = "stalled"
+    WAITING_FOR_HUMAN = "waiting_for_human"
     DONE = "done"
     FAILED = "failed"
 
@@ -1114,7 +1118,7 @@ class StateBoard:
         trivial, fast mailbox operations.
         """
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             future = _sync_pool.submit(asyncio.run, coro)
             return future.result(timeout=30)
         except RuntimeError:
@@ -1160,10 +1164,7 @@ class StateBoard:
     def clear_mail(self, recipient: str | None = None) -> int:
         """Clear Mailbox v2 queues for one or all agents."""
         cleared = 0
-        if recipient is None:
-            targets = list(self._mailboxes.keys())
-        else:
-            targets = [recipient]
+        targets = list(self._mailboxes.keys()) if recipient is None else [recipient]
 
         for agent_id in targets:
             mbox = self._mailboxes.get(agent_id)
@@ -1201,14 +1202,17 @@ class StateBoard:
 
         # Verify sender's capability token if one is registered
         agent = self.agents.get(msg.header.sender)
-        if agent is not None and getattr(agent, "_capability_token", None) is not None:
-            if not agent._capability_token.verify():
-                self.log_event(
-                    "mail.auth_failed",
-                    agent_id=msg.header.sender,
-                    message=f"Token verification failed for {msg.header.sender}",
-                )
-                return False
+        if (
+            agent is not None
+            and getattr(agent, "_capability_token", None) is not None
+            and not agent._capability_token.verify()
+        ):
+            self.log_event(
+                "mail.auth_failed",
+                agent_id=msg.header.sender,
+                message=f"Token verification failed for {msg.header.sender}",
+            )
+            return False
 
         # Enforce channel policy
         try:

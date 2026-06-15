@@ -6,9 +6,8 @@ import asyncio
 
 import pytest
 
-from openagents_orchestration.models.message import StructuredMessage
-from openagents_orchestration.transport.routing import TopologyType
 from openagents_orchestration.core.state_board import Budget, StateBoard
+from openagents_orchestration.models.message import StructuredMessage
 
 
 @pytest.fixture
