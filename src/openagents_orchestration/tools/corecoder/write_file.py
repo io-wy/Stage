@@ -8,6 +8,7 @@ or run a verification pass over only the touched files.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -112,10 +113,8 @@ class WriteFileTool(ToolPlugin):
             if store is not None:
                 agent_id = getattr(context, "agent_id", "")
                 task_id = infer_task_id(agent_id)
-                try:
+                with contextlib.suppress(Exception):
                     await store.put(task_id, str(path), content)
-                except Exception:
-                    pass
 
         return {
             "file_path": str(path),

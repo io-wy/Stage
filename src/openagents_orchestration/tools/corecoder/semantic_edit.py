@@ -16,6 +16,34 @@ from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 from pydantic import BaseModel
 
+
+def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
+    """Resolve a file path relative to the agent's working directory."""
+    path = Path(file_path)
+    if path.is_absolute():
+        return path
+    base: Path | None = None
+    if context is not None:
+        cached = context.scratch.get("bash_cwd")
+        if isinstance(cached, str):
+            base = Path(cached)
+        else:
+            runner = getattr(getattr(context, "deps", None), "runner", None)
+            cwd = getattr(runner, "_current_work_dir", None)
+            if cwd is not None:
+                base = Path(cwd)
+    if base is None:
+        base = Path.cwd()
+
+    # Agents sometimes include the work-dir basename even though paths are
+    # already resolved relative to it. Strip that leading segment to avoid
+    # looking under a nested work directory.
+    parts = path.parts
+    if parts and parts[0] == base.name:
+        path = Path(*parts[1:])
+
+    return base / path
+
 _MAX_DIFF_CHARS = 3000
 
 
@@ -78,7 +106,7 @@ class SemanticEditTool(ToolPlugin):
         if not instruction:
             raise ToolError("instruction is required", tool_name=self.name)
 
-        path = Path(file_path).expanduser()
+        path = _resolve_path(file_path, context)
         if not path.exists():
             raise ToolError(f"File not found: {file_path}", tool_name=self.name)
         if not path.is_file():

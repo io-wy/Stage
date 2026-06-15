@@ -9,6 +9,7 @@ both the user and the LLM can see what changed.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 from pathlib import Path
 from typing import Any
@@ -139,10 +140,8 @@ class EditFileTool(ToolPlugin):
             if store is not None:
                 agent_id = getattr(context, "agent_id", "")
                 task_id = infer_task_id(agent_id)
-                try:
+                with contextlib.suppress(Exception):
                     await store.put(task_id, str(path), new_content)
-                except Exception:
-                    pass
 
         diff = _unified_diff(content, new_content, str(path))
         return {

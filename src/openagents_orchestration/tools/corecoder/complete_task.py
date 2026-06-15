@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 from openagents.errors.exceptions import PermanentToolError
@@ -65,18 +66,18 @@ class CompleteTaskTool(ToolPlugin):
         artifacts = [str(a).strip() for a in artifacts if str(a).strip()]
 
         ctx = context
+        if ctx is None:
+            raise PermanentToolError("RunContext required", tool_name=self.name)
         ctx.state["__complete_task_summary__"] = summary
         if artifacts:
             ctx.state["__complete_task_artifacts__"] = artifacts
 
         # Emit is best-effort — the state flags above are what actually stop the loop
-        try:
+        with contextlib.suppress(Exception):
             await ctx.emit(
                 "tool.complete_task",
                 summary=summary,
                 artifacts=artifacts,
             )
-        except Exception:
-            pass
 
         return summary

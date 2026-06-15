@@ -23,14 +23,27 @@ from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)"), "recursive delete on home/root"),
-    (re.compile(r"\brm\s+(-\w*)?-rf\s"), "force recursive delete"),
+    (re.compile(r"\brm\s+(-\w*)?-rf\s+/(?!\w)"), "force recursive delete on root"),
     (re.compile(r"\bmkfs\b"), "format filesystem"),
     (re.compile(r"\bdd\s+.*of=/dev/"), "raw disk write"),
     (re.compile(r">\s*/dev/sd[a-z]"), "overwrite block device"),
     (re.compile(r"\bchmod\s+(-R\s+)?777\s+/"), "chmod 777 on root"),
     (re.compile(r":\(\)\s*\{.*:\|:.*\}"), "fork bomb"),
-    (re.compile(r"\bcurl\b.*\|\s*(sudo\s+)?bash"), "pipe curl to bash"),
-    (re.compile(r"\bwget\b.*\|\s*(sudo\s+)?bash"), "pipe wget to bash"),
+]
+
+# Destructive-but-common commands that should require explicit user permission
+# rather than being silently blocked. The harness (or ask_human) can approve them.
+_PERMISSION_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"\brm\s+(-\w*)?-rf\s"), "force recursive delete"),
+    (re.compile(r"\brm\s+(-\w*)?-r\w*\s"), "recursive delete"),
+    (re.compile(r"\bcurl\b.*\|\s*(sudo\s+)?(bash|sh)"), "pipe curl to shell"),
+    (re.compile(r"\bwget\b.*\|\s*(sudo\s+)?(bash|sh)"), "pipe wget to shell"),
+    (re.compile(r"\bgit\s+reset\s+--hard\b"), "git reset --hard"),
+    (re.compile(r"\bgit\s+clean\s+(-[fd]\s*)*(-[fd])"), "git clean -fd"),
+    (re.compile(r"\bgit\s+push\s+.*--force\b|\bgit\s+push\s+\+"), "force git push"),
+    (re.compile(r"\bdd\b"), "dd command"),
+    (re.compile(r"\bsudo\b"), "sudo privilege escalation"),
+    (re.compile(r"\bsu\s+-"), "switch user"),
 ]
 
 _OUTPUT_HARD_LIMIT = 15_000
@@ -102,6 +115,24 @@ class BashTool(ToolPlugin):
                 ),
             }
 
+        permission = _check_permission_required(command)
+        if permission:
+            return {
+                "command": command,
+                "blocked": False,
+                "requires_permission": True,
+                "reason": permission,
+                "executed": False,
+                "stdout": "",
+                "stderr": "",
+                "exit_code": None,
+                "message": (
+                    f"⚠ Permission required: {permission}\nCommand: {command}\n"
+                    "Use `ask_human` to request approval, or rephrase the command to avoid "
+                    "the destructive operation."
+                ),
+            }
+
         cwd = _get_cwd(context)
         try:
             proc = subprocess.run(
@@ -156,6 +187,13 @@ class BashTool(ToolPlugin):
 
 def _check_dangerous(cmd: str) -> str | None:
     for pattern, reason in _DANGEROUS_PATTERNS:
+        if pattern.search(cmd):
+            return reason
+    return None
+
+
+def _check_permission_required(cmd: str) -> str | None:
+    for pattern, reason in _PERMISSION_PATTERNS:
         if pattern.search(cmd):
             return reason
     return None
