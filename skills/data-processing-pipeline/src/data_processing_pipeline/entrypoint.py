@@ -37,7 +37,7 @@ def _load_json(path: Path) -> tuple[list[str], list[dict[str, Any]]]:
     columns: list[str] = []
     seen: set[str] = set()
     for row in data:
-        for key in row.keys():
+        for key in row:
             if key not in seen:
                 seen.add(key)
                 columns.append(key)
@@ -52,7 +52,7 @@ def _apply_normalize_columns(
     columns: list[str], rows: list[dict[str, Any]]
 ) -> tuple[list[str], list[dict[str, Any]]]:
     new_columns = [_normalize_column(c) for c in columns]
-    rename_map = dict(zip(columns, new_columns))
+    rename_map = dict(zip(columns, new_columns, strict=True))
     new_rows = [
         {rename_map.get(k, k): v for k, v in row.items()}
         for row in rows

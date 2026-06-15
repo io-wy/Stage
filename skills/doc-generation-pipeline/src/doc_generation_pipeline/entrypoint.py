@@ -7,7 +7,6 @@ Renders markdown. Pure Python.
 from __future__ import annotations
 
 import ast
-import inspect
 from pathlib import Path
 from typing import Any
 

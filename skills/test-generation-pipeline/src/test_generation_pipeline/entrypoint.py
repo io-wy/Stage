@@ -7,10 +7,8 @@ produces parametrised tests + edge-case stubs. Pure Python.
 from __future__ import annotations
 
 import ast
-import inspect
 from pathlib import Path
 from typing import Any
-
 
 _CODE_TEMPLATE = '''\
 """Auto-generated tests for {module_name}.
@@ -56,7 +54,7 @@ def _default_value_for_type(type_hint: str) -> str:
 def _make_test_cases(func_name: str, args: list[ast.arg]) -> list[dict[str, str]]:
     """Generate 2–3 basic test case dicts for a function."""
     if not args:
-        return [{"desc": f"basic call", "args": "", "expected": "None"}]
+        return [{"desc": "basic call", "args": "", "expected": "None"}]
 
     arg_parts: list[str] = []
     for a in args:
@@ -66,7 +64,7 @@ def _make_test_cases(func_name: str, args: list[ast.arg]) -> list[dict[str, str]
 
     cases = [
         {
-            "desc": f"happy path",
+            "desc": "happy path",
             "args": ", ".join(arg_parts),
             "expected": "None  # TODO: set expected result",
         },
@@ -87,7 +85,7 @@ def _make_test_cases(func_name: str, args: list[ast.arg]) -> list[dict[str, str]
         else:
             edge_parts.append(f"{a.arg}=None")
     cases.append({
-        "desc": f"zero/empty input",
+        "desc": "zero/empty input",
         "args": ", ".join(edge_parts),
         "expected": "None  # TODO: set expected result",
     })
@@ -176,18 +174,25 @@ def _needs_tmp_path(tree: ast.AST) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in ("open", "Path", "os", "tempfile"):
             return True
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            if node.value.id in ("os", "pathlib", "tempfile", "json"):
-                return True
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in ("os", "pathlib", "tempfile", "json")
+        ):
+            return True
     return False
 
 
 def _needs_monkeypatch(tree: ast.AST) -> bool:
     """Heuristic: does the module read env vars or external state?"""
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            if node.value.id == "os" and node.attr in ("environ", "getenv"):
-                return True
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "os"
+            and node.attr in ("environ", "getenv")
+        ):
+            return True
     return False
 
 

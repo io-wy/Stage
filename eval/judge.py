@@ -10,13 +10,12 @@ import asyncio
 import contextlib
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
+from openagents.llm.registry import create_llm_client
 from pydantic import BaseModel, Field
 
-from openagents.llm.registry import create_llm_client
 from openagents_orchestration.utils.structured_generate import structured_generate
 
 # ---------------------------------------------------------------------------

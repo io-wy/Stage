@@ -6,7 +6,6 @@ writes a markdown report. No LLM dependency — pure Python.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -156,7 +155,7 @@ def _scan_file(path: Path, focus: str) -> list[_Issue]:
 
 def _render_report(target: str, result: _ReviewResult, focus: str) -> str:
     lines = [
-        f"# Code Review Report",
+        "# Code Review Report",
         "",
         f"- **Target:** `{target}`",
         f"- **Focus:** {focus}",

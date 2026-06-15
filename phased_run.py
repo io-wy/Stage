@@ -32,15 +32,15 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure src/ is on PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.core.runner import OrchestratorRunner, RunnerDeps
-from openagents_orchestration.core.state_board import StateBoard, Budget
+from openagents_orchestration.core.state_board import Budget, StateBoard
+from openagents_orchestration.models.task import TaskGraph, TaskStatus
 from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -70,7 +70,7 @@ def _state_path(plan_path: Path) -> Path:
 def _load_state(plan_path: Path) -> dict[str, Any]:
     sp = _state_path(plan_path)
     if sp.exists():
-        with open(sp, "r", encoding="utf-8") as f:
+        with open(sp, encoding="utf-8") as f:
             return json.load(f)
     return {}
 
@@ -99,7 +99,7 @@ async def cmd_plan(objective: str, output_file: Path) -> int:
     runner = OrchestratorRunner(Path(__file__).parent / "agent.json")
 
     print(f"\n{'='*60}")
-    print(f"PHASE 1: PLAN")
+    print("PHASE 1: PLAN")
     print(f"{'='*60}")
     print(f"Objective: {objective}")
     print("Decomposing... (this calls the Director LLM)")
@@ -151,11 +151,11 @@ def _print_plan_review(graph: TaskGraph) -> None:
 
 async def cmd_review_plan(plan_file: Path) -> int:
     """Phase 1.5: Review a saved plan without calling LLM."""
-    with open(plan_file, "r", encoding="utf-8") as f:
+    with open(plan_file, encoding="utf-8") as f:
         graph = TaskGraph.from_dict(json.load(f))
 
     print(f"\n{'='*60}")
-    print(f"PHASE 1.5: REVIEW PLAN")
+    print("PHASE 1.5: REVIEW PLAN")
     print(f"{'='*60}")
     print(f"File: {plan_file}")
 
@@ -175,7 +175,7 @@ async def cmd_review_plan(plan_file: Path) -> int:
         for tid, tstate in state.get("tasks", {}).items():
             print(f"    {tid}: {tstate['status']}")
     else:
-        print(f"\n  No execution state yet. Run 'execute-task' or 'step' to progress.")
+        print("\n  No execution state yet. Run 'execute-task' or 'step' to progress.")
 
     return 0
 
@@ -191,7 +191,7 @@ async def cmd_spawn(agent_type: str, input_text: str) -> int:
     runner = OrchestratorRunner(Path(__file__).parent / "agent.json")
 
     print(f"\n{'='*60}")
-    print(f"PHASE 2: SPAWN")
+    print("PHASE 2: SPAWN")
     print(f"{'='*60}")
     print(f"Agent: {agent_type}")
     print(f"Input:\n{'-'*40}\n{input_text}\n{'-'*40}")
@@ -208,7 +208,7 @@ async def cmd_spawn(agent_type: str, input_text: str) -> int:
 async def cmd_execute_task(plan_file: Path, task_id: str) -> int:
     """Phase 3: Execute a single task from a saved plan."""
     _load_env()
-    with open(plan_file, "r", encoding="utf-8") as f:
+    with open(plan_file, encoding="utf-8") as f:
         graph = TaskGraph.from_dict(json.load(f))
 
     task = graph.get_task(task_id)
@@ -217,7 +217,7 @@ async def cmd_execute_task(plan_file: Path, task_id: str) -> int:
         return 1
 
     print(f"\n{'='*60}")
-    print(f"PHASE 3: EXECUTE TASK")
+    print("PHASE 3: EXECUTE TASK")
     print(f"{'='*60}")
     print(f"Task: {task_id}")
     print(f"Description: {task.description}")
@@ -282,11 +282,11 @@ async def cmd_execute_task(plan_file: Path, task_id: str) -> int:
 async def cmd_step(plan_file: Path) -> int:
     """Phase 4: Execute all currently ready tasks from the plan."""
     _load_env()
-    with open(plan_file, "r", encoding="utf-8") as f:
+    with open(plan_file, encoding="utf-8") as f:
         graph = TaskGraph.from_dict(json.load(f))
 
     print(f"\n{'='*60}")
-    print(f"PHASE 4: STEP")
+    print("PHASE 4: STEP")
     print(f"{'='*60}")
 
     # Build StateBoard with saved state

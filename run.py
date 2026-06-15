@@ -13,6 +13,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 
 def _parse_token_limit(s: str) -> int:
@@ -169,8 +170,10 @@ Examples:
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-    from openagents_orchestration.enterprise.global_orchestrator import GlobalOrchestrator
     from openagents_orchestration.core.state_board import Budget
+    from openagents_orchestration.enterprise.global_orchestrator import (
+        GlobalOrchestrator,
+    )
     from openagents_orchestration.enterprise.team import TeamSpec
 
     persist_dir = Path(__file__).parent / ".claude" / "persist"

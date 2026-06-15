@@ -14,8 +14,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 
 def main():
@@ -52,7 +52,7 @@ def main():
     session_dir = persist_dir / args.session_id
     if not session_dir.exists():
         print(f"Error: session '{args.session_id}' not found")
-        print(f"Run 'uv run python talk.py --list' to see available sessions")
+        print("Run 'uv run python talk.py --list' to see available sessions")
         return 1
 
     inbox_file = session_dir / "inbox.jsonl"
@@ -70,7 +70,7 @@ def main():
 
     print(f"Message sent to Director (session: {args.session_id}):")
     print(f"  {message_text}")
-    print(f"Director will see this on next check_messages.")
+    print("Director will see this on next check_messages.")
     return 0
 
 

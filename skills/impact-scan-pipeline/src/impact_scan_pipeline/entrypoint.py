@@ -7,7 +7,6 @@ producing a structured impact report to prevent incomplete changes.
 from __future__ import annotations
 
 import ast
-import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -126,11 +125,9 @@ def _ast_imports_and_calls(path: Path) -> dict[str, list[_Reference]]:
             func_name = _get_call_name(node.func)
             if func_name:
                 _add_ref(result, func_name, path, node, lines, "call")
-        elif isinstance(node, ast.Attribute):
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
             # obj.method — record method name
-            if isinstance(node.value, ast.Name):
-                full = f"{node.value.attr}.{node.attr}" if hasattr(node.value, "attr") else f"{node.value.id}.{node.attr}"
-                _add_ref(result, node.attr, path, node, lines, "attribute_access")
+            _add_ref(result, node.attr, path, node, lines, "attribute_access")
 
     return result
 
@@ -223,7 +220,7 @@ async def run_openagent_skill(payload: dict[str, Any]) -> dict[str, Any]:
     project_root = payload.get("project_root", ".")
     symbols = payload.get("symbols", [])
     output_path = payload.get("output_path")
-    max_files = int(payload.get("max_files", 500))
+    _max_files = int(payload.get("max_files", 500))
 
     if not target_path:
         raise ValueError("impact-scan-pipeline: payload must include 'target_path'")
@@ -239,9 +236,7 @@ async def run_openagent_skill(payload: dict[str, Any]) -> dict[str, Any]:
             text = target.read_text(encoding="utf-8", errors="replace")
             tree = ast.parse(text)
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    symbols.append(node.name)
-                elif isinstance(node, ast.ClassDef):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     symbols.append(node.name)
         except Exception:
             pass

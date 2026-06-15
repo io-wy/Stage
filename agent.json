@@ -68,6 +68,14 @@
           "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
         },
         {
+          "id": "list_directory",
+          "impl": "openagents_orchestration.tools.corecoder.list_directory.ListDirectoryTool"
+        },
+        {
+          "id": "think",
+          "impl": "openagents_orchestration.tools.corecoder.think.ThinkTool"
+        },
+        {
           "id": "bash",
           "impl": "openagents_orchestration.tools.corecoder.bash_tool.BashTool"
         },
@@ -173,6 +181,14 @@
           "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
         },
         {
+          "id": "list_directory",
+          "impl": "openagents_orchestration.tools.corecoder.list_directory.ListDirectoryTool"
+        },
+        {
+          "id": "think",
+          "impl": "openagents_orchestration.tools.corecoder.think.ThinkTool"
+        },
+        {
           "id": "write_file",
           "impl": "openagents_orchestration.tools.corecoder.write_file.WriteFileTool"
         },
@@ -198,7 +214,7 @@
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.corecoder.ask_human.CoreCoderAskHumanTool"
         },
         {
           "id": "check_messages",
@@ -223,6 +239,10 @@
         {
           "id": "run_claude_code",
           "impl": "openagents_orchestration.tools.corecoder.run_claude_code.RunClaudeCodeTool"
+        },
+        {
+          "id": "sub_agent",
+          "impl": "openagents_orchestration.tools.corecoder.sub_agent.SubAgentTool"
         },
         {
           "id": "semantic_edit",
@@ -282,6 +302,14 @@
           "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
         },
         {
+          "id": "list_directory",
+          "impl": "openagents_orchestration.tools.corecoder.list_directory.ListDirectoryTool"
+        },
+        {
+          "id": "think",
+          "impl": "openagents_orchestration.tools.corecoder.think.ThinkTool"
+        },
+        {
           "id": "write_file",
           "impl": "openagents_orchestration.tools.corecoder.write_file.WriteFileTool"
         },
@@ -307,7 +335,7 @@
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.corecoder.ask_human.CoreCoderAskHumanTool"
         },
         {
           "id": "check_messages",
@@ -373,6 +401,14 @@
           "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
         },
         {
+          "id": "list_directory",
+          "impl": "openagents_orchestration.tools.corecoder.list_directory.ListDirectoryTool"
+        },
+        {
+          "id": "think",
+          "impl": "openagents_orchestration.tools.corecoder.think.ThinkTool"
+        },
+        {
           "id": "glob",
           "impl": "openagents_orchestration.tools.corecoder.glob_tool.GlobTool"
         },
@@ -390,7 +426,7 @@
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.corecoder.ask_human.CoreCoderAskHumanTool"
         },
         {
           "id": "check_messages",
@@ -399,6 +435,10 @@
         {
           "id": "web_search",
           "impl": "openagents_orchestration.tools.corecoder.web_search.WebSearchTool"
+        },
+        {
+          "id": "web_fetch",
+          "impl": "openagents_orchestration.tools.corecoder.web_fetch.WebFetchTool"
         },
         {
           "id": "run_skill",
@@ -452,6 +492,14 @@
           "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
         },
         {
+          "id": "list_directory",
+          "impl": "openagents_orchestration.tools.corecoder.list_directory.ListDirectoryTool"
+        },
+        {
+          "id": "think",
+          "impl": "openagents_orchestration.tools.corecoder.think.ThinkTool"
+        },
+        {
           "id": "glob",
           "impl": "openagents_orchestration.tools.corecoder.glob_tool.GlobTool"
         },
@@ -469,7 +517,7 @@
         },
         {
           "id": "ask_human",
-          "impl": "openagents_orchestration.tools.director.ask_human.AskHumanTool"
+          "impl": "openagents_orchestration.tools.corecoder.ask_human.CoreCoderAskHumanTool"
         },
         {
           "id": "check_messages",
@@ -545,6 +593,14 @@
         {
           "id": "read_file",
           "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "list_directory",
+          "impl": "openagents_orchestration.tools.corecoder.list_directory.ListDirectoryTool"
+        },
+        {
+          "id": "think",
+          "impl": "openagents_orchestration.tools.corecoder.think.ThinkTool"
         },
         {
           "id": "bash",
@@ -639,6 +695,14 @@
         {
           "id": "read_file",
           "impl": "openagents_orchestration.tools.corecoder.read_file.ReadFileTool"
+        },
+        {
+          "id": "list_directory",
+          "impl": "openagents_orchestration.tools.corecoder.list_directory.ListDirectoryTool"
+        },
+        {
+          "id": "think",
+          "impl": "openagents_orchestration.tools.corecoder.think.ThinkTool"
         },
         {
           "id": "bash",

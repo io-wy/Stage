@@ -96,7 +96,7 @@ def _render_report(
     lines = [
         f"# Research brief: {topic}",
         "",
-        f"## Sources",
+        "## Sources",
         "",
     ]
     for url, _ in succeeded:

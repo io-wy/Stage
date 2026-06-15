@@ -11,7 +11,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 _REPORT_TEMPLATE = """\
 # Health Check Report
 

@@ -19,10 +19,13 @@ dependencies = [
     "pyyaml>=6.0.3",
     "datasets>=4.8.5",
     "matrix-nio>=0.25.2",
+    "mcp>=1.4.0",
 ]
 
 [dependency-groups]
-dev = ["ruff"]
+dev = [
+    "ruff",
+]
 
 [project.optional-dependencies]
 redis = ["redis>=5.0"]

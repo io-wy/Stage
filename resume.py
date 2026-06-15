@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
@@ -86,8 +85,8 @@ async def main():
         report = await runner.run("", session_id=args.session_id, resume=True)
     except RuntimeError as exc:
         if "budget exhausted" in str(exc).lower() or "exhausted" in str(exc).lower():
-            print(f"\n[!] Budget still exhausted after resume.")
-            print(f"    Trying with expanded budget...")
+            print("\n[!] Budget still exhausted after resume.")
+            print("    Trying with expanded budget...")
 
             # Load snapshot manually and expand budget
             from openagents_orchestration.persistence import SessionResumer
