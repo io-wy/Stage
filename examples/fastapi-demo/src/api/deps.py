@@ -1,6 +1,0 @@
-from __future__ import annotations
-
-from openagents_orchestration.app.services.orchestration import get_orchestration_service
-
-
-OrchestrationServiceDependency = get_orchestration_service
