@@ -1,172 +1,94 @@
-"""Tests for the minimal hook pipeline."""
+"""Tests for the HookManager pipeline and its runner wiring.
+
+Verifies the manager contract corecoder relies on (passthrough, mutate, chain,
+block) and the session.start wiring that loads the skill catalog.
+"""
 
 from __future__ import annotations
 
-from typing import Any
+from types import SimpleNamespace
 
-import pytest
+from openagents_orchestration.hooks import HookManager, load_skills_into_context
+from openagents_orchestration.skills_registry import SkillRegistry
 
-from openagents_orchestration.hooks import HookManager
-from openagents_orchestration.patterns.corecoder import CoreCoderPattern
+# -- HookManager core ------------------------------------------------------
 
-
-class FakeLLMClient:
-    def __init__(self, responses: list[Any]):
-        self._responses = list(responses)
-        self._index = 0
-        self.provider_name = "openai_compatible"
-
-    async def generate(self, **kwargs: Any) -> Any:
-        if self._index >= len(self._responses):
-            raise RuntimeError("No more fake responses")
-        response = self._responses[self._index]
-        self._index += 1
-        return response
+def test_run_with_no_handlers_passes_payload_through():
+    hm = HookManager()
+    payload = {"a": 1}
+    assert hm.run("tool.before_invoke", payload) is payload
 
 
-class FakeResponse:
-    def __init__(
-        self,
-        *,
-        output_text: str = "",
-        tool_calls: list[Any] | None = None,
-    ):
-        self.output_text = output_text
-        self.content = []
-        self.tool_calls = tool_calls or []
-        self.usage = None
+def test_handler_can_mutate_payload():
+    hm = HookManager()
+    hm.register("tool.before_invoke", lambda p: {**p, "params": {"x": 2}})
+    out = hm.run("tool.before_invoke", {"tool_id": "bash", "params": {}})
+    assert out["params"] == {"x": 2}
 
 
-class FakeToolCall:
-    def __init__(self, name: str, arguments: dict[str, Any]):
-        self.name = name
-        self.arguments = arguments
-        self.id = "call_1"
+def test_handlers_chain_in_registration_order():
+    hm = HookManager()
+    hm.register("e", lambda p: {**p, "seq": [*p.get("seq", []), "a"]})
+    hm.register("e", lambda p: {**p, "seq": [*p.get("seq", []), "b"]})
+    assert hm.run("e", {})["seq"] == ["a", "b"]
 
 
-class NoOpTool:
-    name = "no_op"
-    description = "no op"
-
-    def execution_spec(self) -> Any:
-        from openagents.interfaces.tool import ToolExecutionSpec
-
-        return ToolExecutionSpec(concurrency_safe=True, side_effects="none")
-
-    def schema(self) -> dict[str, Any]:
-        return {"type": "object", "properties": {}}
-
-    async def invoke(self, params: dict[str, Any], context: Any) -> dict[str, Any]:
-        return {"message": "ok"}
+def test_handler_returning_none_keeps_prior_payload():
+    hm = HookManager()
+    hm.register("e", lambda p: None)
+    assert hm.run("e", {"k": "v"}) == {"k": "v"}
 
 
-class FakeEventBus:
-    async def emit(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-
-def _make_context(llm_client: FakeLLMClient, tools: dict[str, Any], hooks: Any = None):
-    from openagents.interfaces.run_context import RunContext, RunUsage
-
-    ctx = RunContext(
-        agent_id="test-agent",
-        session_id="test-session",
-        run_id="run-1",
-        input_text="Do something",
-        llm_client=llm_client,
-        tools=tools,
-        event_bus=FakeEventBus(),
-        state={},
-        scratch={},
-        transcript=[],
-        system_prompt_fragments=[],
-        usage=RunUsage(),
-        tool_results=[],
+def test_block_signal_from_before_invoke_handler():
+    # corecoder reads payload["blocked"] to abort a tool call
+    hm = HookManager()
+    hm.register(
+        "tool.before_invoke", lambda p: {**p, "blocked": True, "reason": "no"}
     )
-    ctx.deps = type("Deps", (), {"hooks": hooks})()
-    return ctx
+    out = hm.run("tool.before_invoke", {"tool_id": "bash", "params": {}})
+    assert out["blocked"] is True and out["reason"] == "no"
 
 
-@pytest.mark.asyncio
-async def test_tool_before_invoke_hook_can_block():
-    manager = HookManager()
-    blocked = {"value": False}
+def test_unregister_removes_handler():
+    hm = HookManager()
 
-    def blocker(payload: dict[str, Any]) -> dict[str, Any]:
-        if payload["tool_id"] == "no_op":
-            blocked["value"] = True
-            return {"blocked": True, "reason": "test block"}
-        return payload
+    def h(p):
+        return {**p, "hit": True}
 
-    manager.register("tool.before_invoke", blocker)
+    hm.register("e", h)
+    hm.unregister("e", h)
+    assert "hit" not in hm.run("e", {})
 
-    llm = FakeLLMClient(
-        [
-            FakeResponse(output_text='{"steps": ["call no_op"]}'),
-            FakeResponse(tool_calls=[FakeToolCall("no_op", {})]),
-            FakeResponse(output_text="done"),
-        ]
+
+# -- session.start wiring (skill loader registered as a real handler) ------
+
+def test_session_start_handler_injects_catalog(tmp_path):
+    d = tmp_path / "skills" / "demo-pipeline"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(
+        "---\nname: demo-pipeline\ndescription: Demo.\n---\n# Demo\n",
+        encoding="utf-8",
     )
-    pattern = CoreCoderPattern()
-    ctx = _make_context(llm, {"no_op": NoOpTool()}, hooks=manager)
-    await pattern.setup(
-        agent_id=ctx.agent_id,
-        session_id=ctx.session_id,
-        input_text=ctx.input_text,
-        state=ctx.state,
-        tools=ctx.tools,
-        llm_client=ctx.llm_client,
-        llm_options=ctx.llm_options,
-        event_bus=ctx.event_bus,
-        transcript=ctx.transcript,
-        usage=ctx.usage,
-        scratch=ctx.scratch,
-        tool_results=ctx.tool_results,
-        system_prompt_fragments=ctx.system_prompt_fragments,
+    reg = SkillRegistry(skills_dir=tmp_path / "skills")
+    hm = HookManager()
+    hm.register("session.start", load_skills_into_context)
+
+    ctx = SimpleNamespace(system_prompt_fragments=[])
+    hm.run(
+        "session.start",
+        {
+            "context": ctx,
+            "agent_type": "coder",
+            "tool_names": ["read_skill"],
+            "registry": reg,
+        },
     )
-    # Inject deps after setup so hooks are reachable.
-    pattern.context.deps = ctx.deps
-
-    await pattern.execute()
-    assert blocked["value"] is True
-    assert "Hook blocked" in str(ctx.transcript)
+    assert any("demo-pipeline" in f for f in ctx.system_prompt_fragments)
 
 
-@pytest.mark.asyncio
-async def test_pattern_before_llm_hook_can_modify_messages():
-    manager = HookManager()
-    seen: list[int] = []
+def test_runner_deps_exposes_hooks_field():
+    # corecoder._get_hooks reads ctx.deps.hooks; the field must exist (default None)
+    from openagents_orchestration.core.runner import RunnerDeps
 
-    def counter(payload: dict[str, Any]) -> dict[str, Any]:
-        seen.append(len(payload["messages"]))
-        return payload
-
-    manager.register("pattern.before_llm", counter)
-
-    llm = FakeLLMClient(
-        [
-            FakeResponse(output_text='{"steps": ["finish"]}'),
-            FakeResponse(output_text="done"),
-        ]
-    )
-    pattern = CoreCoderPattern()
-    ctx = _make_context(llm, {}, hooks=manager)
-    await pattern.setup(
-        agent_id=ctx.agent_id,
-        session_id=ctx.session_id,
-        input_text=ctx.input_text,
-        state=ctx.state,
-        tools=ctx.tools,
-        llm_client=ctx.llm_client,
-        llm_options=ctx.llm_options,
-        event_bus=ctx.event_bus,
-        transcript=ctx.transcript,
-        usage=ctx.usage,
-        scratch=ctx.scratch,
-        tool_results=ctx.tool_results,
-        system_prompt_fragments=ctx.system_prompt_fragments,
-    )
-    pattern.context.deps = ctx.deps
-
-    await pattern.execute()
-    assert len(seen) >= 1
+    fields = RunnerDeps.__dataclass_fields__
+    assert "hooks" in fields

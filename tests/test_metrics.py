@@ -1,81 +1,131 @@
-"""Tests for OrchestrationMetrics."""
+"""Adversarial + contract tests for OrchestrationMetrics.
+
+Module under test: ``src/openagents_orchestration/enterprise/metrics.py`` (deleted
+``test_metrics.py``). A Prometheus-style registry of counters/gauges/histograms
+plus a ``from_state`` snapshot updater. ``test_gap_*`` pin counting and
+exposition bugs.
+"""
 
 from __future__ import annotations
 
-from openagents_orchestration.core.state_board import StateBoard
-from openagents_orchestration.enterprise.metrics import OrchestrationMetrics
+from openagents_orchestration.enterprise.metrics import (
+    OrchestrationMetrics,
+    _Counter,
+    _Gauge,
+    _Histogram,
+)
+
+# ── primitive metric contracts ────────────────────────────────────────────────
 
 
-class TestOrchestrationMetrics:
-    def test_gauge_set_and_get(self):
-        m = OrchestrationMetrics()
-        m.projects_total.set(3, labels={"status": "running"})
-        assert m.projects_total.get(labels={"status": "running"}) == 3.0
+def test_counter_inc_and_get():
+    c = _Counter("c", "d", ["proj"])
+    c.inc(labels={"proj": "p1"})
+    c.inc(labels={"proj": "p1"}, amount=4)
+    assert c.get(labels={"proj": "p1"}) == 5.0
+    assert c.get(labels={"proj": "p2"}) == 0.0
 
-    def test_counter_increment(self):
-        m = OrchestrationMetrics()
-        m.messages_delivered.inc(labels={"project_id": "p1", "topology": "p2p"})
-        m.messages_delivered.inc(labels={"project_id": "p1", "topology": "p2p"})
-        assert m.messages_delivered.get(labels={"project_id": "p1", "topology": "p2p"}) == 2.0
 
-    def test_histogram_observe(self):
-        m = OrchestrationMetrics()
-        m.heartbeat_latency.observe(15.0, labels={"project_id": "p1", "agent_id": "a1"})
-        m.heartbeat_latency.observe(45.0, labels={"project_id": "p1", "agent_id": "a1"})
+def test_gauge_set_inc_dec():
+    g = _Gauge("g", "d", ["s"])
+    g.set(10, labels={"s": "x"})
+    g.inc(labels={"s": "x"})
+    g.dec(labels={"s": "x"}, amount=3)
+    assert g.get(labels={"s": "x"}) == 8.0
 
-        samples = m.heartbeat_latency.collect()
-        # Should have buckets + Inf + sum + count
-        assert len(samples) > 0
-        count_samples = [s for s in samples if "_count" in s.name]
-        assert len(count_samples) == 1
-        assert count_samples[0].value == 2.0
 
-    def test_collect_all(self):
-        m = OrchestrationMetrics()
-        m.projects_total.set(1, labels={"status": "running"})
-        m.tasks_total.set(5, labels={"project_id": "p1", "status": "pending"})
+def test_histogram_buckets_are_cumulative_with_sum_and_count():
+    h = _Histogram("h", "d", [], buckets=(1.0, 5.0, 10.0))
+    for v in (0.5, 2.0, 7.0):
+        h.observe(v)
+    samples = {(mv.name, mv.labels.get("le")): mv.value for mv in h.collect()}
+    assert samples[("h_bucket", "1.0")] == 1.0  # only 0.5 <= 1
+    assert samples[("h_bucket", "5.0")] == 2.0  # 0.5, 2.0
+    assert samples[("h_bucket", "10.0")] == 3.0  # all three
+    assert samples[("h_bucket", "+Inf")] == 3.0
+    assert samples[("h_sum", None)] == 9.5
+    assert samples[("h_count", None)] == 3.0
 
-        all_samples = m.collect()
-        names = {s.name for s in all_samples}
-        assert "orchestration_projects_total" in names
-        assert "orchestration_tasks_total" in names
 
-    def test_prometheus_format(self):
-        m = OrchestrationMetrics()
-        m.projects_total.set(2, labels={"status": "running"})
-        text = m.to_prometheus()
-        assert "# HELP orchestration_projects_total" in text
-        assert "# TYPE orchestration_projects_total gauge" in text
-        assert 'status="running"' in text
-        assert "2" in text
+def test_to_prometheus_basic_shape():
+    m = OrchestrationMetrics()
+    m.projects_total.set(3, labels={"status": "running"})
+    out = m.to_prometheus()
+    assert "# TYPE orchestration_projects_total gauge" in out
+    assert 'orchestration_projects_total{status="running"} 3' in out
 
-    def test_from_state_board(self):
-        board = StateBoard("test", echo=False)
-        board.add_task = None  # will use direct task manipulation
 
-        # Manually add tasks with different statuses
-        from openagents_orchestration.models.task import TaskNode, TaskStatus
+def test_from_state_sets_task_and_budget_gauges():
+    m = OrchestrationMetrics()
 
-        board.tasks["t1"] = TaskNode("t1", "fix bug", "coder", status=TaskStatus.PENDING)
-        board.tasks["t2"] = TaskNode("t2", "write tests", "coder", status=TaskStatus.RUNNING)
+    class _T:
+        def __init__(self, status: str) -> None:
+            self.status = status
 
-        m = OrchestrationMetrics()
-        m.from_state(board, project_id="proj-1")
+    class _Budget:
+        token_used = 1234
 
-        assert m.tasks_total.get(labels={"project_id": "proj-1", "status": "pending"}) == 1.0
-        assert m.tasks_total.get(labels={"project_id": "proj-1", "status": "running"}) == 1.0
-        assert m.budget_tokens_used.get(labels={"project_id": "proj-1"}) == 0.0
+    class _Board:
+        project_id = "p1"
+        tasks = {"t1": _T("completed"), "t2": _T("completed"), "t3": _T("failed")}
+        agents: dict = {}
+        budget = _Budget()
 
-    def test_gauge_inc_dec(self):
-        m = OrchestrationMetrics()
-        m.projects_total.inc(labels={"status": "running"}, amount=5)
-        assert m.projects_total.get(labels={"status": "running"}) == 5.0
-        m.projects_total.dec(labels={"status": "running"}, amount=2)
-        assert m.projects_total.get(labels={"status": "running"}) == 3.0
+    m.from_state(_Board())
+    assert m.tasks_total.get(labels={"project_id": "p1", "status": "completed"}) == 2
+    assert m.tasks_total.get(labels={"project_id": "p1", "status": "failed"}) == 1
+    assert m.budget_tokens_used.get(labels={"project_id": "p1"}) == 1234
 
-    def test_different_label_sets(self):
-        m = OrchestrationMetrics()
-        m.projects_total.set(1, labels={"status": "running"})
-        m.projects_total.set(2, labels={"status": "pending"})
-        assert m.projects_total.get(labels={"status": "running"}) == 1.0
-        assert m.projects_total.get(labels={"status": "pending"}) == 2.0
+
+# ── GAP: periodic from_state double-counts cumulative llm_calls ───────────────
+
+
+def test_gap_from_state_double_counts_llm_calls_on_repeated_snapshots():
+    """``from_state`` is documented to run periodically ('every 30s'). It does
+    ``llm_calls.inc(amount=agent.llm_call_count)`` — but ``llm_call_count`` is
+    ALREADY a cumulative running total, so each snapshot re-adds the whole total
+    and the counter inflates without bound. (tasks/agents/budget correctly use
+    ``.set()``; only llm_calls/llm_latency use the accumulating path.)"""
+    m = OrchestrationMetrics()
+
+    class _Agent:
+        llm_call_count = 5
+        avg_llm_latency_ms = 0
+
+    class _Board:
+        project_id = "p1"
+        tasks: dict = {}
+        agents = {"a1": _Agent()}
+        budget = None
+
+    m.from_state(_Board())
+    m.from_state(_Board())  # second periodic snapshot
+    got = m.llm_calls.get(labels={"project_id": "p1", "agent_id": "a1"})
+    assert got == 10.0  # GAP: 5 real calls counted as 10
+
+
+# ── GAP: typo'd / extra label names silently collapse to the empty series ─────
+
+
+def test_gap_unknown_label_names_silently_collapse_to_empty_series():
+    """``_key`` reads only declared ``label_names``; an extra or misspelled label
+    is dropped and missing labels become ``""``. So an observation with a wrong
+    label name lands in the empty-label series instead of raising — silently
+    misattributed metrics."""
+    c = _Counter("c", "d", ["project_id", "topology"])
+    c.inc(labels={"projetc_id": "p1", "topology": "p2p"})  # 'project_id' misspelled
+    assert c.get(labels={"project_id": "p1", "topology": "p2p"}) == 0.0
+    assert c.get(labels={"project_id": "", "topology": "p2p"}) == 1.0  # GAP: landed at ''
+
+
+# ── GAP: Prometheus label values are not escaped ──────────────────────────────
+
+
+def test_gap_prometheus_label_values_not_escaped():
+    """Label values are interpolated as ``f'{k}="{v}"'`` with no escaping, so a
+    value containing a double-quote (or newline) emits malformed exposition that
+    a Prometheus scraper rejects."""
+    m = OrchestrationMetrics()
+    m.budget_tokens_used.set(1, labels={"project_id": 'a"b'})
+    out = m.to_prometheus()
+    assert 'project_id="a"b"' in out  # GAP: unescaped quote breaks the line

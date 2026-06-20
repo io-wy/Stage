@@ -29,6 +29,7 @@ output_phased/
 examples/
 .projects/
 .artifacts/
+.specify/
 
 # Eval artifacts
 .eval_cache/

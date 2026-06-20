@@ -1,70 +1,176 @@
-"""Tests for TaskGraph model."""
+"""Adversarial + contract tests for the data models (task / message / delivery).
+
+Modules under test:
+- ``models/task.py`` (TaskGraph DAG validation, topological layers, serialization)
+- ``models/message.py`` (StructuredMessage round-trip, enum decoding)
+- ``models/delivery.py`` (DeliveryReport success accounting)
+
+All three lost coverage in the cull (``test_models.py`` / ``test_message.py``
+deleted). ``test_gap_*`` pin contract violations and misleading diagnostics.
+"""
 
 from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.models.task import TaskGraph, TaskNode
+from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
+from openagents_orchestration.models.message import (
+    MessageType,
+    StructuredMessage,
+)
+from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 
 
-class TestTaskGraph:
-    def test_topological_layers_linear(self):
-        tg = TaskGraph(
-            objective="linear",
-            tasks=[
-                TaskNode("t1", "A", "coder"),
-                TaskNode("t2", "B", "coder", dependencies=["t1"]),
-                TaskNode("t3", "C", "coder", dependencies=["t2"]),
-            ],
-        )
-        layers = tg.topological_layers()
-        assert [[t.task_id for t in layer] for layer in layers] == [["t1"], ["t2"], ["t3"]]
+def _node(tid: str, deps: list[str] | None = None) -> TaskNode:
+    return TaskNode(task_id=tid, description=tid, agent_type="coder", dependencies=deps or [])
 
-    def test_topological_layers_parallel(self):
-        tg = TaskGraph(
-            objective="parallel",
-            tasks=[
-                TaskNode("t1", "A", "coder"),
-                TaskNode("t2", "B", "coder", dependencies=["t1"]),
-                TaskNode("t3", "C", "reviewer", dependencies=["t1"]),
-                TaskNode("t4", "D", "coder", dependencies=["t2", "t3"]),
-            ],
-        )
-        layers = tg.topological_layers()
-        assert [sorted([t.task_id for t in layer]) for layer in layers] == [
-            ["t1"], ["t2", "t3"], ["t4"]
-        ]
 
-    def test_cycle_detection(self):
-        tg = TaskGraph(
-            objective="cycle",
-            tasks=[
-                TaskNode("t1", "A", "coder", dependencies=["t2"]),
-                TaskNode("t2", "B", "coder", dependencies=["t1"]),
-            ],
-        )
-        with pytest.raises(ValueError, match="circular"):
-            tg.validate()
+# ── TaskGraph: validation that works ──────────────────────────────────────────
 
-    def test_unknown_dependency(self):
-        tg = TaskGraph(
-            objective="unknown",
-            tasks=[
-                TaskNode("t1", "A", "coder", dependencies=["missing"]),
-            ],
-        )
-        with pytest.raises(ValueError, match="unknown task"):
-            tg.validate()
 
-    def test_serialization_roundtrip(self):
-        tg = TaskGraph(
-            objective="roundtrip",
-            tasks=[
-                TaskNode("t1", "A", "coder", dependencies=[], expected_artifacts=["a.py"]),
-            ],
-        )
-        data = tg.to_dict()
-        restored = TaskGraph.from_dict(data)
-        assert restored.objective == tg.objective
-        assert len(restored.tasks) == 1
-        assert restored.tasks[0].task_id == "t1"
+def test_validate_accepts_valid_dag_and_layers_are_ordered():
+    g = TaskGraph("obj", [_node("a"), _node("b", ["a"]), _node("c", ["a", "b"])])
+    g.validate()  # no raise
+    layers = g.topological_layers()
+    assert [n.task_id for n in layers[0]] == ["a"]
+    assert {n.task_id for n in layers[1]} == {"b"}
+    assert {n.task_id for n in layers[2]} == {"c"}
+
+
+def test_validate_rejects_unknown_dependency():
+    g = TaskGraph("obj", [_node("a", ["ghost"])])
+    with pytest.raises(ValueError, match="unknown task"):
+        g.validate()
+
+
+def test_validate_rejects_two_node_cycle():
+    g = TaskGraph("obj", [_node("a", ["b"]), _node("b", ["a"])])
+    with pytest.raises(ValueError, match="circular"):
+        g.validate()
+
+
+def test_validate_rejects_self_dependency():
+    g = TaskGraph("obj", [_node("a", ["a"])])
+    with pytest.raises(ValueError, match="circular"):
+        g.validate()
+
+
+def test_is_ready_and_is_terminal():
+    n = _node("a", ["dep1", "dep2"])
+    assert n.is_ready({"dep1"}) is False
+    assert n.is_ready({"dep1", "dep2"}) is True
+    assert n.is_terminal() is False
+    n.status = TaskStatus.COMPLETED
+    assert n.is_terminal() is True
+
+
+# ── GAP: duplicate task_id is misdiagnosed and silently drops a task ──────────
+
+
+def test_gap_duplicate_task_id_with_no_edges_reported_as_cycle():
+    """``_has_cycle`` returns ``visited != len(self.tasks)``, but ``visited``
+    counts UNIQUE ids (in_degree/adj are dicts keyed by task_id) while
+    ``len(self.tasks)`` counts the raw list. With a duplicate id the two
+    disagree, so a graph of two identically-named tasks and ZERO dependencies is
+    reported as having 'circular dependencies' — doubly wrong: there are no edges
+    to form a cycle, and the real fault (a duplicate id) is never named."""
+    g = TaskGraph("obj", [_node("dup"), _node("dup")])
+    with pytest.raises(ValueError, match="circular"):
+        g.validate()
+
+
+def test_gap_duplicate_task_id_silently_dropped_in_layers():
+    """If a caller skips validate() (or catches its error), ``topological_layers``
+    keys ``remaining`` by task_id, so duplicate-id tasks collapse and one is
+    silently dropped — the graph schedules fewer tasks than were defined."""
+    g = TaskGraph("obj", [_node("dup"), _node("dup")])
+    layers = g.topological_layers()
+    flat = [n.task_id for layer in layers for n in layer]
+    assert flat == ["dup"]  # GAP: 2 tasks defined, only 1 scheduled
+
+
+# ── TaskNode / TaskGraph serialization ────────────────────────────────────────
+
+
+def test_tasknode_roundtrip_with_subgraph():
+    parent = _node("p")
+    parent.subgraph = TaskGraph("child", [_node("x")])
+    r = TaskNode.from_dict(parent.to_dict())
+    assert r.subgraph is not None
+    assert r.subgraph.get_task("x") is not None
+
+
+def test_gap_tasknode_from_dict_keyerror_on_missing_required_field():
+    """``from_dict`` reads ``data['task_id']`` / ``['description']`` /
+    ``['agent_type']`` directly while every other field uses ``.get`` with a
+    default — so a partial/migrated record raises a raw KeyError."""
+    with pytest.raises(KeyError):
+        TaskNode.from_dict({"task_id": "a"})  # missing description, agent_type
+
+
+# ── StructuredMessage round-trip + decoding GAPs ──────────────────────────────
+
+
+def test_message_roundtrip_preserves_fields():
+    m = StructuredMessage.signal("a", "b", "review_ready", "t1", trace_id="tr1")
+    r = StructuredMessage.from_dict(m.to_dict())
+    assert r.msg_id == m.msg_id
+    assert r.msg_type == MessageType.SIGNAL
+    assert r.priority == m.priority
+    assert r.payload == m.payload
+    # Note: trace_id is only reachable via .header (StructuredMessage surfaces
+    # msg_id/sender/recipient/msg_type/priority as shortcuts, but not trace_id).
+    assert r.header.trace_id == "tr1"
+
+
+def test_gap_message_from_dict_keyerror_on_missing_created_at():
+    """``from_dict`` reads ``data['created_at']`` directly (not ``.get``), so any
+    dict not produced by ``to_dict`` (hand-built, or an older schema) raises a
+    raw KeyError — inconsistent with the ``.get`` defaults used elsewhere."""
+    with pytest.raises(KeyError):
+        StructuredMessage.from_dict({"msg_id": "x", "type": "signal"})
+
+
+def test_gap_message_from_dict_valueerror_on_invalid_enum():
+    base = StructuredMessage.from_text("a", "b", "hi").to_dict()
+    with pytest.raises(ValueError):
+        StructuredMessage.from_dict({**base, "type": "not-a-type"})
+    with pytest.raises(ValueError):
+        StructuredMessage.from_dict({**base, "priority": 99})
+
+
+# ── DeliveryReport success accounting GAPs ────────────────────────────────────
+
+
+def test_delivery_success_rate_mixed():
+    report = DeliveryReport(
+        objective="x",
+        task_results=[
+            TaskResult(task_id="a", status="completed"),
+            TaskResult(task_id="b", status="failed"),
+        ],
+    )
+    assert report.success_rate == 0.5
+    assert report.all_succeeded is False
+
+
+def test_gap_empty_delivery_report_claims_all_succeeded():
+    """``all_succeeded`` is ``all(...)`` over an empty list → True, while
+    ``success_rate`` is 0.0. A run that produced zero task results simultaneously
+    reports 'everything succeeded' and '0% success' — and the vacuous True masks
+    a planning failure that emitted no tasks at all."""
+    report = DeliveryReport(objective="produced no tasks")
+    assert report.all_succeeded is True  # GAP: vacuously true
+    assert report.success_rate == 0.0
+
+
+def test_gap_delivery_status_typo_silently_counts_as_not_completed():
+    """``status`` is a free-form string; a typo like 'complete' (missing 'd') is
+    silently treated as not-completed. Nothing validates the status vocabulary,
+    so a stringly-typed mistake degrades the success rate with no error."""
+    report = DeliveryReport(
+        objective="x",
+        task_results=[TaskResult(task_id="a", status="complete")],  # typo
+    )
+    assert report.success_rate == 0.0  # GAP: silently counted as a non-success
+    assert report.all_succeeded is False

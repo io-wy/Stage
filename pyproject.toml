@@ -51,4 +51,4 @@ line-ending = "auto"
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
-addopts = "--ignore=tests/test_health.py --ignore=tests/test_report.md"
+addopts = ""
