@@ -151,6 +151,18 @@ def test_resolve_hook_unknown_raises():
         resolve_hook("no_such_hook")
 
 
+# -- resolve_hook ----------------------------------------------------------
+
+def test_resolve_hook_known():
+    fn = resolve_hook("load_skills_into_context")
+    assert callable(fn)
+
+
+def test_resolve_hook_unknown_raises():
+    with pytest.raises(AgentSpecError, match="未知 hook"):
+        resolve_hook("no_such_hook")
+
+
 # -- 真实 agents/ 目录：编译产物 == 旧 agent.json 等价（迁移保险）---------
 
 def test_real_agents_compile_and_match_legacy_tools():
@@ -172,7 +184,6 @@ def test_real_agents_compile_and_match_legacy_tools():
     assert {"spawn_agent", "show_state", "finalize"} <= director_tools
     # team_leader 去掉 ask_human
     assert "ask_human" not in {t.id for t in by_id["team_leader"].tools}
-    # 每角色都带 prompts + hooks 下沉
+    # 每角色都带 prompts 下沉；hooks 现在不在 base.json 中声明，runner 直接硬编码 skill 注入
     for s in specs:
         assert s.pattern.config.get("prompts")
-        assert s.pattern.config.get("hooks")

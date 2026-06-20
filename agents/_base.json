@@ -44,8 +44,5 @@
     "check_messages",
     "ask_human",
     "send_message"
-  ],
-  "hooks": {
-    "session.start": ["load_skills_into_context"]
-  }
+  ]
 }

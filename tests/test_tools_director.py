@@ -3,6 +3,7 @@ replan, recover_task, correct_task_status, ask_human, check_messages."""
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -95,6 +96,7 @@ class TestSpawnAgentTool:
         schema = tool.schema()
         assert "task_id" in schema["properties"]
         assert "task_ids" in schema["properties"]
+        assert "agent_spec" in schema["properties"]
 
     @pytest.mark.asyncio
     async def test_invoke_success_updates_board(self):
@@ -248,6 +250,68 @@ class TestSpawnAgentTool:
         input_text = call_args[1]["input_text"]
         assert "api.yml" in input_text
         assert "Upstream artifacts" in input_text
+
+    @pytest.mark.asyncio
+    async def test_invoke_with_agent_spec_compiles_inline_role(self):
+        board = StateBoard("obj")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "audit auth flow", "coder")],
+        ))
+
+        mock_delegate = AsyncMock(return_value="done")
+        fake_runner = MockContext(
+            _config_path=Path("agent.json"),
+            _agents_by_id={},
+            _bundles={},
+        )
+        ctx = MockContext(
+            deps=MockContext(
+                state_board=board,
+                runner_delegate=mock_delegate,
+                runner=fake_runner,
+            ),
+            agent_id="director",
+        )
+
+        tool = SpawnAgentTool()
+        result = await tool.invoke(
+            {
+                "task_id": "t1",
+                "agent_spec": {
+                    "id": "security-auditor",
+                    "extends": "_base.json",
+                    "tools": ["+grep"],
+                },
+            },
+            ctx,
+        )
+
+        assert result["status"] == "completed"
+        assert "security-auditor" in fake_runner._agents_by_id
+        # The spawned agent_id should use the inline role id.
+        assert board.get_agent("security-auditor-t1") is not None
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_spec_rejected_in_batch_mode(self):
+        board = StateBoard("obj")
+        ctx = MockContext(
+            deps=MockContext(
+                state_board=board,
+                runner_delegate=AsyncMock(),
+                runner=MockContext(_config_path=Path("agent.json"), _agents_by_id={}, _bundles={}),
+            ),
+            agent_id="director",
+        )
+        tool = SpawnAgentTool()
+        with pytest.raises(PermanentToolError, match="agent_spec is only valid"):
+            await tool.invoke(
+                {
+                    "task_ids": ["t1", "t2"],
+                    "agent_spec": {"id": "x", "extends": "_base.json"},
+                },
+                ctx,
+            )
 
 
 # ---------------------------------------------------------------------------

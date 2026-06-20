@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from openagents.config.loader import load_config
 from openagents.errors.exceptions import ConfigError
 from openagents.interfaces.events import RuntimeEvent
 from openagents.interfaces.runtime import (
@@ -187,11 +186,7 @@ class OrchestratorRunner:
         self._max_concurrent_residents = max_concurrent_residents
         self._resident_stuck_threshold_s = resident_stuck_threshold_s
         self._config_path = Path(config_path)
-        # agent.json 在「一文件一 agent」布局下瘦身为纯 runtime/events 配置（无
-        # agents[]）。SDK 的 ``load_config`` 强制 agents 非空，故瘦身布局下它会
-        # 校验失败——此时回退读 raw dict 拿 events/runtime；角色定义另由 agents/
-        # 编译层加载（见 _load_agent_definitions）。旧布局（agent.json 含 agents[]）
-        # 仍走 load_config，保持兼容。
+        # agent.json 现在是纯 runtime/events 配置；角色定义由 agents/ 编译层加载。
         self._config = self._load_app_config(self._config_path)
         self._agents_by_id = self._load_agent_definitions()
         self._mcp_servers = self._load_mcp_servers(self._config_path)
@@ -200,9 +195,7 @@ class OrchestratorRunner:
         self._bundles: dict[str, _AgentBundle] = {}
         self._residents: dict[str, ResidentAgent] = {}
         self._sessions = _SessionStore()
-        # Use events config from agent.json if present (works for both AppConfig
-        # objects and the raw-dict fallback used by the slim layout).
-        events_config = self._config_get("events")
+        events_config = self._config.get("events")
         if events_config and isinstance(events_config, dict):
             self._event_bus = AsyncEventBus(config=events_config.get("config", {}))
         else:
@@ -222,143 +215,40 @@ class OrchestratorRunner:
         self._resumer: SessionResumer | None = None
         self._session_dir: Path | None = None
         self._current_work_dir: Path | None = None
-        # Skill catalog for L1 progressive disclosure (injected at session start)
+        # Skill catalog for L1 progressive disclosure (injected at session start).
         self._skill_registry = SkillRegistry()
-        # Hook pipeline. session.start loads the skill catalog; corecoder also
-        # fires tool.before_invoke / tool.after_invoke / pattern.before_llm
-        # through ctx.deps.hooks (this same manager).
+        # Hook pipeline for corecoder tool/pattern events (tool.before_invoke,
+        # tool.after_invoke, pattern.before_llm). Skill loading is hard-coded
+        # below instead of going through declarative hooks.
         self._hook_manager = HookManager()
-        self._hook_manager.register("session.start", load_skills_into_context)
 
     @property
     def state_board(self) -> StateBoard | None:
         return self._state_board
 
     @staticmethod
-    def _load_app_config(config_path: Path) -> Any:
-        """读 agent.json。瘦身布局（无 agents[]）下 SDK 强校验会失败 → 回退 raw dict。
-
-        返回值可能是 SDK ``AppConfig``（旧布局）或 raw ``dict``（瘦身布局）。统一
-        经 ``_config_get`` 取字段，屏蔽两者差异。
-        """
+    def _load_app_config(config_path: Path) -> dict[str, Any]:
+        """读 agent.json（纯 runtime/events 配置）。"""
         try:
-            return load_config(config_path)
-        except Exception:
-            # 瘦身布局：agents[] 缺失/为空，load_config 的 AppConfig 校验失败。
-            # 角色定义改由 agents/ 编译层加载，这里只需保留 events/runtime。
             import json
 
-            try:
-                with config_path.open("r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-
-    def _config_get(self, key: str) -> Any:
-        """从 ``self._config`` 取字段，兼容 AppConfig 对象与 raw dict 两种形态。"""
-        cfg = self._config
-        if isinstance(cfg, dict):
-            return cfg.get(key)
-        return getattr(cfg, key, None)
+            with config_path.open("r", encoding="utf-8") as f:
+                raw = json.load(f)
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
 
     def _load_agent_definitions(self) -> dict[str, Any]:
-        """加载角色定义：优先 ``agents/<role>.json`` 编译层，回退内联 agents[]。
-
-        - ``<config_path 同级>/agents/`` 存在 → 用 Stage 编译层（一文件一 agent，
-          支持 extends / prompts / hooks / 工具增量）
-        - 否则 → 用 ``load_config`` 读到的内联 ``agents[]``（旧布局 / 测试夹具）
-
-        两条路径产物都是 ``{id: AgentDefinition}``，下游 ``_ensure_bundle`` 零感知。
-        """
+        """从 ``agents/<role>.json`` 编译层加载角色定义。"""
         agents_dir = self._config_path.parent / "agents"
-        if agents_dir.is_dir():
-            try:
-                specs = load_agent_specs(agents_dir)
-                return {d.id: d for d in specs}
-            except AgentSpecError as exc:
-                raise ConfigError(
-                    f"加载 agents/ 角色定义失败: {exc}",
-                    hint=f"检查 {agents_dir} 下各角色 json",
-                ) from exc
-        # 回退：内联 agents[]（agent.json 仍含 agents 数组的旧布局）
-        inline = self._config_get("agents") or []
-        if not isinstance(inline, list):
-            inline = []
-        result: dict[str, Any] = {}
-        for a in inline:
-            # AppConfig 路径给的是 AgentDefinition 对象；raw dict 路径需编译
-            if hasattr(a, "id"):
-                result[a.id] = a
-        return result
-
-    def register_agent_spec(self, spec: dict[str, Any]) -> str:
-        """动态注册一个 inline 角色 spec（spawn 现写 json 造临时角色）。
-
-        spec 经同一编译层 ``compile_one_spec`` 校验，以 ``agents/_base.json`` 为
-        base（与静态角色同一继承链），注册进 ``_agents_by_id``（session 级临时）。
-        已存在同 id → 覆盖并清掉旧 bundle 缓存。返回注册的 agent id。
-
-        安全：spec 同样过 pydantic 校验，工具只能引 TOOL_REGISTRY 白名单内的 id，
-        不接受任意 import 路径（compile_one_spec 内 _resolve_tool_ids 把关）。
-        """
-        from openagents_orchestration.core.agent_loader import (
-            AgentSpecError,
-            compile_one_spec,
-        )
-
-        agents_dir = self._config_path.parent / "agents"
-        base: dict[str, Any] = {}
-        base_path = agents_dir / "_base.json"
-        if base_path.is_file():
-            from openagents_orchestration.core.agent_loader import _load_json
-
-            base = _load_json(base_path)
         try:
-            agent_def = compile_one_spec(spec, base=base)
+            specs = load_agent_specs(agents_dir)
+            return {d.id: d for d in specs}
         except AgentSpecError as exc:
-            raise ConfigError(f"动态角色 spec 非法: {exc}") from exc
-        self._agents_by_id[agent_def.id] = agent_def
-        # 清掉可能存在的旧 bundle 缓存，确保下次 _ensure_bundle 用新 spec 重建
-        self._bundles.pop(agent_def.id, None)
-        return agent_def.id
-
-    def _run_declared_hooks(
-        self, bundle: _AgentBundle, event: str, payload: dict[str, Any]
-    ) -> None:
-        """执行角色在 ``pattern.config["hooks"]`` 声明的 hook（按 HOOK_REGISTRY 解析）。
-
-        去重：跳过已在全局 ``_hook_manager`` 注册的同一 callable，避免与向后兼容的
-        全局注册（如 ``load_skills_into_context``）重复执行。解析失败不致命（X-07
-        降级）：记 stderr 警告并跳过该 hook。
-        """
-        from openagents_orchestration.core.agent_loader import (
-            AgentSpecError,
-            resolve_hook,
-        )
-
-        pcfg = getattr(bundle.agent.pattern, "config", None) or {}
-        declared = pcfg.get("hooks") or {}
-        names = declared.get(event) or []
-        if not names:
-            return
-        already = set(self._hook_manager.handlers.get(event, []))
-        for name in names:
-            try:
-                fn = resolve_hook(name)
-            except AgentSpecError as exc:
-                print(
-                    f"[Orchestrator] 角色 '{bundle.agent.id}' 的 hook '{name}' "
-                    f"解析失败，跳过: {exc}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                continue
-            if fn in already:
-                continue  # 全局已注册，避免重复执行
-            result = fn(payload)
-            if isinstance(result, dict):
-                payload.clear()
-                payload.update(result)
+            raise ConfigError(
+                f"加载 agents/ 角色定义失败: {exc}",
+                hint=f"检查 {agents_dir} 下各角色 json",
+            ) from exc
 
     @staticmethod
     def _load_mcp_servers(config_path: Path) -> dict[str, dict[str, Any]]:
@@ -1956,20 +1846,13 @@ class OrchestratorRunner:
                 if getattr(bundle.agent.memory, "on_error", "fail") == "fail":
                     raise
 
-        # Session start hooks. 角色通过 agents/<role>.json 的 ``hooks`` 声明式
-        # 配置（已编译进 pattern.config["hooks"]），在此按名解析执行；与全局
-        # hook_manager 注册的 handler 并存。base.json 默认声明
-        # ``session.start: [load_skills_into_context]``，所有角色继承。
-        hook_payload = {
+        # Inject skill catalog at session start (hard-coded; not declarative hook).
+        load_skills_into_context({
             "context": ctx,
             "agent_type": agent_type,
             "tool_names": list(bundle.plugins.tools.keys()),
             "registry": self._skill_registry,
-        }
-        # 1) 全局 hook_manager（向后兼容：未用 agents/ 布局时仍生效）
-        self._hook_manager.run("session.start", hook_payload)
-        # 2) 角色声明式 hooks
-        self._run_declared_hooks(bundle, "session.start", hook_payload)
+        })
 
         # Execute
         try:

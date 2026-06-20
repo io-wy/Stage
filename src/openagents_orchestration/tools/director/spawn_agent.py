@@ -20,6 +20,11 @@ from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 from openagents_orchestration.core.state_board import AgentStatus
 from openagents_orchestration.models.task import TaskStatus
 from openagents_orchestration.reporting import summarize_agent_run
+from openagents_orchestration.core.agent_loader import (
+    AgentSpecError,
+    _load_json,
+    compile_one_spec,
+)
 from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
 from prompts.corrections import build_hallucination_correction
 
@@ -35,6 +40,8 @@ class SpawnAgentTool(ToolPlugin):
     description = (
         "Execute pending task(s) by spawning tactical agent(s). "
         "Single task: task_id. Batch parallel: task_ids (all must be independent and ready). "
+        "You may also provide agent_spec to define a one-off agent inline "
+        "(id + prompts + tools, extends agents/_base.json); it overrides the task's agent_type. "
         "Returns the agent's output summary."
     )
     durable_idempotent = False
@@ -60,6 +67,16 @@ class SpawnAgentTool(ToolPlugin):
                     "items": {"type": "string"},
                     "description": "List of task IDs to spawn in parallel (use this or task_id).",
                 },
+                "agent_spec": {
+                    "type": "object",
+                    "description": (
+                        "Optional inline role definition for a one-off agent. "
+                        "Keys: id (required), prompts (list of 'module:SYMBOL' refs), "
+                        "tools (list, '+tool'/'-tool' deltas on the shared base), "
+                        "pattern.config (e.g. {max_steps}). Extends agents/_base.json. "
+                        "Only valid for single task_id."
+                    ),
+                },
             },
         }
 
@@ -67,6 +84,7 @@ class SpawnAgentTool(ToolPlugin):
         deps = getattr(context, "deps", None)
         board = getattr(deps, "state_board", None) if deps else None
         runner_delegate = getattr(deps, "runner_delegate", None) if deps else None
+        runner = getattr(deps, "runner", None) if deps else None
         if board is None:
             raise PermanentToolError("StateBoard not available", tool_name=self.name)
         if runner_delegate is None:
@@ -74,6 +92,15 @@ class SpawnAgentTool(ToolPlugin):
 
         task_ids = params.get("task_ids")
         task_id = str(params.get("task_id", "")).strip()
+        agent_spec = params.get("agent_spec")
+        agent_type_override: str | None = None
+        if agent_spec:
+            if task_ids:
+                raise PermanentToolError(
+                    "agent_spec is only valid for single task_id, not batch task_ids",
+                    tool_name=self.name,
+                )
+            agent_type_override = self._compile_inline_agent(agent_spec, runner)
 
         # Batch mode
         if task_ids:
@@ -82,17 +109,54 @@ class SpawnAgentTool(ToolPlugin):
         # Single mode
         if not task_id:
             raise PermanentToolError("task_id or task_ids is required", tool_name=self.name)
-        return await self._spawn_single(task_id, board, runner_delegate, context)
+        return await self._spawn_single(
+            task_id, board, runner_delegate, context, agent_type=agent_type_override
+        )
+
+    @staticmethod
+    def _compile_inline_agent(agent_spec: dict[str, Any], runner: Any) -> str:
+        """Compile an inline agent_spec and register it on the runner.
+
+        Mirrors the logic in sub_agent.SubAgentTool for one-off roles.
+        """
+        if not isinstance(agent_spec, dict):
+            raise PermanentToolError("agent_spec must be an object", tool_name="spawn_agent")
+        if runner is None:
+            raise PermanentToolError(
+                "agent_spec requires an orchestrator runner",
+                tool_name="spawn_agent",
+            )
+        agents_dir = Path("agents")
+        if hasattr(runner, "_config_path"):
+            agents_dir = runner._config_path.parent / "agents"
+        base = _load_json(agents_dir / "_base.json")
+        try:
+            agent_def = compile_one_spec(agent_spec, base=base)
+        except AgentSpecError as exc:
+            raise PermanentToolError(
+                f"Failed to compile inline agent_spec: {exc}",
+                tool_name="spawn_agent",
+            ) from exc
+        runner._agents_by_id[agent_def.id] = agent_def
+        runner._bundles.pop(agent_def.id, None)
+        return agent_def.id
 
     # -- single task ---------------------------------------------------------
 
     async def _spawn_single(
-        self, task_id: str, board: Any, runner_delegate: Any, context: Any
+        self,
+        task_id: str,
+        board: Any,
+        runner_delegate: Any,
+        context: Any,
+        *,
+        agent_type: str | None = None,
     ) -> dict[str, Any]:
         task = board.get_task(task_id)
         if task is None:
             raise PermanentToolError(f"Task '{task_id}' not found", tool_name=self.name)
 
+        effective_agent_type = agent_type or task.agent_type
         deps_completed = {
             t.task_id for t in board.tasks.values() if t.status == TaskStatus.COMPLETED
         }
@@ -103,10 +167,10 @@ class SpawnAgentTool(ToolPlugin):
                 tool_name=self.name,
             )
 
-        input_text = self._build_input(task, board)
-        agent_id = f"{task.agent_type}-{task_id}"
+        input_text = self._build_input(task, board, agent_type=effective_agent_type)
+        agent_id = f"{effective_agent_type}-{task_id}"
 
-        board.register_agent(agent_id, task.agent_type)
+        board.register_agent(agent_id, effective_agent_type)
         board.update_task(task_id, status=TaskStatus.RUNNING)
         board.update_agent(
             agent_id,
@@ -118,7 +182,7 @@ class SpawnAgentTool(ToolPlugin):
             "agent.spawned",
             task_id=task_id,
             agent_id=agent_id,
-            message=f"Spawning {task.agent_type} for {task_id}",
+            message=f"Spawning {effective_agent_type} for {task_id}",
         )
 
         max_retries = 3
@@ -129,7 +193,7 @@ class SpawnAgentTool(ToolPlugin):
         for attempt in range(max_retries + 1):
             try:
                 result_text = await runner_delegate(
-                    agent_type=task.agent_type,
+                    agent_type=effective_agent_type,
                     input_text=input_text,
                     agent_id=agent_id,
                 )
@@ -234,7 +298,7 @@ class SpawnAgentTool(ToolPlugin):
         # If expected artifacts still contain TODO/placeholder/pass, force a retry
         # regardless of what the coder claimed. The coder may hallucinate that a
         # file is "already implemented" when it only contains a skeleton.
-        if task.agent_type == "coder" and result_text:
+        if effective_agent_type == "coder" and result_text:
             for art_path in (task.expected_artifacts or []):
                 if os.path.exists(art_path):
                     content = Path(art_path).read_text()
@@ -254,7 +318,7 @@ class SpawnAgentTool(ToolPlugin):
                         )
                         correction = build_hallucination_correction(art_path, content)
                         result_text = await runner_delegate(
-                            agent_type=task.agent_type,
+                            agent_type=effective_agent_type,
                             input_text=correction,
                             agent_id=agent_id,
                         )
@@ -450,7 +514,7 @@ class SpawnAgentTool(ToolPlugin):
         return "replan or ask_human — unknown error type"
 
     @staticmethod
-    def _build_input(task: Any, board: Any) -> str:
+    def _build_input(task: Any, board: Any, *, agent_type: str) -> str:
         """Compose the full input text for a tactical agent.
 
         Includes: task description + input_context + dependency artifacts +
@@ -495,7 +559,7 @@ class SpawnAgentTool(ToolPlugin):
 
         # Pending messages addressed to this task or its agent type
         relevant = board.messages_for(task.task_id)
-        relevant += board.messages_for(task.agent_type)
+        relevant += board.messages_for(agent_type)
         if relevant:
             parts.append("\n# Messages from other agents")
             for msg in relevant:
@@ -509,9 +573,9 @@ class SpawnAgentTool(ToolPlugin):
         )
 
         # Agent-specific hard constraints
-        if task.agent_type == "coder":
+        if agent_type == "coder":
             parts.append(CODER_CONSTRAINT)
-        if task.agent_type == "reviewer":
+        if agent_type == "reviewer":
             parts.append(REVIEWER_CONSTRAINT)
 
         return "\n\n".join(parts)

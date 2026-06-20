@@ -15,6 +15,11 @@ from typing import Any
 from openagents.errors.exceptions import ToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
+from openagents_orchestration.core.agent_loader import (
+    AgentSpecError,
+    _load_json,
+    compile_one_spec,
+)
 from openagents_orchestration.core.runner import OrchestratorRunner
 
 _MAX_SUB_AGENT_DEPTH = 2
@@ -101,23 +106,31 @@ class SubAgentTool(ToolPlugin):
 
         runner = getattr(getattr(context, "deps", None), "runner", None)
 
-        # Inline 角色定义（spawn 现写 json）：注册临时角色，用其 id 作 agent_type。
+        # Inline 角色定义：工具自己编译进 AgentDefinition 并写入 runner，不经过
+        # runner.register_agent_spec，保持 runner 简单。
         if agent_spec:
             if not isinstance(agent_spec, dict):
                 raise ToolError("agent_spec must be an object", tool_name=self.name)
-            if runner is None or not hasattr(runner, "register_agent_spec"):
+            if runner is None:
                 raise ToolError(
                     "agent_spec requires an orchestrator runner (not available in "
                     "standalone mode); use a registered agent_type instead.",
                     tool_name=self.name,
                 )
+            agents_dir = Path("agents")
+            if hasattr(runner, "_config_path"):
+                agents_dir = runner._config_path.parent / "agents"
+            base = _load_json(agents_dir / "_base.json")
             try:
-                agent_type = runner.register_agent_spec(agent_spec)
-            except Exception as exc:
+                agent_def = compile_one_spec(agent_spec, base=base)
+            except AgentSpecError as exc:
                 raise ToolError(
-                    f"Failed to register inline agent_spec: {exc}",
+                    f"Failed to compile inline agent_spec: {exc}",
                     tool_name=self.name,
                 ) from exc
+            runner._agents_by_id[agent_def.id] = agent_def
+            runner._bundles.pop(agent_def.id, None)
+            agent_type = agent_def.id
 
         if not agent_type:
             raise ToolError(
