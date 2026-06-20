@@ -1,0 +1,25 @@
+{
+  "id": "reviewer",
+  "name": "Review Agent",
+  "extends": "_base.json",
+  "prompts": [
+    "prompts.roles.reviewer:ROLE",
+    "prompts.constraints:REVIEWER"
+  ],
+  "tools": [
+    "+write_file",
+    "+edit_file",
+    "+glob",
+    "+grep",
+    "+todo_write",
+    "+todo_read",
+    "+read_skill"
+  ],
+  "pattern": {
+    "config": { "max_steps": 12 }
+  },
+  "runtime": {
+    "max_steps": 15,
+    "step_timeout_ms": 300000
+  }
+}

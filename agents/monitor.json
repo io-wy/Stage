@@ -1,0 +1,24 @@
+{
+  "id": "monitor",
+  "name": "Monitor Agent",
+  "extends": "_base.json",
+  "prompts": [
+    "prompts.roles.monitor:ROLE"
+  ],
+  "tools": [
+    "+inspect_state",
+    "+analyze_event_pattern",
+    "+diagnose_agent",
+    "+predict_budget",
+    "+send_alert",
+    "+verify_alert_effectiveness",
+    "+read_skill"
+  ],
+  "pattern": {
+    "config": { "max_steps": 12 }
+  },
+  "runtime": {
+    "max_steps": 12,
+    "step_timeout_ms": 300000
+  }
+}

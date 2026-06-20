@@ -95,7 +95,8 @@ class CorrectTaskStatusTool(ToolPlugin):
             update["actual_artifacts"] = artifacts
         if status == TaskStatus.COMPLETED and not task.result_output:
             update["result_output"] = f"Corrected to completed: {reason}"
-        board.update_task(task_id, **update)
+        # correct_task_status is an audited override — bypass state-machine validation
+        board.update_task(task_id, _force=True, **update)
         for artifact in artifacts:
             board.verify_artifact(artifact, exists=True)
         board.log_event(

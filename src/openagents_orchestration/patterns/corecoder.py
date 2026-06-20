@@ -165,6 +165,10 @@ class CoreCoderPattern(PatternPlugin):
     """Native tool-calling ReAct loop with CoreCoder semantics."""
 
     _PRINCIPLES = CORE_PRINCIPLES
+    # _PRINCIPLES 是「底座」（与声明式角色 prompt 叠加）还是「完整层」（被角色
+    # prompt 覆盖时不重复追加）。CoreCoder 的 CORE 是底座；Director/TeamLeader 的
+    # PRINCIPLES 是完整指引，override 为 False，避免与 prompts 声明双重注入。
+    _PRINCIPLES_IS_BASE = True
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config=config or {})
@@ -200,9 +204,60 @@ class CoreCoderPattern(PatternPlugin):
         self._original_tool_results: list[dict[str, Any]] | None = None
         self._original_system_prompt_fragments: list[str] | None = None
         self._original_memory_view: dict[str, Any] | None = None
+        # 声明式角色 prompt 引用（agents/<role>.json 的 prompts → pattern.config）。
+        # 由 _resolve_prompts() 解析成角色层 system prompt，叠加在 _PRINCIPLES 之上。
+        self._prompt_refs: list[str] = list(self.config.get("prompts", []) or [])
+        self._resolved_prompt_cache: str | None = None
+
+    def _resolve_prompts(self) -> str:
+        """解析 ``self._prompt_refs`` 引用列表为角色层 system prompt（带缓存）。
+
+        每项形如 ``"module.path:SYMBOL"`` 或 ``"module.path.SYMBOL"``，import 后取
+        符号（须为 str），按声明顺序 ``\\n\\n`` 拼接。
+
+        容错（X-07 不吞但降级）：单项解析失败 → 跳过该项 + stderr 警告，不中断；
+        全部失败或未声明 → 返回 ""（caller 回退到 ``_PRINCIPLES`` 类属性）。
+        """
+        if self._resolved_prompt_cache is not None:
+            return self._resolved_prompt_cache
+        parts: list[str] = []
+        for ref in self._prompt_refs:
+            try:
+                module_name, sep, attr = ref.partition(":")
+                if not sep:
+                    module_name, _, attr = ref.rpartition(".")
+                import importlib
+
+                module = importlib.import_module(module_name)
+                value = getattr(module, attr)
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
+                else:
+                    import sys
+
+                    print(
+                        f"[CoreCoder] prompt ref '{ref}' 不是非空字符串，跳过",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+            except Exception as exc:  # ImportError / AttributeError 等
+                import sys
+
+                print(
+                    f"[CoreCoder] prompt ref '{ref}' 解析失败，跳过: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+        self._resolved_prompt_cache = "\n\n".join(parts)
+        return self._resolved_prompt_cache
 
     def compose_system_prompt(self, base_prompt: str) -> str:
-        """Inject principles + dynamic runtime fragment.
+        """Inject role prompt + principles + dynamic runtime fragment.
+
+        base_prompt 为空时，自动取声明式 ``prompts`` 解析结果作为角色层（让
+        ``agents/<role>.json`` 的 prompts 生效）。最终 system prompt =
+        [角色 prompt] + [_PRINCIPLES] + [动态片段]，由 __DYNAMIC_BOUNDARY__ 分隔
+        静态/动态以利 prompt 缓存。
 
         Static content (identity, rules) is separated from dynamic content
         (runtime context, fragments) by __DYNAMIC_BOUNDARY__ so the caller
@@ -213,9 +268,17 @@ class CoreCoderPattern(PatternPlugin):
         dynamic_fragments: list[str] = []
 
         base = (base_prompt or "").strip()
+        resolved_role = self._resolve_prompts()
+        if not base:
+            base = resolved_role
         if base:
             static_fragments.append(base)
-        static_fragments.append(self._PRINCIPLES.strip())
+        # _PRINCIPLES 追加规则（避免 director/team_leader 双重注入）：
+        # - CoreCoder: _PRINCIPLES=CORE 是底座，与角色 ROLE 叠加（always 追加）
+        # - Director/TeamLeader: _PRINCIPLES 是完整指引，已由声明式 prompts 覆盖，
+        #   故 _PRINCIPLES_IS_BASE=False 时，只要角色 prompt 非空就不再追加（兜底）
+        if self._PRINCIPLES_IS_BASE or not resolved_role:
+            static_fragments.append(self._PRINCIPLES.strip())
 
         if ctx is not None:
             runtime_kwargs = gather_runtime_context(ctx)

@@ -9,7 +9,8 @@ bubbled up to the GlobalDirector.
 from __future__ import annotations
 
 from openagents_orchestration.patterns.director import DirectorPattern
-from prompts.director import DIRECTOR_PRINCIPLES
+from prompts.roles.director import select_director_principles
+from prompts.roles.team_leader import RULES as _TEAM_LEADER_RULES
 
 
 class TeamLeaderPattern(DirectorPattern):
@@ -19,16 +20,12 @@ class TeamLeaderPattern(DirectorPattern):
     - max_steps defaults to 30 (vs 100)
     - Cannot call ``ask_human``; escalations go to GlobalDirector via send_message
     - show_state returns the *team* snapshot, not the global one
+
+    Prompt 同 DirectorPattern：声明式 ``prompts`` 优先（director PRINCIPLES +
+    team_leader RULES 拼装），``_PRINCIPLES`` 类属性为兜底，两者同源。
     """
 
-    _PRINCIPLES = DIRECTOR_PRINCIPLES + (
-        "\n\n## Team Leader Rules\n"
-        "1. You manage ONLY the tasks in your assigned subgraph.\n"
-        "2. Delegate work to Workers (coder, reviewer, researcher).\n"
-        "3. NEVER call ask_human — escalate to GlobalDirector via send_message.\n"
-        "4. Report completion or blockers to GlobalDirector via send_message.\n"
-        "5. Workers communicate via conversation threads, not directly with you.\n"
-    )
+    _PRINCIPLES = select_director_principles() + "\n\n" + _TEAM_LEADER_RULES
 
     async def _should_continue_step(self, step: int) -> bool:
         """Stop when the team subgraph is complete or budget is gone."""

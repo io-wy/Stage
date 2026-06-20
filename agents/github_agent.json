@@ -1,0 +1,25 @@
+{
+  "id": "github_agent",
+  "name": "GitHub Agent",
+  "extends": "_base.json",
+  "prompts": [
+    "prompts.roles.github_agent:ROLE"
+  ],
+  "tools": [
+    "+glob",
+    "+grep",
+    "+todo_write",
+    "+todo_read",
+    "+github_pr",
+    "+github_issue",
+    "+github_ci",
+    "+github_repo"
+  ],
+  "pattern": {
+    "config": { "max_steps": 30 }
+  },
+  "runtime": {
+    "max_steps": 25,
+    "step_timeout_ms": 300000
+  }
+}

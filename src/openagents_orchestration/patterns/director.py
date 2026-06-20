@@ -2,29 +2,23 @@
 
 from __future__ import annotations
 
-import os
-
 from openagents_orchestration.patterns.corecoder import CoreCoderPattern
-from prompts.director import DIRECTOR_PRINCIPLES, DIRECTOR_PRINCIPLES_COMPACT
-
-
-def _select_director_principles() -> str:
-    """Select Director system prompt variant.
-
-    - Default: full principles for complex multi-agent scenarios.
-    - ``XITAI_DIRECTOR_PROMPT=compact``: compressed variant for providers with
-      smaller request-size limits.
-    """
-    variant = os.environ.get("XITAI_DIRECTOR_PROMPT", "full").lower().strip()
-    if variant == "compact":
-        return DIRECTOR_PRINCIPLES_COMPACT
-    return DIRECTOR_PRINCIPLES
+from prompts.roles.director import select_director_principles
 
 
 class DirectorPattern(CoreCoderPattern):
-    """CoreCoderPattern with Director-specific system prompt and lifecycle hook."""
+    """CoreCoderPattern with Director-specific system prompt and lifecycle hook.
 
-    _PRINCIPLES = _select_director_principles()
+    Prompt 来源优先级：``agents/director.json`` 的声明式 ``prompts``（编译进
+    ``pattern.config["prompts"]``，由 ``CoreCoderPattern._resolve_prompts`` 解析）。
+    ``_PRINCIPLES`` 类属性保留为**兜底**——prompts 未声明时仍有 Director 指引。
+    两者同源（都来自 ``prompts.roles.director``），不会分叉。
+    """
+
+    _PRINCIPLES = select_director_principles()
+    # PRINCIPLES 是完整 Director 指引，已由 agents/director.json 的声明式 prompts
+    # 注入；类属性仅作兜底，故非「底座」——避免与角色 prompt 双重注入。
+    _PRINCIPLES_IS_BASE = False
 
     async def _should_continue_step(self, step: int) -> bool:
         """Director stops looping when the objective is achieved or budget is gone."""

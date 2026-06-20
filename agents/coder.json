@@ -1,0 +1,47 @@
+{
+  "id": "coder",
+  "name": "Code Agent",
+  "extends": "_base.json",
+  "prompts": [
+    "prompts.roles.coder:ROLE",
+    "prompts.constraints:CODER"
+  ],
+  "memory": {
+    "type": "chain",
+    "on_error": "continue",
+    "config": {
+      "memories": [
+        {
+          "impl": "openagents_orchestration.memory.CoreCoderMemory",
+          "config": {
+            "storage_dir": ".agent_memory/coder",
+            "max_summaries": 10
+          }
+        }
+      ]
+    }
+  },
+  "tools": [
+    "+write_file",
+    "+edit_file",
+    "+glob",
+    "+grep",
+    "+todo_write",
+    "+todo_read",
+    "+apply_patch",
+    "+read_skill",
+    "+run_claude_code",
+    "+sub_agent",
+    "+semantic_edit",
+    "+complete_task"
+  ],
+  "pattern": {
+    "config": { "max_steps": 30 }
+  },
+  "runtime": {
+    "max_steps": 20,
+    "step_timeout_ms": 300000,
+    "session_queue_size": 1000,
+    "event_queue_size": 4000
+  }
+}

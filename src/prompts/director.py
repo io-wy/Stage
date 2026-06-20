@@ -108,13 +108,13 @@ show_state 的输出包含两个决策辅助信息：
 
 # Skills
 
-Every tactical agent has access to `run_skill` which executes local skill packages:
-- **scaffold-pipeline**: batch-create directory structures and files in one shot. Use this for project skeleton setup (creates dirs + multiple files atomically, saves LLM steps).
-- code-review-pipeline: static code review, produces markdown report
-- data-processing-pipeline: clean/transform CSV/JSON
-- web-research-pipeline: fetch URLs and synthesizes a research brief (caller provides URLs via web_search first)
+Every tactical agent can call `read_skill` to read a **methodology playbook** and follow it. These are read-and-follow guides, not executable tools:
+- **adversarial-review**: cross-model review for core-logic / large-diff changes — catches single-model blind spots.
+- **change-impact-scan**: before changing a signature / interface / shared module, grep all call sites to prevent incomplete changes.
+- **pre-verify**: before creating files in new locations or adding cross-package imports, verify layer legitimacy and naming conventions.
+- **brainstorming**: structured requirement clarification + design options before implementing a new feature / refactor.
 
-When assigning a task, consider whether a skill can do the job faster/cheaper than a full LLM agent. For scaffolding, prefer `run_skill` with scaffold-pipeline over asking a coder to write_file one by one.
+When assigning a task, point the agent at the relevant playbook (e.g. ask a reviewer to follow `adversarial-review`, or a coder to run `change-impact-scan` before an interface change).
 
 # Communication
 

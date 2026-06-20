@@ -42,8 +42,9 @@ class SubAgentTool(ToolPlugin):
     name = "sub_agent"
     description = (
         "Delegate a self-contained sub-task to a focused agent with its own "
-        "context window. Provide a clear instruction and choose agent_type from "
-        "any agent configured in agent.json (e.g. reviewer, researcher, coder). "
+        "context window. Either choose an existing agent_type (e.g. reviewer, "
+        "researcher, coder), OR pass agent_spec to define a one-off agent inline "
+        "(id + prompts + tools, extends the shared base). "
         "Sub-agents cannot spawn further sub-agents beyond depth 2, "
         "so keep the task self-contained. "
         "Use for tasks that need focused exploration or independent verification, "
@@ -65,7 +66,20 @@ class SubAgentTool(ToolPlugin):
             "properties": {
                 "agent_type": {
                     "type": "string",
-                    "description": "Type of agent to spawn. Must match an agent id in agent.json.",
+                    "description": (
+                        "Existing agent id to spawn (coder, reviewer, researcher, "
+                        "github_agent, monitor). Omit if providing agent_spec."
+                    ),
+                },
+                "agent_spec": {
+                    "type": "object",
+                    "description": (
+                        "Optional inline role definition for a one-off agent. "
+                        "Keys: id (required), prompts (list of 'module:SYMBOL' refs), "
+                        "tools (list, '+tool'/'-tool' deltas on the shared base), "
+                        "pattern.config (e.g. {max_steps}). Extends agents/_base.json. "
+                        "Tools must be registered names. Takes precedence over agent_type."
+                    ),
                 },
                 "instruction": {
                     "type": "string",
@@ -76,16 +90,39 @@ class SubAgentTool(ToolPlugin):
                     "description": "Optional hint on desired output format (e.g. 'bullet list', 'code diff').",
                 },
             },
-            "required": ["agent_type", "instruction"],
+            "required": ["instruction"],
         }
 
     async def invoke(self, params: dict[str, Any], context: Any) -> dict[str, Any]:
         agent_type = str(params.get("agent_type", "")).strip()
+        agent_spec = params.get("agent_spec")
         instruction = str(params.get("instruction", "")).strip()
         expected_output = str(params.get("expected_output", "")).strip()
 
+        runner = getattr(getattr(context, "deps", None), "runner", None)
+
+        # Inline 角色定义（spawn 现写 json）：注册临时角色，用其 id 作 agent_type。
+        if agent_spec:
+            if not isinstance(agent_spec, dict):
+                raise ToolError("agent_spec must be an object", tool_name=self.name)
+            if runner is None or not hasattr(runner, "register_agent_spec"):
+                raise ToolError(
+                    "agent_spec requires an orchestrator runner (not available in "
+                    "standalone mode); use a registered agent_type instead.",
+                    tool_name=self.name,
+                )
+            try:
+                agent_type = runner.register_agent_spec(agent_spec)
+            except Exception as exc:
+                raise ToolError(
+                    f"Failed to register inline agent_spec: {exc}",
+                    tool_name=self.name,
+                ) from exc
+
         if not agent_type:
-            raise ToolError("agent_type is required", tool_name=self.name)
+            raise ToolError(
+                "agent_type or agent_spec is required", tool_name=self.name
+            )
         if not instruction:
             raise ToolError("instruction is required", tool_name=self.name)
 
@@ -103,8 +140,7 @@ class SubAgentTool(ToolPlugin):
         if expected_output:
             full_instruction += f"\n\nDesired output format: {expected_output}"
 
-        # Try to reuse the orchestrator runner first.
-        runner = getattr(getattr(context, "deps", None), "runner", None)
+        # Try to reuse the orchestrator runner first (resolved at invoke start).
         if runner is not None and hasattr(runner, "run_agent"):
             return await self._spawn_via_runner(
                 runner, agent_type, full_instruction, depth=current_depth + 1

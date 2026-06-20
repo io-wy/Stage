@@ -1,0 +1,51 @@
+{
+  "name": "Base Agent",
+  "memory": {
+    "type": "window_buffer",
+    "config": {
+      "window_size": 20
+    }
+  },
+  "pattern": {
+    "impl": "openagents_orchestration.patterns.corecoder.CoreCoderPattern",
+    "config": {
+      "max_steps": 15,
+      "max_tokens": 4096,
+      "temperature": 0.6
+    }
+  },
+  "context_assembler": {
+    "impl": "openagents_orchestration.context.CompressingContextAssembler",
+    "config": {
+      "max_input_tokens": 16000,
+      "reserve_for_response": 4096,
+      "snip_threshold": 0.5,
+      "summarize_threshold": 0.7,
+      "hard_collapse_threshold": 0.9,
+      "tool_output_max_bytes": 2000,
+      "tool_output_keep_head": 1000,
+      "tool_output_keep_tail": 500
+    }
+  },
+  "llm": {
+    "provider": "${LLM_PROVIDER:-openai_compatible}",
+    "api_base": "${LLM_API_BASE}",
+    "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+    "model": "${LLM_MODEL}",
+    "temperature": 0.1,
+    "max_tokens": 4096,
+    "timeout_ms": 120000
+  },
+  "tools": [
+    "read_file",
+    "list_directory",
+    "think",
+    "bash",
+    "check_messages",
+    "ask_human",
+    "send_message"
+  ],
+  "hooks": {
+    "session.start": ["load_skills_into_context"]
+  }
+}

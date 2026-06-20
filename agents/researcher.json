@@ -1,0 +1,22 @@
+{
+  "id": "researcher",
+  "name": "Research Agent",
+  "extends": "_base.json",
+  "prompts": [
+    "prompts.roles.researcher:ROLE"
+  ],
+  "tools": [
+    "+glob",
+    "+grep",
+    "+web_search",
+    "+web_fetch",
+    "+read_skill"
+  ],
+  "pattern": {
+    "config": { "max_steps": 15 }
+  },
+  "runtime": {
+    "max_steps": 15,
+    "step_timeout_ms": 300000
+  }
+}

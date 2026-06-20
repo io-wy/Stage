@@ -1,0 +1,41 @@
+{
+  "id": "team_leader",
+  "name": "Team Leader",
+  "extends": "_base.json",
+  "prompts": [
+    "prompts.roles.director:PRINCIPLES",
+    "prompts.roles.team_leader:RULES"
+  ],
+  "pattern": {
+    "impl": "openagents_orchestration.patterns.team_leader.TeamLeaderPattern",
+    "config": {
+      "max_steps": 30,
+      "max_tokens": 4096,
+      "temperature": 0.6
+    }
+  },
+  "llm": {
+    "provider": "${LLM_PROVIDER:-openai_compatible}",
+    "api_base": "${LLM_API_BASE}",
+    "api_key_env": "${LLM_API_KEY_ENV:-LLM_API_KEY}",
+    "model": "${LLM_MODEL}",
+    "temperature": 0.2,
+    "max_tokens": 4096,
+    "timeout_ms": 120000
+  },
+  "tools": [
+    "-ask_human",
+    "+spawn_agent",
+    "+show_state",
+    "+replan",
+    "+recover_task",
+    "+correct_task_status",
+    "+finalize"
+  ],
+  "runtime": {
+    "max_steps": 30,
+    "step_timeout_ms": 600000,
+    "session_queue_size": 1000,
+    "event_queue_size": 4000
+  }
+}
