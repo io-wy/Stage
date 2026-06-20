@@ -1,1 +1,0 @@
-"""Pitfall journal pipeline."""

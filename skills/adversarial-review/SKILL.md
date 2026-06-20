@@ -1,11 +1,17 @@
 ---
-name: adversarial-review-pipeline
-description: Multi-model adversarial code review for agent outputs. Use when reviewing core logic changes, 5+ files, 200+ lines, or when user says "对抗审查/adversarial review/cross-model review". The reviewer agent inspects coder outputs through a cross-validation lens to catch single-model blind spots.
+name: adversarial-review
+description: >
+  Multi-model adversarial code review for agent outputs. Use when reviewing
+  core logic changes, 5+ files, 200+ lines, or when user says
+  "对抗审查/adversarial review/cross-model review". Catches single-model
+  blind spots (knowledge gaps, attention decay, confirmation bias) by cross
+  validating findings across different model configurations.
 ---
 
-# Adversarial Review Pipeline
+# Adversarial Review
 
-> Core: Code written and reviewed by the same model tends to share the same blind spots. Cross-model review covers what a single model misses.
+> Core: Code written and reviewed by the same model tends to share the same
+> blind spots. Cross-model review covers what a single model misses.
 
 ## Trigger Conditions
 
@@ -39,9 +45,9 @@ Review dimensions:
 |-----------|-------------|
 | Correctness | Logic correctness, boundary conditions, error paths |
 | Security | Injection risks, auth bypass, secret leakage, SSRF |
-| Concurrency | Shared state protection, lock granularity, deadlocks |
-| Resources | Connection leaks, file handle leaks, memory growth |
-| Performance | Hot path overhead, N+1 queries, unnecessary allocations |
+| Concurrency | Shared state protection (async locks, queues), race conditions |
+| Resources | Connection leaks, file handle leaks, unclosed async tasks |
+| Performance | Hot path overhead, unnecessary allocations, N+1 queries |
 | Observability | Error logging, key path tracing, metrics |
 
 Each issue must be labeled with: level (Critical/Major/Minor/Suggestion) + file:line + category + fix suggestion.
@@ -59,8 +65,8 @@ Output issue set B.
 | Scenario | Action |
 |----------|--------|
 | Found by both A and B | High confidence, confirm the issue |
-| Only A found | Label `[primary-only — needs confirmation]` |
-| Only B found | Label `[cross-only — needs confirmation]` |
+| Only A found | Label `[primary-only -- needs confirmation]` |
+| Only B found | Label `[cross-only -- needs confirmation]` |
 
 ### Step 5: Merge Report
 
@@ -91,7 +97,7 @@ Output issue set B.
 
 - **This change** vs **historical debt** (only review what the agent introduced)
 - **Style preference** vs **actual defect** (only flag actual defects)
-- **Correct code mislabeled** vs **real error** (uncertain → label Suggestion)
+- **Correct code mislabeled** vs **real error** (uncertain -> label Suggestion)
 
 ## Prohibited Behaviors
 
