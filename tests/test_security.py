@@ -1,4 +1,4 @@
-"""Adversarial tests for the enterprise security model (capability tokens, audit log).
+"""Adversarial tests for the projects security model (capability tokens, audit log).
 
 These tests are written to EXPOSE GAPS, not to rubber-stamp current behavior.
 Tests prefixed ``test_gap_`` pin behavior that is currently surprising or
@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from openagents_orchestration.enterprise.security import (
+from openagents_orchestration.projects.security import (
     AgentIdentity,
     AuditLog,
     CapabilityToken,
@@ -84,15 +84,10 @@ def test_expired_token_neither_authorizes_nor_verifies():
 # ── GAP A: signature does not bind action-list STRUCTURE (delimiter collision) ──
 
 
-def test_gap_delimiter_collision_enables_privilege_split():
-    """HMAC payload joins actions with ``,`` and fields with ``|`` *without
-    escaping*. A token issued for the single action ``"read,write"`` therefore
-    signs the identical byte string as a token for ``["read", "write"]``.
-
-    Consequence: an attacker can take a legitimately signed token and SPLIT one
-    action into two, gaining ``can("write")`` that the original never granted —
-    the forged token still passes verify().
-    """
+def test_gap_delimiter_collision_is_blocked():
+    """Canonical JSON signing binds the action-list structure. A token issued
+    for the single action ``"read,write"`` no longer verifies when its actions
+    are split into ``["read", "write"]``."""
     legit = CapabilityToken.issue(
         "director", "bob", ["read,write"], ["*"], secret=_SECRET
     )
@@ -100,37 +95,32 @@ def test_gap_delimiter_collision_enables_privilege_split():
     assert legit.can("write") is False
 
     forged = replace(legit, actions=("read", "write"))
-    # GAP: same comma-joined payload → same HMAC → forgery passes verification.
-    assert forged.verify(_SECRET) is True
-    # GAP: and now authorizes an action the signed grant never contained.
+    # Fixed: structure is signed, so the forgery no longer verifies.
+    assert forged.verify(_SECRET) is False
+    # can() is authz-only; can_with_verify() correctly rejects the forged token.
+    assert forged.can_with_verify("write", secret=_SECRET) is False
+    # The forged token's action list *would* authorize "write" if it were valid,
+    # demonstrating that the structural change is what the signature now binds.
     assert forged.can("write") is True
 
 
-def test_gap_field_delimiter_unescaped_in_payload():
-    """The ``|`` field separator is likewise unescaped, so an action containing
-    ``|`` can bleed into adjacent payload fields. This pins that no escaping
-    exists (a hardened impl would reject or escape such values)."""
+def test_gap_field_delimiter_is_canonicalized_in_payload():
+    """Canonical JSON encoding removes ``|`` / ``,`` field/element ambiguity."""
     a = CapabilityToken.issue("iss", "bob", ["x|proj-a"], [], secret=_SECRET)
     b = CapabilityToken.issue("iss", "bob", ["x"], ["proj-a"], secret=_SECRET)
-    # Payloads: "iss|bob|x|proj-a||<exp>" vs "iss|bob|x|proj-a|<exp>" differ only
-    # by an empty scope segment — not a collision here, but they share the same
-    # raw field stream up to the scope boundary, demonstrating the ambiguity.
-    # The concrete, exploitable collision is covered above; this guards the
-    # broader "no canonical encoding" property.
-    assert a.signature != b.signature  # current behavior; documents the shape
+    # Different structures → different signed payloads.
+    assert a.signature != b.signature
 
 
 # ── GAP B: can() performs NO signature check (authz decoupled from authn) ───────
 
 
-def test_gap_can_authorizes_completely_forged_token():
-    """``can()`` checks only expiry + membership; it never validates the
-    signature. A fully forged token (garbage signature) authorizes any action.
+def test_gap_can_with_verify_rejects_completely_forged_token():
+    """``can_with_verify`` validates the signature before checking action/scope,
+    so a fully forged token (garbage signature) cannot authorize any action.
 
-    Callers MUST call ``verify()`` first, but nothing enforces that — and the
-    one production caller (``state_board._send_structured`` ~L1205) calls
-    ``verify()`` yet NEVER calls ``can()``, so a token's actions/scope are not
-    actually enforced anywhere in the send path.
+    The standalone ``can()`` remains authz-only by design; callers that need
+    cryptographic assurance use ``can_with_verify()``.
     """
     forged = CapabilityToken(
         issuer="mallory",
@@ -141,7 +131,16 @@ def test_gap_can_authorizes_completely_forged_token():
         signature=b"not-a-real-signature",
     )
     assert forged.verify(_SECRET) is False  # signature is bogus
-    assert forged.can("delete_production") is True  # GAP: authorized anyway
+    assert forged.can_with_verify("delete_production") is False  # fixed
+
+
+def test_can_with_verify_enforces_action_and_scope():
+    t = CapabilityToken.issue(
+        "director", "bob", ["send_message"], ["reviewer-1"], secret=_SECRET
+    )
+    assert t.can_with_verify("send_message", "reviewer-1", secret=_SECRET) is True
+    assert t.can_with_verify("send_message", "monitor-1", secret=_SECRET) is False
+    assert t.can_with_verify("delete", "reviewer-1", secret=_SECRET) is False
 
 
 # ── GAP C: omitting the scope argument silently bypasses scope enforcement ──────

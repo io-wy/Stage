@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from openagents_orchestration.enterprise.human_channel import (
+from openagents_orchestration.projects.human_channel import (
     HumanChannel,
     HumanMessage,
     HumanQuestion,

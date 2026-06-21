@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import os
 import secrets
 import time as _time
 from dataclasses import dataclass, field
@@ -17,6 +19,13 @@ from typing import Any
 
 class SecurityError(Exception):
     """Raised on authentication or authorization failure."""
+
+
+# Module-level default secret. Prefer env override for cross-process token
+# verification; fall back to a random per-process secret.
+_DEFAULT_SECRET: bytes = os.environ.get(
+    "STAGE_SIGNING_SECRET", ""
+).encode() or secrets.token_bytes(32)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,12 +63,6 @@ class AgentIdentity:
         )
 
 
-# Module-level default secret. Initialized with a random value so issue()
-# and verify() use the same secret in the same process. Override in
-# production via env var or config.
-_DEFAULT_SECRET: bytes = secrets.token_bytes(32)
-
-
 @dataclass(frozen=True)
 class CapabilityToken:
     """Signed capability token authorizing a bounded set of actions.
@@ -83,7 +86,12 @@ class CapabilityToken:
         return now >= self.expires_at
 
     def can(self, action: str, scope: str = "") -> bool:
-        """True if the token authorizes ``action`` within ``scope``."""
+        """True if the token authorizes ``action`` within ``scope``.
+
+        Callers that need cryptographic assurance MUST call ``verify()`` first
+        (or use ``can_with_verify``). This method intentionally does NOT verify
+        the signature so that authn/authz remain separable.
+        """
         if self.is_expired():
             return False
         if action not in self.actions and "*" not in self.actions:
@@ -94,6 +102,12 @@ class CapabilityToken:
             return True
         return scope in self.scope
 
+    def can_with_verify(
+        self, action: str, scope: str = "", secret: bytes | None = None
+    ) -> bool:
+        """True if the token is valid AND authorizes ``action`` within ``scope``."""
+        return self.verify(secret) and self.can(action, scope)
+
     def verify(self, secret: bytes | None = None) -> bool:
         """Recompute and compare the HMAC signature."""
         if self.is_expired():
@@ -102,11 +116,17 @@ class CapabilityToken:
         return hmac.compare_digest(expected, self.signature)
 
     def _sign(self, secret: bytes) -> bytes:
-        """Compute HMAC-SHA256 over the token payload."""
-        payload = (
-            f"{self.issuer}|{self.bearer}|"
-            f"{','.join(self.actions)}|{','.join(self.scope)}|"
-            f"{self.expires_at.isoformat()}"
+        """Compute HMAC-SHA256 over a canonical JSON payload."""
+        payload = json.dumps(
+            {
+                "issuer": self.issuer,
+                "bearer": self.bearer,
+                "actions": sorted(self.actions),
+                "scope": sorted(self.scope),
+                "expires_at": self.expires_at.isoformat(),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return hmac.new(secret, payload.encode(), hashlib.sha256).digest()
 

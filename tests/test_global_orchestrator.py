@@ -1,4 +1,4 @@
-"""Adversarial tests for GlobalOrchestrator — the enterprise multi-project entry.
+"""Adversarial tests for GlobalOrchestrator — the multi-project entry.
 
 Module under test: ``src/openagents_orchestration/enterprise/global_orchestrator.py``
 (385 lines, zero coverage — old ``test_global_orchestrator.py`` was deleted). The
@@ -15,9 +15,9 @@ from __future__ import annotations
 import pytest
 
 from openagents_orchestration.core.state_board import Budget
-from openagents_orchestration.enterprise.global_orchestrator import GlobalOrchestrator
-from openagents_orchestration.enterprise.project import ProjectStatus
-from openagents_orchestration.enterprise.team import TeamSpec
+from openagents_orchestration.projects.global_orchestrator import GlobalOrchestrator
+from openagents_orchestration.projects.project import Project, ProjectStatus
+from openagents_orchestration.projects.team import TeamSpec
 from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
 
 
@@ -35,7 +35,7 @@ class _FakeRunner:
 
 @pytest.fixture
 def patched_runner(monkeypatch):
-    from openagents_orchestration.enterprise import global_orchestrator as go_mod
+    from openagents_orchestration.projects import global_orchestrator as go_mod
 
     monkeypatch.setattr(go_mod, "OrchestratorRunner", _FakeRunner)
     return _FakeRunner
@@ -78,29 +78,55 @@ async def test_pause_resume_and_unknown_project_raises(tmp_path):
 # ── GAP 1: the global budget can never be set → the cap branch is dead code ───
 
 
-def test_gap_global_budget_unsettable_and_cap_branch_unreachable():
-    """``__init__`` hardcodes the global budget to unlimited (-1) with no
-    constructor param and no setter, so ``_allocate_budget`` ALWAYS takes the
-    pass-through branch — the 'cap at remaining global budget' code (and the
-    ``_GlobalBudget`` allocation-tracking subclass) is unreachable. The global
-    budget enforcement that CLAUDE.md §2 calls a core rationale does not exist."""
-    go = GlobalOrchestrator("/nonexistent/agent.json")
-    assert go._global_budget.token_limit == -1
-    assert not hasattr(go, "set_global_budget")  # no supported way to set it
+def test_global_budget_is_settable_and_enforced():
+    """GlobalOrchestrator now accepts a global_budget constructor param and
+    caps per-project allocations against the remaining global pool."""
+    go = GlobalOrchestrator(
+        "/nonexistent/agent.json",
+        global_budget=Budget(token_limit=2_000_000),
+    )
+    assert go._global_budget.token_limit == 2_000_000
 
-    # Every allocation grants the full request; the pool is never decremented:
-    for _ in range(5):
-        alloc = go._allocate_budget(Budget(token_limit=1_000_000))
-        assert alloc.token_limit == 1_000_000
+    alloc1 = go._allocate_budget("p1", Budget(token_limit=1_000_000))
+    assert alloc1.token_limit == 1_000_000
+    assert go._global_budget.token_used == 1_000_000
+
+    alloc2 = go._allocate_budget("p2", Budget(token_limit=1_500_000))
+    assert alloc2.token_limit == 1_000_000  # capped at remaining pool
+    assert go._global_budget.token_used == 2_000_000
+
+
+def test_allocate_budget_tracks_project_allocations():
+    go = GlobalOrchestrator(
+        "/nonexistent/agent.json",
+        global_budget=Budget(token_limit=1_000_000),
+    )
+    go._allocate_budget("p1", Budget(token_limit=500_000))
+    assert "p1" in go._global_budget.project_allocations
+    assert go._global_budget.project_allocations["p1"].token_limit == 500_000
+
+
+def test_allocate_budget_passes_through_when_unlimited():
+    go = GlobalOrchestrator("/nonexistent/agent.json")
+    alloc = go._allocate_budget("p1", Budget(token_limit=1_000_000))
+    assert alloc.token_limit == 1_000_000
     assert go._global_budget.token_used == 0
 
 
-def test_gap_allocate_budget_ignores_global_time_limit():
-    """Even the token cap aside, ``_allocate_budget`` never caps ``time_limit_s``
-    against the global budget — only ``token_limit`` is (theoretically) capped."""
-    go = GlobalOrchestrator("/nonexistent/agent.json")
-    alloc = go._allocate_budget(Budget(token_limit=100, time_limit_s=99_999.0))
-    assert alloc.time_limit_s == 99_999.0  # passed through unbounded
+def test_release_budget_returns_unused_tokens():
+    go = GlobalOrchestrator(
+        "/nonexistent/agent.json",
+        global_budget=Budget(token_limit=1_000_000),
+    )
+    allocated = go._allocate_budget("p1", Budget(token_limit=500_000))
+    assert go._global_budget.token_used == 500_000
+
+    project = Project(objective="x", budget=allocated)
+    project.budget.token_used = 300_000
+    go._release_budget("p1", project)
+    assert go._global_budget.token_used == 300_000
+    assert "p1" not in go._global_budget.project_allocations
+
 
 
 # ── GAP 2: run() marks the project COMPLETED regardless of delivery outcome ────

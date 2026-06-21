@@ -102,37 +102,46 @@ async def test_dlq_after_three_nacks_then_replay_roundtrip():
 # ── GAP 1: ack() of an unseen id blackholes a future message ──────────────────
 
 
-async def test_gap_pre_ack_of_unknown_id_blackholes_future_message():
-    """``ack`` adds the id to an ever-growing ``_acked`` set, and ``dequeue``
-    silently skips any buffered message whose id is in that set. So acking an id
-    *before* its message arrives (id reuse, a guessed/duplicated id, or a buggy
-    consumer) permanently blackholes that message: enqueue returns True, the
-    message sits in the buffer, but it is never delivered."""
+async def test_pre_ack_of_unknown_id_does_not_blackhole_future_message():
+    """``ack`` now ignores ids that are not currently in-flight, so a premature
+    ack cannot permanently block a future message with the same id."""
     mb = InMemoryMailbox()
     await mb.ack("ghost-id")  # ack an id we have never seen
     m = _msg("important")
     m.header = MessageHeader(msg_id="ghost-id", sender="a", recipient="b")
-    assert await mb.enqueue(m) is True  # enqueue claims success
-    assert await mb.size() == 1  # it IS buffered
-    assert await mb.dequeue() == []  # GAP: never delivered — filtered by _acked
+    assert await mb.enqueue(m) is True
+    assert await mb.size() == 1
+    dequeued = await mb.dequeue()
+    assert len(dequeued) == 1
+    assert dequeued[0].msg_id == "ghost-id"
 
 
-# ── GAP 2: no visibility timeout → in-flight messages are not redelivered ─────
+async def test_acked_set_is_bounded():
+    mb = InMemoryMailbox(max_acked=3)
+    # Hand out and ack 5 distinct in-flight messages.
+    for i in range(5):
+        m = _msg(f"m{i}")
+        m.header = MessageHeader(msg_id=f"id{i}", sender="a", recipient="b")
+        await mb.enqueue(m)
+        dequeued = await mb.dequeue()
+        assert len(dequeued) == 1
+        await mb.ack(dequeued[0].msg_id)
+    assert len(mb._acked) <= 3
 
 
-async def test_gap_in_flight_message_has_no_redelivery_timeout():
-    """Once dequeued, a message moves to ``_in_flight`` and stays there until an
-    explicit ack/nack. If the consumer crashes in between, the message is never
-    redelivered and never dead-lettered — at-least-once delivery is silently
-    violated. There is no visibility timeout."""
-    mb = InMemoryMailbox()
+async def test_in_flight_message_is_redelivered_after_visibility_timeout():
+    """Messages dequeued but not acked/nacked within the visibility timeout are
+    automatically re-queued (or DLQ'd after repeated timeouts)."""
+    mb = InMemoryMailbox(visibility_timeout_s=0.05)
     await mb.enqueue(_msg("work"))
     first = await mb.dequeue()
-    assert len(first) == 1  # delivered, now in-flight
-    # consumer "crashes" — never acks or nacks
-    assert await mb.dequeue() == []  # GAP: not redelivered
-    assert await mb.size() == 0  # buffer empty
-    assert first[0].msg_id in mb._in_flight  # stranded forever
+    assert len(first) == 1
+    # Consumer "crashes" — no ack/nack. Wait for visibility timeout.
+    await asyncio.sleep(0.08)
+    redelivered = await mb.dequeue()
+    assert len(redelivered) == 1
+    assert redelivered[0].msg_id == first[0].msg_id
+
 
 
 # ── GAP 3: dequeue_specific delivers expired messages ─────────────────────────

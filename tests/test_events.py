@@ -8,7 +8,7 @@ classification inconsistencies that matter to event-routing code.
 
 from __future__ import annotations
 
-from openagents_orchestration.enterprise.events import OrchestrationEvent
+from openagents_orchestration.projects.events import OrchestrationEvent
 
 # ── contract ──────────────────────────────────────────────────────────────────
 

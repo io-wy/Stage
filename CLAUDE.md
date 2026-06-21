@@ -65,7 +65,7 @@
 | 模块          | 内容                                                                                             |
 | ------------- | ------------------------------------------------------------------------------------------------ |
 | `core/`       | runner · **agent_loader（一文件一 agent 编译层）** · state_board · resident · collaboration(+executor +state_machine) · task_state_machine · decision_history · sub_state_board · resident_prompts |
-| `enterprise/` | global_orchestrator · team · human_channel · security · metrics · monitor_agent · events · project |
+| `projects/` | global_orchestrator · team · human_channel · security · metrics · monitor_agent · events · project |
 | `mailbox/`    | memory + redis（消息总线抽象，取代裸 `_pending_messages`）                                        |
 | `transport/`  | matrix（matrix-nio，跨进程 / 分布式通信）                                                         |
 | `tools/`      | director · resident · monitor · github · mcp · corecoder（戏子文件工具）· read_skill             |

@@ -12,7 +12,7 @@ src/openagents_orchestration/
 │   ├── resident.py             # ResidentAgent + ResidentState
 │   └── collaboration.py        # 协作信号（CollaborationSignal）
 │
-├── enterprise/                 # === 企业级多项目扩展 ===
+├── projects/                 # === 企业级多项目扩展 ===
 │   ├── __init__.py
 │   ├── global_orchestrator.py  # GlobalOrchestrator
 │   ├── project.py              # Project + ProjectStatus
@@ -117,10 +117,10 @@ src/openagents_orchestration/
 
 ## 设计原则
 
-1. **分层边界清晰**：core（单项目）→ enterprise（多项目）→ transport（通信）→ models（数据）
+1. **分层边界清晰**：core（单项目）→ projects（多项目）→ transport（通信）→ models（数据）
 2. **单一职责**：每个模块只做一件事，文件名即职责
 3. **向下依赖**：上层可依赖下层，下层不依赖上层
-   - `enterprise/` 可导入 `core/`、`models/`、`transport/`
+   - `projects/` 可导入 `core/`、`models/`、`transport/`
    - `core/` 可导入 `models/`、`transport/`
    - `tools/` 可导入 `core/`、`models/`
    - 禁止循环依赖

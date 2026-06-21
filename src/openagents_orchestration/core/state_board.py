@@ -20,7 +20,7 @@ from openagents_orchestration.core.decision_history import (
     DecisionRecord,
 )
 from openagents_orchestration.core.task_state_machine import TaskStateMachine
-from openagents_orchestration.enterprise.human_channel import HumanChannel
+from openagents_orchestration.projects.human_channel import HumanChannel
 from openagents_orchestration.mailbox.base import Mailbox
 from openagents_orchestration.mailbox.memory import InMemoryMailbox
 from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
@@ -520,7 +520,7 @@ class StateBoard:
         """Store a CapabilityToken for an agent.  Once set, send_structured
         verifies the token's HMAC signature before delivering messages from
         that agent.  Agents without a token are trusted (backward compat)."""
-        from openagents_orchestration.enterprise.security import CapabilityToken
+        from openagents_orchestration.projects.security import CapabilityToken
         if not isinstance(token, CapabilityToken):
             raise TypeError(f"Expected CapabilityToken, got {type(token).__name__}")
         if agent_id in self.agents:
@@ -1200,19 +1200,17 @@ class StateBoard:
         # Propagate trace context before delivery
         self.propagate_trace(msg)
 
-        # Verify sender's capability token if one is registered
+        # Enforce sender's capability token if one is registered
         agent = self.agents.get(msg.header.sender)
-        if (
-            agent is not None
-            and getattr(agent, "_capability_token", None) is not None
-            and not agent._capability_token.verify()
-        ):
-            self.log_event(
-                "mail.auth_failed",
-                agent_id=msg.header.sender,
-                message=f"Token verification failed for {msg.header.sender}",
-            )
-            return False
+        if agent is not None and getattr(agent, "_capability_token", None) is not None:
+            token = agent._capability_token
+            if not token.can_with_verify("send_message", msg.header.recipient):
+                self.log_event(
+                    "mail.auth_failed",
+                    agent_id=msg.header.sender,
+                    message=f"Token does not authorize send_message to {msg.header.recipient}",
+                )
+                return False
 
         # Enforce channel policy
         try:

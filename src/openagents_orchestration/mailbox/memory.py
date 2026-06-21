@@ -35,12 +35,17 @@ class InMemoryMailbox(Mailbox):
         circuit_threshold: int = 10,
         circuit_cooldown_s: float = 30.0,
         nack_backoff_base_s: float = 1.0,
+        visibility_timeout_s: float = 30.0,
+        max_acked: int = 10_000,
     ) -> None:
         self._max_size = max_size
         self._buffer: list[tuple[int, int, StructuredMessage]] = []  # (priority, seq, msg)
         self._seq = 0
         self._in_flight: dict[str, tuple[int, int, StructuredMessage]] = {}
+        self._in_flight_since: dict[str, float] = {}
         self._acked: set[str] = set()
+        self._acked_order: list[str] = []
+        self._max_acked = max_acked
         self._nack_counts: dict[str, int] = {}
         self._nack_retry_at: dict[str, float] = {}  # msg_id → earliest retry timestamp
         self._dlq: list[dict[str, Any]] = []
@@ -68,6 +73,9 @@ class InMemoryMailbox(Mailbox):
         self._circuit_state: str = "closed"  # closed | open | half_open
         # Nack backoff
         self._nack_backoff_base_s = nack_backoff_base_s
+        # Visibility timeout: messages dequeued but not acked/nacked within this
+        # window are automatically re-queued (or DLQ'd) so crashes don't lose them.
+        self._visibility_timeout_s = visibility_timeout_s
 
     # -- internal helpers ----------------------------------------------------
 
@@ -82,6 +90,61 @@ class InMemoryMailbox(Mailbox):
             else:
                 hi = mid
         self._buffer.insert(lo, item)
+
+    def _trim_acked(self) -> None:
+        """Evict oldest acked msg_ids to keep _acked bounded."""
+        while len(self._acked) > self._max_acked and self._acked_order:
+            oldest = self._acked_order.pop(0)
+            self._acked.discard(oldest)
+
+    def _move_to_dlq(
+        self,
+        msg_id: str,
+        item: tuple[int, int, StructuredMessage] | None,
+        reason: str,
+        count: int,
+    ) -> None:
+        """Move an in-flight message to the dead-letter queue."""
+        self._acked.add(msg_id)
+        self._acked_order.append(msg_id)
+        self._trim_acked()
+        self._nack_counts.pop(msg_id, None)
+        self._nack_retry_at.pop(msg_id, None)
+        self._in_flight_since.pop(msg_id, None)
+        dlq_entry = {"msg_id": msg_id, "reason": reason, "nack_count": count}
+        if item is not None:
+            msg_data = item[2].to_dict()
+            old_pri = msg_data.get("priority", 2)
+            if old_pri > 0:
+                msg_data["priority"] = old_pri - 1
+            dlq_entry["data"] = msg_data
+        self._dlq.append(dlq_entry)
+        if len(self._dlq) > self._max_dlq:
+            self._dlq.pop(0)
+        self.metrics.dlq_moved += 1
+
+    def _reclaim_visible_timed_out(self) -> None:
+        """Re-queue or DLQ messages that were dequeued but not acked/nacked."""
+        if self._visibility_timeout_s <= 0:
+            return
+        now = _time.monotonic()
+        for msg_id in list(self._in_flight_since.keys()):
+            if now - self._in_flight_since[msg_id] <= self._visibility_timeout_s:
+                continue
+            item = self._in_flight.pop(msg_id, None)
+            self._in_flight_since.pop(msg_id, None)
+            if item is None:
+                continue
+            count = self._nack_counts.get(msg_id, 0) + 1
+            if count >= 3:
+                self._move_to_dlq(msg_id, item, "visibility_timeout", count)
+            else:
+                self._nack_counts[msg_id] = count
+                # Visibility-timeout retries should be immediately available,
+                # not subject to exponential backoff.
+                self._nack_retry_at.pop(msg_id, None)
+                self._insert_sorted(item)
+                self.metrics.nacked += 1
 
     def _validate_payload(self, msg: StructuredMessage) -> bool:
         """Return False if the message payload + text exceeds MAX_PAYLOAD_BYTES."""
@@ -199,11 +262,13 @@ class InMemoryMailbox(Mailbox):
         in the queue.
         """
         async with self._lock:
+            self._reclaim_visible_timed_out()
             for i, (_priority, _seq, msg) in enumerate(self._buffer):
                 if msg.msg_id == msg_id:
                     if msg.msg_id in self._acked or msg.msg_id in self._in_flight:
                         return None
                     self._in_flight[msg_id] = self._buffer.pop(i)
+                    self._in_flight_since[msg_id] = _time.monotonic()
                     msg.header = msg.header.with_delivery()
                     self.metrics.dequeued += 1
                     return msg
@@ -211,6 +276,7 @@ class InMemoryMailbox(Mailbox):
 
     async def dequeue(self, batch_size: int = 10) -> list[StructuredMessage]:
         async with self._lock:
+            self._reclaim_visible_timed_out()
             results: list[StructuredMessage] = []
             now = _time.monotonic()
             i = 0
@@ -228,6 +294,7 @@ class InMemoryMailbox(Mailbox):
                     del self._buffer[i]
                     continue
                 self._in_flight[msg.msg_id] = self._buffer.pop(i)
+                self._in_flight_since[msg.msg_id] = _time.monotonic()
                 msg.header = msg.header.with_delivery()
                 results.append(msg)
                 self.metrics.dequeued += 1
@@ -267,8 +334,15 @@ class InMemoryMailbox(Mailbox):
 
     async def ack(self, msg_id: str) -> None:
         async with self._lock:
+            # Only ack messages we actually handed out; ignore unknown ids so
+            # a premature ack does not blackhole future messages with the same id.
+            if msg_id not in self._in_flight:
+                return
             self._acked.add(msg_id)
+            self._acked_order.append(msg_id)
+            self._trim_acked()
             self._in_flight.pop(msg_id, None)
+            self._in_flight_since.pop(msg_id, None)
             self._nack_counts.pop(msg_id, None)
             self._nack_retry_at.pop(msg_id, None)
             self.metrics.acked += 1
@@ -278,22 +352,9 @@ class InMemoryMailbox(Mailbox):
             count = self._nack_counts.get(msg_id, 0) + 1
             if count >= 3:
                 # Move to DLQ — store full message data for replay
-                self._acked.add(msg_id)
                 item = self._in_flight.pop(msg_id, None)
-                self._nack_counts.pop(msg_id, None)
-                self._nack_retry_at.pop(msg_id, None)
-                dlq_entry = {"msg_id": msg_id, "reason": reason, "nack_count": count}
-                if item is not None:
-                    # Bump priority so replayed messages get higher urgency
-                    msg_data = item[2].to_dict()
-                    old_pri = msg_data.get("priority", 2)
-                    if old_pri > 0:
-                        msg_data["priority"] = old_pri - 1
-                    dlq_entry["data"] = msg_data
-                self._dlq.append(dlq_entry)
-                if len(self._dlq) > self._max_dlq:
-                    self._dlq.pop(0)
-                self.metrics.dlq_moved += 1
+                self._in_flight_since.pop(msg_id, None)
+                self._move_to_dlq(msg_id, item, reason, count)
             else:
                 # Re-queue for retry with exponential backoff
                 self._nack_counts[msg_id] = count
@@ -301,6 +362,7 @@ class InMemoryMailbox(Mailbox):
                 backoff_s = self._nack_backoff_base_s * (2 ** (count - 1))
                 self._nack_retry_at[msg_id] = _time.monotonic() + backoff_s
                 item = self._in_flight.pop(msg_id, None)
+                self._in_flight_since.pop(msg_id, None)
                 if item is not None:
                     self._insert_sorted(item)
                 self.metrics.nacked += 1
@@ -347,6 +409,8 @@ class InMemoryMailbox(Mailbox):
                     self._dlq.pop(i)
                     # Clear ack and nack state so the message is fresh
                     self._acked.discard(msg_id)
+                    if msg_id in self._acked_order:
+                        self._acked_order.remove(msg_id)
                     self._nack_counts.pop(msg_id, None)
                     self._nack_retry_at.pop(msg_id, None)
                     # Re-insert as high priority (the Director explicitly replayed it)
@@ -411,6 +475,9 @@ class InMemoryMailbox(Mailbox):
             before = len(self._buffer)
             self._buffer = []
             self._in_flight.clear()
+            self._in_flight_since.clear()
+            self._acked.clear()
+            self._acked_order.clear()
             self._idempotency_keys.clear()
             self._idempotency_keys_order.clear()
             self._nack_retry_at.clear()

@@ -8,7 +8,7 @@ exposition bugs.
 
 from __future__ import annotations
 
-from openagents_orchestration.enterprise.metrics import (
+from openagents_orchestration.projects.metrics import (
     OrchestrationMetrics,
     _Counter,
     _Gauge,
@@ -80,12 +80,9 @@ def test_from_state_sets_task_and_budget_gauges():
 # ── GAP: periodic from_state double-counts cumulative llm_calls ───────────────
 
 
-def test_gap_from_state_double_counts_llm_calls_on_repeated_snapshots():
-    """``from_state`` is documented to run periodically ('every 30s'). It does
-    ``llm_calls.inc(amount=agent.llm_call_count)`` — but ``llm_call_count`` is
-    ALREADY a cumulative running total, so each snapshot re-adds the whole total
-    and the counter inflates without bound. (tasks/agents/budget correctly use
-    ``.set()``; only llm_calls/llm_latency use the accumulating path.)"""
+def test_from_state_does_not_double_count_llm_calls():
+    """``from_state`` uses ``llm_calls.set()`` with the cumulative
+    ``llm_call_count`` so periodic snapshots are idempotent."""
     m = OrchestrationMetrics()
 
     class _Agent:
@@ -101,7 +98,8 @@ def test_gap_from_state_double_counts_llm_calls_on_repeated_snapshots():
     m.from_state(_Board())
     m.from_state(_Board())  # second periodic snapshot
     got = m.llm_calls.get(labels={"project_id": "p1", "agent_id": "a1"})
-    assert got == 10.0  # GAP: 5 real calls counted as 10
+    assert got == 5.0
+
 
 
 # ── GAP: typo'd / extra label names silently collapse to the empty series ─────

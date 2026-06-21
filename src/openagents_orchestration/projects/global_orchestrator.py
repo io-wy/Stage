@@ -19,12 +19,12 @@ from typing import Any
 from openagents_orchestration.core.runner import OrchestratorRunner
 from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.core.sub_state_board import SubStateBoard
-from openagents_orchestration.enterprise.human_channel import HumanChannel
-from openagents_orchestration.enterprise.metrics import OrchestrationMetrics
-from openagents_orchestration.enterprise.monitor_agent import MonitorAgent
-from openagents_orchestration.enterprise.project import Project, ProjectStatus
-from openagents_orchestration.enterprise.security import AuditLog
-from openagents_orchestration.enterprise.team import Team, TeamSpec
+from openagents_orchestration.projects.human_channel import HumanChannel
+from openagents_orchestration.projects.metrics import OrchestrationMetrics
+from openagents_orchestration.projects.monitor_agent import MonitorAgent
+from openagents_orchestration.projects.project import Project, ProjectStatus
+from openagents_orchestration.projects.security import AuditLog
+from openagents_orchestration.projects.team import Team, TeamSpec
 from openagents_orchestration.models.delivery import DeliveryReport
 from openagents_orchestration.transport.channel_policy import (
     DEFAULT_GLOBAL_POLICY,
@@ -64,10 +64,15 @@ class GlobalOrchestrator:
         persist_dir: str | None = None,
         collaborative_mode: str = "auto",
         enable_monitor: bool = True,
+        global_budget: Budget | None = None,
     ):
         self._config_path = Path(config_path)
         self._projects: dict[str, Project] = {}
-        self._global_budget = Budget(token_limit=-1, time_limit_s=-1)
+        self._global_budget = _GlobalBudget(
+            token_limit=getattr(global_budget, "token_limit", -1),
+            time_limit_s=getattr(global_budget, "time_limit_s", -1),
+            max_steps=getattr(global_budget, "max_steps", -1),
+        )
         self._human_channel = HumanChannel()
         self._audit_log = AuditLog()
         self._metrics = OrchestrationMetrics()
@@ -170,7 +175,7 @@ class GlobalOrchestrator:
             project.state_board._human_channel = self._human_channel
 
         # Allocate from global budget
-        allocated = self._allocate_budget(budget)
+        allocated = self._allocate_budget(project.project_id, budget)
         if project.budget is None:
             project.budget = allocated
 
@@ -233,6 +238,7 @@ class GlobalOrchestrator:
         if project is None:
             raise ValueError(f"Project {project_id} not found")
         report = await project.terminate(reason)
+        self._release_budget(project_id, project)
         self._audit_log.record(
             event_type="project.terminated",
             actor="global_orchestrator",
@@ -338,26 +344,40 @@ class GlobalOrchestrator:
 
     # -- internal --------------------------------------------------------------
 
-    def _allocate_budget(self, requested: Budget | None) -> Budget:
+    def _allocate_budget(
+        self, project_id: str, requested: Budget | None
+    ) -> Budget:
         """Allocate a project budget from the global budget pool."""
         if requested is None:
             return Budget()
         # If global budget is unlimited (-1), pass through
         if self._global_budget.token_limit < 0:
-            return Budget(
+            allocated = Budget(
                 token_limit=requested.token_limit,
                 time_limit_s=requested.time_limit_s,
                 max_steps=requested.max_steps,
             )
-        # Otherwise cap at remaining global budget
-        return Budget(
-            token_limit=min(
-                requested.token_limit,
-                self._global_budget.token_remaining,
-            ),
-            time_limit_s=requested.time_limit_s,
-            max_steps=requested.max_steps,
-        )
+        else:
+            # Cap at remaining global budget and charge the allocation.
+            available = self._global_budget.token_remaining
+            cap = min(requested.token_limit, available)
+            allocated = Budget(
+                token_limit=cap,
+                time_limit_s=requested.time_limit_s,
+                max_steps=requested.max_steps,
+            )
+            self._global_budget.token_used += cap
+        self._global_budget.project_allocations[project_id] = allocated
+        return allocated
+
+    def _release_budget(self, project_id: str, project: Project) -> None:
+        """Return unused allocated tokens to the global budget on project end."""
+        allocated = self._global_budget.project_allocations.pop(project_id, None)
+        if allocated is None or self._global_budget.token_limit < 0:
+            return
+        used = getattr(project.budget, "token_used", 0)
+        unused = max(0, allocated.token_limit - used)
+        self._global_budget.token_used -= unused
 
     def get_audit_log(self) -> AuditLog:
         return self._audit_log
@@ -370,6 +390,7 @@ class GlobalOrchestrator:
         for project in list(self._projects.values()):
             if project.status in (ProjectStatus.RUNNING, ProjectStatus.PAUSED):
                 await project.terminate("Global orchestrator shutdown")
+            self._release_budget(project.project_id, project)
 
     # -- snapshot --------------------------------------------------------------
 

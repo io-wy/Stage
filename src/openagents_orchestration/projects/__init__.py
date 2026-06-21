@@ -1,14 +1,14 @@
-"""Enterprise extensions — multi-project orchestration."""
+"""Multi-project orchestration extensions."""
 
-from openagents_orchestration.enterprise.events import OrchestrationEvent
-from openagents_orchestration.enterprise.human_channel import (
+from openagents_orchestration.projects.events import OrchestrationEvent
+from openagents_orchestration.projects.human_channel import (
     HumanChannel,
     HumanMessage,
     HumanQuestion,
 )
-from openagents_orchestration.enterprise.metrics import OrchestrationMetrics
-from openagents_orchestration.enterprise.monitor_agent import MonitorAgent
-from openagents_orchestration.enterprise.security import (
+from openagents_orchestration.projects.metrics import OrchestrationMetrics
+from openagents_orchestration.projects.monitor_agent import MonitorAgent
+from openagents_orchestration.projects.security import (
     AgentIdentity,
     AuditLog,
     CapabilityToken,
@@ -19,24 +19,24 @@ from openagents_orchestration.enterprise.security import (
 
 def __getattr__(name: str):
     if name == "GlobalOrchestrator":
-        from openagents_orchestration.enterprise.global_orchestrator import (
+        from openagents_orchestration.projects.global_orchestrator import (
             GlobalOrchestrator,
         )
         return GlobalOrchestrator
     if name == "Project":
-        from openagents_orchestration.enterprise.project import Project
+        from openagents_orchestration.projects.project import Project
         return Project
     if name == "ProjectStatus":
-        from openagents_orchestration.enterprise.project import ProjectStatus
+        from openagents_orchestration.projects.project import ProjectStatus
         return ProjectStatus
     if name == "Team":
-        from openagents_orchestration.enterprise.team import Team
+        from openagents_orchestration.projects.team import Team
         return Team
     if name == "TeamSpec":
-        from openagents_orchestration.enterprise.team import TeamSpec
+        from openagents_orchestration.projects.team import TeamSpec
         return TeamSpec
     if name == "TeamStatus":
-        from openagents_orchestration.enterprise.team import TeamStatus
+        from openagents_orchestration.projects.team import TeamStatus
         return TeamStatus
     raise AttributeError(name)
 

@@ -46,6 +46,15 @@ class _Counter:
         key = self._key(labels)
         self._values[key] = self._values.get(key, 0.0) + amount
 
+    def set(self, value: float, *, labels: dict[str, str] | None = None) -> None:
+        """Set the counter to an absolute value.
+
+        Counters are normally incremented, but ``from_state`` is called
+        periodically with already-cumulative values; ``set`` avoids double
+        counting on each snapshot.
+        """
+        self._values[self._key(labels)] = value
+
     def get(self, *, labels: dict[str, str] | None = None) -> float:
         return self._values.get(self._key(labels), 0.0)
 
@@ -344,13 +353,14 @@ class OrchestrationMetrics:
                 labels={"project_id": pid},
             )
 
-        # LLM metrics from agent states
+        # LLM metrics from agent states (cumulative values, so use set() instead
+        # of inc() to avoid double-counting on periodic snapshots).
         for agent_id, agent in getattr(state_board, "agents", {}).items():
             llm_count = getattr(agent, "llm_call_count", 0)
             if llm_count > 0:
-                self.llm_calls.inc(
+                self.llm_calls.set(
+                    float(llm_count),
                     labels={"project_id": pid, "agent_id": agent_id},
-                    amount=float(llm_count),
                 )
             avg_latency = getattr(agent, "avg_llm_latency_ms", 0)
             if avg_latency > 0:

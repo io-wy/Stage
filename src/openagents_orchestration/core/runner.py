@@ -53,7 +53,7 @@ from openagents_orchestration.core.resident import ResidentAgent
 from openagents_orchestration.core.resident_prompts import get_prompt
 from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
 from openagents_orchestration.core.sub_state_board import SubStateBoard
-from openagents_orchestration.enterprise.project import Project
+from openagents_orchestration.projects.project import Project
 from openagents_orchestration.hooks import HookManager, load_skills_into_context
 from openagents_orchestration.intent_classifier import IntentClassifier, IntentResult
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
