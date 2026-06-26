@@ -45,7 +45,7 @@ Goal: 世界级 生产级 完备的 agent调度通信协作机制
 ### 5. HumanChannel Redis Backend
 - **问题**: 多实例部署时 human 问答状态不共享
 - **修复**: RedisHumanChannel 子类
-- **文件**: `enterprise/human_channel.py`
+- **文件**: `projects/human_channel.py`
 
 ---
 

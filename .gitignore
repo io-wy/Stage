@@ -24,6 +24,7 @@ __pycache__/
 .agent_memory/
 .residents/
 .claude/persist/
+.runs/
 tmp/
 output_phased/
 examples/

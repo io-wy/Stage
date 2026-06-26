@@ -82,7 +82,6 @@ src/openagents_orchestration/
 │   ├── resident/               # 常驻 Agent 管理工具
 │   │   ├── spawn_resident.py
 │   │   ├── stop_resident.py
-│   │   ├── read_resident_state.py
 │   │   └── send_to_resident.py
 │   ├── github/                 # GitHub 工具集
 │   └── run_skill.py            # Skill 执行
