@@ -24,9 +24,22 @@ class SendMessageTool(ToolPlugin):
 
     name = "send_message"
     description = (
-        "Send a message to another agent. Use for: requesting help, "
-        "sharing findings, asking clarifying questions. The recipient "
-        "will receive this message the next time they check their mailbox."
+        "Send an asynchronous message to another agent's mailbox. "
+        "The recipient will see it the next time they read their mailbox.\n\n"
+        "Use send_message when:\n"
+        "- You need help from another role (e.g. coder asks reviewer for a quick look).\n"
+        "- You want to share a finding that another agent needs to act on.\n"
+        "- You are a producer in collaborative mode signaling TASK_REVIEW_READY to your checker.\n"
+        "- You are a checker signaling TASK_APPROVED or TASK_FIX_NEEDED to your producer.\n\n"
+        "Do NOT use send_message when:\n"
+        "- The message is a task assignment — use spawn_agent or send_to_resident instead.\n"
+        "- You need an immediate synchronous answer — the recipient processes mail on their own schedule.\n"
+        "- You are the Director assigning work — use spawn_agent with task_ids.\n\n"
+        "Target formats:\n"
+        "- 'director' to reach the orchestrator.\n"
+        "- A specific agent_id or task_id to reach one agent.\n"
+        "- '*' to broadcast to all registered agents.\n"
+        "- 'topic:foo' to publish to subscribers of that topic."
     )
     durable_idempotent = True
 
@@ -126,7 +139,7 @@ class SendMessageTool(ToolPlugin):
                     })
                     resident_delivered = True
 
-        # Ack the mailbox copy when delivered directly so check_messages
+        # Ack the mailbox copy when delivered directly so a later peek/claim
         # won't deliver a duplicate.  Match by msg_id.
         if resident_delivered:
             with contextlib.suppress(Exception):

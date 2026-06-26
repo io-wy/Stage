@@ -143,6 +143,7 @@ class RunClaudeCodeTool(ToolPlugin):
                 cwd=str(Path.cwd()),
             )
         except subprocess.TimeoutExpired as exc:
+
             def _decode_stream(val: bytes | str | None) -> str:
                 if val is None:
                     return ""
@@ -169,7 +170,7 @@ class RunClaudeCodeTool(ToolPlugin):
         # Truncate very long output
         max_output = 8_000
         if len(output) > max_output:
-            output = output[:max_output - 200] + "\n... (output truncated)"
+            output = output[: max_output - 200] + "\n... (output truncated)"
 
         return {
             "exit_code": result.returncode,

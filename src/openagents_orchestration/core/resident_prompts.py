@@ -34,7 +34,7 @@ def producer_initial_prompt(
         f"- ONLY when the deliverables are ready, use send_message with EXACTLY to_agent='{checker_id}' and message starting with:\n"
         f"   'TASK_REVIEW_READY[{task_id}]: tests passed = N'\n"
         f"- NEVER send completion messages to 'director'. Always send to '{checker_id}'.\n"
-        "- Do NOT call check_messages until you have completed the current production work.\n\n"
+        "- Do NOT check your mailbox until you have completed the current production work.\n\n"
         f"Do not declare the task complete until the {checker_label} approves."
     )
 
@@ -110,7 +110,7 @@ def coder_initial_prompt(
         "- ONLY when ALL tests pass AND tests ran (N > 0), use send_message with EXACTLY to_agent='{reviewer_id}' and message starting with:\n"
         f"   'TASK_REVIEW_READY[{task_id}]: tests passed = N'\n"
         "- NEVER send completion messages to 'director'. Always send to '{reviewer_id}'.\n"
-        "- Do NOT call check_messages until you have completed the current implementation work.\n\n"
+        "- Do NOT check your mailbox until you have completed the current implementation work.\n\n"
         "Do not declare the task complete until tests pass and the reviewer approves."
     )
     return raw.replace("{reviewer_id}", reviewer_id)

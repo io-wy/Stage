@@ -31,14 +31,14 @@ Input context: {input_context}
 Current plan:
 {plan_json}
 
-Please output a JSON array of replacement sub-tasks:
-[{{"task_id": "t_new_1", "description": "...",
+Please output a strict JSON object with a "tasks" array of replacement sub-tasks:
+{{"tasks": [{{"task_id": "t_new_1", "description": "...",
 "input_context": "detailed instructions",
-"agent_type": "coder", "expected_artifacts": ["file.py"]}}]
+"agent_type": "coder", "dependencies": [], "expected_artifacts": ["file.py"]}}]}}
 
 Rules:
 1. Each sub-task should be small enough to complete in ~5 minutes
-2. agent_type must be one of: coder, reviewer, researcher, monitor
+2. agent_type must be one of the available agent types
 3. Include expected output files
 4. task_id must be unique (use t_new_1, t_new_2, ...)
 5. Output strict JSON only, no markdown fences

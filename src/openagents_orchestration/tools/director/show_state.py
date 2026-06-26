@@ -14,10 +14,34 @@ class ShowStateTool(ToolPlugin):
 
     name = "show_state"
     description = (
-        "Read the current global state panel. Use this to understand "
-        "which tasks are pending/running/done, which agents are active, "
-        "what files have been produced, and the remaining budget. "
-        "Call this before making scheduling decisions."
+        "Read the current global state panel. This is the Director's primary source of truth "
+        "for making scheduling decisions.\n\n"
+        "# What it returns\n"
+        "- objective, budget (tokens/steps/time used and remaining), and progress summary.\n"
+        "- tasks: every task with id, description, agent_type, status, dependencies, artifacts, errors, priority.\n"
+        "- agents/residents: who is running, idle, failed, or stuck, plus resource usage.\n"
+        "- signals: ready_to_run, running, blocked, deadline_overdue, needs_human, pending_messages, unanswered_human_questions.\n"
+        "- dlq_summary: dead-letter messages that indicate stuck or failed deliveries.\n"
+        "- decision_feedback and strategy_signals: historical success rate and automated warnings.\n"
+        "- suggested_next_tools: a short list of tools likely to be useful right now.\n"
+        "- fallback suggestions for failed tasks.\n\n"
+        "# When to use\n"
+        "- At the start of every turn before deciding what to do next.\n"
+        "- After a task completes or fails, to update your mental model.\n"
+        "- Before deciding retry vs replan vs resident vs ask_human.\n"
+        "- Before finalizing, to confirm all tasks are terminal and artifacts are verified.\n"
+        "- When you suspect a resident is stuck or a message was lost.\n\n"
+        "# When NOT to use\n"
+        "- As a substitute for reading files — if a task claims an artifact, still call read_file to verify it.\n"
+        "- After every tiny action — batch your reasoning and call it when state may have changed.\n"
+        "- When you already have the answer and just need to act.\n\n"
+        "# Parameters\n"
+        "- section (optional): filter to one of 'tasks', 'agents', 'artifacts', 'signals', 'budget', 'events'. "
+        "Useful when you only need a slice, but the full snapshot is usually best.\n\n"
+        "# Common mistakes\n"
+        "- Trusting claimed artifacts without verifying them with read_file/bash.\n"
+        "- Ignoring strategy_signals or decision_feedback and repeating a failing strategy.\n"
+        "- Calling finalize without checking unanswered_human_questions."
     )
     durable_idempotent = True
 
@@ -58,11 +82,6 @@ class ShowStateTool(ToolPlugin):
             # Append suggested tools based on current state
             suggested_tools = board.suggest_tools()
             if suggested_tools:
-                payload["suggested_next_tools"] = suggested_tools
-
-            # If there are DLQ messages, suggest check_dlq
-            if dlq_summary and "check_dlq" not in suggested_tools:
-                suggested_tools.insert(0, "check_dlq")
                 payload["suggested_next_tools"] = suggested_tools
 
             # Append fallback suggestions for failed tasks

@@ -29,15 +29,24 @@
     "timeout_ms": 180000
   },
   "tools": [
-    "-send_message",
+    "+classify_intent",
+    "+decompose",
     "+spawn_agent",
     "+show_state",
     "+replan",
     "+finalize",
+    "+ask_human",
     "+spawn_resident",
     "+send_to_resident",
-    "+read_resident_state",
-    "+stop_resident"
+    "+stop_resident",
+    "+read_file",
+    "+list_directory",
+    "+bash",
+    "+edit_file",
+    "+apply_patch",
+    "+todo_read",
+    "+todo_write",
+    "-send_message"
   ],
   "runtime": {
     "max_steps": 30,

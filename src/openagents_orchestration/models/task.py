@@ -36,6 +36,7 @@ class TaskNode:
     status: TaskStatus = TaskStatus.PENDING
     error: str | None = None
     retry_count: int = 0
+    needs_verify: bool = False  # director spawn(verify=True) 时置；完成后挂 verify hook 核验
 
     # Collaboration pattern support
     collaboration_pattern: str = "default"

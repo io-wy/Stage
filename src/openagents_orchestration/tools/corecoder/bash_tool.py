@@ -22,7 +22,10 @@ from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 _DANGEROUS_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)"), "recursive delete on home/root"),
+    (
+        re.compile(r"\brm\s+(-\w*)?-r\w*\s+(/|~|\$HOME)"),
+        "recursive delete on home/root",
+    ),
     (re.compile(r"\brm\s+(-\w*)?-rf\s+/(?!\w)"), "force recursive delete on root"),
     (re.compile(r"\bmkfs\b"), "format filesystem"),
     (re.compile(r"\bdd\s+.*of=/dev/"), "raw disk write"),
@@ -156,7 +159,9 @@ class BashTool(ToolPlugin):
                 "message": f"Error: command timed out after {timeout}s",
             }
         except (OSError, ValueError) as exc:
-            raise ToolError(f"Failed to launch command: {exc}", tool_name=self.name) from exc
+            raise ToolError(
+                f"Failed to launch command: {exc}", tool_name=self.name
+            ) from exc
 
         if proc.returncode == 0:
             _update_cwd(context, command, cwd)
@@ -207,7 +212,9 @@ def _get_cwd(context: RunContext[Any] | None) -> str:
     return os.getcwd()
 
 
-def _update_cwd(context: RunContext[Any] | None, command: str, current_cwd: str) -> None:
+def _update_cwd(
+    context: RunContext[Any] | None, command: str, current_cwd: str
+) -> None:
     if context is None:
         return
     parts = command.split("&&")

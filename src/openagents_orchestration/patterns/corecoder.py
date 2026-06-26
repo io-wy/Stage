@@ -40,6 +40,13 @@ from openagents.interfaces.capabilities import PATTERN_EXECUTE
 from openagents.interfaces.pattern import PatternPlugin, unwrap_tool_result
 from pydantic import BaseModel, Field
 
+from openagents_orchestration.hooks import HookEvent
+from openagents_orchestration.models.pattern import (
+    FailureGrade,
+    PatternError,
+    PatternOutcome,
+    PatternOutcomeStatus,
+)
 from openagents_orchestration.models.stream import StreamEvent, StreamEventType
 from openagents_orchestration.patterns.stream_parser import (
     PreExecutionCache,
@@ -316,13 +323,27 @@ class CoreCoderPattern(PatternPlugin):
         if self.context is not None and isinstance(self._original_scratch, dict):
             self.context.scratch.update(self._original_scratch)
 
-    async def execute(self) -> str:
+    async def execute(self) -> PatternOutcome:
         """Run the ReAct loop until the model emits a text-only turn."""
         ctx = self.context
         if ctx is None:
-            raise RuntimeError("CoreCoderPattern.execute requires setup() first")
+            return PatternOutcome(
+                output="",
+                status=PatternOutcomeStatus.FAILED,
+                error=PatternError(
+                    message="CoreCoderPattern.execute requires setup() first",
+                    grade=FailureGrade.AGENT_FATAL,
+                ),
+            )
         if ctx.llm_client is None:
-            raise RuntimeError("CoreCoderPattern needs an llm_client")
+            return PatternOutcome(
+                output="",
+                status=PatternOutcomeStatus.FAILED,
+                error=PatternError(
+                    message="CoreCoderPattern needs an llm_client",
+                    grade=FailureGrade.AGENT_FATAL,
+                ),
+            )
 
         if self._plan_mode:
             ctx.state["__plan_mode_active__"] = True
@@ -360,10 +381,13 @@ class CoreCoderPattern(PatternPlugin):
             plan_path = self._write_plan_file(plan_text)
             ctx.state["__plan_mode_active__"] = True
             self._writeback_context()
-            return (
-                f"[Plan mode] Generated plan file: {plan_path}\n\n"
-                f"{plan_text}\n\n"
-                "Review the plan and call `approve_plan` to continue execution."
+            return PatternOutcome(
+                output=(
+                    f"[Plan mode] Generated plan file: {plan_path}\n\n"
+                    f"{plan_text}\n\n"
+                    "Review the plan and call `approve_plan` to continue execution."
+                ),
+                status=PatternOutcomeStatus.AWAITING_HUMAN,
             )
 
         system_prompt = self.compose_system_prompt("")
@@ -410,6 +434,20 @@ class CoreCoderPattern(PatternPlugin):
                 )
                 if gate_message:
                     messages.append({"role": "user", "content": gate_message})
+
+            # Hook: pattern.before_step
+            hooks = self._get_hooks()
+            if hooks is not None:
+                step_payload = hooks.run(
+                    HookEvent.PATTERN_BEFORE_STEP,
+                    {"step": step, "max_steps": self._max_steps, "state": dict(ctx.state)},
+                )
+                if isinstance(step_payload, dict) and step_payload.get("blocked"):
+                    final_text = step_payload.get(
+                        "reason", "Step blocked by pattern.before_step hook."
+                    )
+                    ctx.state["__steps_used__"] = step
+                    break
 
             response = await self._invoke_llm(
                 messages=[*system_messages, *messages],
@@ -630,7 +668,32 @@ class CoreCoderPattern(PatternPlugin):
             if entry.get("role") in ("user", "assistant", "tool")
         ]
         self._writeback_context()
-        return final_text
+
+        # Determine terminal outcome.
+        awaiting_human = ctx.state.get("__awaiting_human_reply__")
+        step_budget_exhausted = ctx.state.get("__step_budget_exhausted__")
+
+        if awaiting_human:
+            outcome = PatternOutcome(
+                output=str(final_text or "").strip(),
+                status=PatternOutcomeStatus.AWAITING_HUMAN,
+                metadata={"awaiting_human_reply": awaiting_human},
+            )
+        elif step_budget_exhausted:
+            outcome = PatternOutcome(
+                output=str(final_text or "").strip(),
+                status=PatternOutcomeStatus.MAX_STEPS,
+            )
+        else:
+            outcome = PatternOutcome(
+                output=str(final_text or "").strip(),
+                status=PatternOutcomeStatus.COMPLETED,
+            )
+
+        # NOTE: pattern 层不再发 PATTERN_AFTER_EXECUTE —— 状态同步统一由
+        # runner.run_agent 末尾那次触发负责（payload 带 agent_type/task_id，信息齐全）。
+        # pattern 层拿不到这两个字段，旧触发点对 StateSyncHooks 永远空转（PIT-002）。
+        return outcome
 
     def _writeback_context(self) -> None:
         """Mirror mutated RunContext containers back to the caller's originals."""
@@ -840,6 +903,7 @@ class CoreCoderPattern(PatternPlugin):
         if tool_id not in (ctx.tools or {}):
             err_msg = f"Tool '{tool_id}' is not registered."
             await self.emit("tool.failed", tool_id=tool_id, error=err_msg)
+            self._emit_tool_failure_hook(tool_id, err_msg, step=step)
             return _ToolDispatchResult(
                 desc=desc,
                 success=False,
@@ -861,6 +925,7 @@ class CoreCoderPattern(PatternPlugin):
                 "Use edit_file, bash, ask_human, or complete_task instead."
             )
             await self.emit("tool.failed", tool_id=tool_id, error=err_msg)
+            self._emit_tool_failure_hook(tool_id, err_msg, step=step)
             return _ToolDispatchResult(
                 desc=desc,
                 success=False,
@@ -871,20 +936,43 @@ class CoreCoderPattern(PatternPlugin):
 
         tool = ctx.tools[tool_id]
 
-        # Hook: tool.before_invoke
         hooks = self._get_hooks()
+
+        # Hook: pattern.before_tool
+        if hooks is not None:
+            before_pattern_payload = hooks.run(
+                HookEvent.PATTERN_BEFORE_TOOL,
+                {"tool_id": tool_id, "params": dict(params), "step": step},
+            )
+            if isinstance(before_pattern_payload, dict) and before_pattern_payload.get("blocked"):
+                reason = before_pattern_payload.get("reason", "blocked by pattern.before_tool hook")
+                err_msg = f"Hook blocked: {reason}"
+                await self.emit("tool.failed", tool_id=tool_id, error=reason)
+                self._emit_tool_failure_hook(tool_id, err_msg, step=step)
+                return _ToolDispatchResult(
+                    desc=desc,
+                    success=False,
+                    error=err_msg,
+                    data=None,
+                    executor_meta=None,
+                )
+            params = before_pattern_payload.get("params", params)
+
+        # Hook: tool.before_invoke
         if hooks is not None:
             before_payload = hooks.run(
-                "tool.before_invoke",
+                HookEvent.TOOL_BEFORE_INVOKE,
                 {"tool_id": tool_id, "params": dict(params), "step": step},
             )
             if before_payload.get("blocked"):
                 reason = before_payload.get("reason", "blocked by hook")
+                err_msg = f"Hook blocked: {reason}"
                 await self.emit("tool.failed", tool_id=tool_id, error=reason)
+                self._emit_tool_failure_hook(tool_id, err_msg, step=step)
                 return _ToolDispatchResult(
                     desc=desc,
                     success=False,
-                    error=f"Hook blocked: {reason}",
+                    error=err_msg,
                     data=None,
                     executor_meta=None,
                 )
@@ -898,6 +986,7 @@ class CoreCoderPattern(PatternPlugin):
                 tool_id=tool_id,
                 error=str(retry_exc),
             )
+            self._emit_tool_failure_hook(tool_id, str(retry_exc), exception=retry_exc, step=step)
             return _ToolDispatchResult(
                 desc=desc,
                 success=False,
@@ -912,6 +1001,7 @@ class CoreCoderPattern(PatternPlugin):
                 error=str(tool_exc),
                 error_details=error_details_payload(tool_exc),
             )
+            self._emit_tool_failure_hook(tool_id, str(tool_exc), exception=tool_exc, step=step)
             return _ToolDispatchResult(
                 desc=desc,
                 success=False,
@@ -926,6 +1016,7 @@ class CoreCoderPattern(PatternPlugin):
                 error=str(exc),
                 error_details=error_details_payload(exc),
             )
+            self._emit_tool_failure_hook(tool_id, str(exc), exception=exc, step=step)
             return _ToolDispatchResult(
                 desc=desc,
                 success=False,
@@ -939,7 +1030,7 @@ class CoreCoderPattern(PatternPlugin):
         # Hook: tool.after_invoke
         if hooks is not None:
             after_payload = hooks.run(
-                "tool.after_invoke",
+                HookEvent.TOOL_AFTER_INVOKE,
                 {
                     "tool_id": tool_id,
                     "params": dict(params),
@@ -950,6 +1041,19 @@ class CoreCoderPattern(PatternPlugin):
             )
             data = after_payload.get("result", data)
             executor_meta = after_payload.get("executor_meta", executor_meta)
+
+        # Hook: pattern.after_tool
+        if hooks is not None:
+            hooks.run(
+                HookEvent.PATTERN_AFTER_TOOL,
+                {
+                    "tool_id": tool_id,
+                    "params": dict(params),
+                    "result": data,
+                    "success": True,
+                    "step": step,
+                },
+            )
 
         await self.emit(
             "tool.succeeded",
@@ -963,6 +1067,34 @@ class CoreCoderPattern(PatternPlugin):
             error=None,
             data=data,
             executor_meta=executor_meta,
+        )
+
+    def _emit_tool_failure_hook(
+        self,
+        tool_id: str,
+        error: str,
+        exception: BaseException | None = None,
+        *,
+        step: int = 0,
+    ) -> None:
+        """Emit the ``tool.failure`` hook so consumers can grade the failure."""
+        hooks = self._get_hooks()
+        if hooks is None:
+            return
+        ctx = self.context
+        consecutive = 0
+        if ctx is not None:
+            consecutive = int(ctx.state.get("__consecutive_tool_failures__", 0))
+        hooks.run(
+            HookEvent.TOOL_FAILURE,
+            {
+                "tool_id": tool_id,
+                "error": error,
+                "exception": exception,
+                "step": step,
+                "consecutive_failures": consecutive,
+                "agent_id": getattr(ctx, "agent_id", None) if ctx is not None else None,
+            },
         )
 
     def _apply_tool_dispatch_result(
@@ -1065,7 +1197,7 @@ class CoreCoderPattern(PatternPlugin):
         hooks = self._get_hooks()
         if hooks is not None:
             before_payload = hooks.run(
-                "pattern.before_llm",
+                HookEvent.PATTERN_BEFORE_LLM,
                 {
                     "messages": list(messages),
                     "tools": list(tools),
@@ -1169,6 +1301,28 @@ class CoreCoderPattern(PatternPlugin):
             output_tokens=response.usage.output_tokens if response.usage else 0,
             cached_tokens=cached_read,
         )
+
+        # Hooks: llm.after_call + pattern.after_llm
+        hooks = self._get_hooks()
+        if hooks is not None:
+            hooks.run(
+                HookEvent.LLM_AFTER_CALL,
+                {
+                    "agent_id": getattr(ctx, "agent_id", None),
+                    "metrics": metrics,
+                    "model": model,
+                },
+            )
+            hooks.run(
+                HookEvent.PATTERN_AFTER_LLM,
+                {
+                    "messages": list(messages),
+                    "tools": list(tools),
+                    "response": response,
+                    "model": model,
+                },
+            )
+
         await self.emit(
             "usage.updated",
             usage=ctx.usage.model_dump() if ctx.usage else None,
@@ -1228,7 +1382,7 @@ class CoreCoderPattern(PatternPlugin):
         hooks = self._get_hooks()
         if hooks is not None:
             before_payload = hooks.run(
-                "pattern.before_llm",
+                HookEvent.PATTERN_BEFORE_LLM,
                 {
                     "messages": list(messages),
                     "tools": list(tools),
@@ -1736,11 +1890,14 @@ class CoreCoderPattern(PatternPlugin):
     async def _request_clarification_and_pause(
         self,
         question: str,
-    ) -> str:
+    ) -> PatternOutcome:
         """Record a clarifying question and pause the loop for a human reply."""
         ctx = self.context
         if ctx is None:
-            return "[Awaiting human reply] No RunContext available."
+            return PatternOutcome(
+                output="[Awaiting human reply] No RunContext available.",
+                status=PatternOutcomeStatus.AWAITING_HUMAN,
+            )
 
         # Try to use the registered ask_human tool so the question is recorded
         # consistently with the rest of the system.
@@ -1784,7 +1941,10 @@ class CoreCoderPattern(PatternPlugin):
             }
 
         self._writeback_context()
-        return f"[Awaiting human reply] {question}\n\nPlease reply to continue."
+        return PatternOutcome(
+            output=f"[Awaiting human reply] {question}\n\nPlease reply to continue.",
+            status=PatternOutcomeStatus.AWAITING_HUMAN,
+        )
 
     def _update_exploration_cache(
         self,

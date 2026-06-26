@@ -28,7 +28,9 @@ class _HTMLToMarkdown(HTMLParser):
         self._in_script = False
         self._link_hrefs: list[str] = []  # stack of hrefs for <a> tags
         self._link_text_parts: list[str] = []  # accumulated text for current link
-        self._block_tags = frozenset({"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre"})
+        self._block_tags = frozenset(
+            {"p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "pre"}
+        )
         self._inline_tags = frozenset({"a", "strong", "b", "em", "i", "code", "span"})
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -184,7 +186,9 @@ class WebFetchTool(ToolPlugin):
                         charset = match.group(1)
                 text = raw.decode(charset, errors="replace")
         except urllib.error.HTTPError as exc:
-            raise ToolError(f"Fetch failed: HTTP {exc.code}", tool_name=self.name) from exc
+            raise ToolError(
+                f"Fetch failed: HTTP {exc.code}", tool_name=self.name
+            ) from exc
         except urllib.error.URLError as exc:
             raise ToolError(f"Fetch failed: {exc.reason}", tool_name=self.name) from exc
         except TimeoutError:

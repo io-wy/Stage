@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from openagents_orchestration.core.state_board import Budget, StateBoard
+from openagents_orchestration.projects.human_channel_service import HumanChannelService
 
 
 class SubStateBoard(StateBoard):
@@ -29,6 +30,10 @@ class SubStateBoard(StateBoard):
                 max_steps=30,
             ),
             echo=parent._echo,
+            mailbox_manager=parent.mailbox_manager,
+            human_channel_service=HumanChannelService(
+                parent.human_channel_service.channel
+            ),
         )
         self._parent = parent
 

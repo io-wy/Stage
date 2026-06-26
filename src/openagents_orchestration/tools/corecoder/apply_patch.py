@@ -27,6 +27,8 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
+from openagents_orchestration.tools.corecoder._paths import resolve_agent_path
+
 
 @dataclass
 class Hunk:
@@ -51,11 +53,39 @@ class ApplyPatchTool(ToolPlugin):
 
     name = "apply_patch"
     description = (
-        "Apply a unified-diff style patch to one or more files. "
-        "More flexible than edit_file for multi-line changes or multiple files. "
-        "Format: --- a/path\n+++ b/path\n@@ -start,count +start,count @@\n "
-        "context lines, -removed, +added. "
-        "If a hunk cannot be matched precisely, falls back to line-number insertion."
+        "Apply a unified-diff patch to one or more files in a single call. "
+        "Best for multi-line or multi-file changes.\n\n"
+        "# Effects\n"
+        "- Parses the patch and applies each file's hunks; returns per-file "
+        "applied/failed details.\n"
+        "- Matching is fuzzy: it tries the context lines first, then an exact line "
+        "match, then the hunk's line number. A hunk matching none is reported failed "
+        "while other files still apply.\n"
+        "- Creates a new file when all of its hunks insert at '@@ -0,0 +... @@'.\n\n"
+        "# When to use\n"
+        "- One change touching several files, or several hunks in one file.\n"
+        "- A diff you already hold in unified format.\n\n"
+        "# When NOT to use\n"
+        "- A single small edit — use edit_file.\n"
+        "- A full rewrite or one new file — use write_file.\n\n"
+        "# Format\n"
+        "    --- a/src/main.py\n"
+        "    +++ b/src/main.py\n"
+        "    @@ -10,3 +10,3 @@\n"
+        "     unchanged context line\n"
+        "    -removed line\n"
+        "    +added line\n"
+        "Give each file its own '--- / +++' header to patch several at once.\n\n"
+        "# Paths\n"
+        "- Paths come from the headers; the `a/` and `b/` prefixes are stripped "
+        "automatically.\n"
+        "- Like the other file tools, they resolve against your working directory "
+        "(the cwd shown in your task input); absolute paths are used as-is.\n"
+        "- Do NOT prepend the work directory's own name (it is auto-stripped).\n\n"
+        "# Common mistakes\n"
+        "- Wrong `@@` line numbers — usually recovered by fuzzy match, but a hunk whose "
+        "context matches nothing fails.\n"
+        "- Forgetting a `+++ b/` header for a file you meant to patch."
     )
     durable_idempotent = False
 
@@ -98,6 +128,9 @@ class ApplyPatchTool(ToolPlugin):
         dirty: set[str] = set()
 
         for fp in file_patches:
+            # Resolve against the agent work dir so patched files land in the same
+            # place as write_file/edit_file, not the bare process cwd.
+            fp.path = str(resolve_agent_path(fp.path, context))
             try:
                 result = _apply_file_patch(fp)
                 results.append(result)

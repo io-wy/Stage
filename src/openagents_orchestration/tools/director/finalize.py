@@ -13,10 +13,14 @@ class FinalizeTool(ToolPlugin):
 
     name = "finalize"
     description = (
-        "Deliver the final result and stop the orchestration. "
-        "Call ONLY when all tasks are complete or the objective "
-        "cannot be furthered. Include a summary of what was done, "
-        "what remains, and any tasks needing human intervention."
+        "Deliver the final result and stop the orchestration loop. "
+        "This is a terminal action: after calling it, you cannot spawn more agents.\n\n"
+        "Call finalize when:\n"
+        "- All tasks are completed (verified) and no further work is needed.\n"
+        "- Remaining tasks are non-critical and cannot be fixed within budget.\n"
+        "- You have asked the human for input and must pause until they reply.\n\n"
+        "Your summary must be honest and specific: list completed tasks, failed tasks, "
+        "artifacts produced, blockers, and anything that needs human follow-up."
     )
     durable_idempotent = False
 

@@ -1,29 +1,28 @@
-"""Phased orchestration — run each phase of a complex task independently.
+"""phased_run.py — mock 全链路 trace debug 入口。
 
-Usage:
-    # Phase 1: Director decomposes objective into a plan
-    python phased_run.py plan "做一个 FastAPI 商城后端" -o shop_plan.json
+一键跑通 director→coder 编排链路（mock LLM，零真实 API），按层把每层变量打到
+stderr，让你看清数据流：
 
-    # Phase 1.5: Review the plan (no LLM call)
-    python phased_run.py review-plan shop_plan.json
+    RUN → DIRECTOR 每步(STEP/LLM/TOOL) → spawn_agent → CODER(STEP/LLM/TOOL)
+        → HOOK(记账员 payload) → BOARD(echo 事件) → 最终 snapshot + REPORT
 
-    # Phase 2: Spawn a single agent directly
-    python phased_run.py spawn coder "写一个 Python 函数 add(a, b)"
+零改生产代码：全靠 HookManager 注册 printer + mock 注入实现。pattern 层的
+STEP/TOOL/LLM hook 与 runner 的 AFTER_EXECUTE 共用同一个 HookManager
+（pattern 经 ctx.deps.hooks 取，正是 runner._hook_manager），故注册一处即可全覆盖。
 
-    # Phase 3: Execute one task from a saved plan
-    python phased_run.py execute-task shop_plan.json t1
+用法：
+    python phased_run.py                 # 跑内置 mock 脚本（建 hello.py）
+    python phased_run.py --break hook    # 在 PATTERN_AFTER_EXECUTE 停进 pdb，可 `p payload`
+    python phased_run.py --break tool    # 在 TOOL_BEFORE_INVOKE 停进 pdb
+    python phased_run.py --break step    # 在 PATTERN_BEFORE_STEP 停进 pdb
 
-    # Phase 4: Execute all currently ready tasks (respects dependencies)
-    python phased_run.py step shop_plan.json
-
-    # Phase 5: Full orchestration (same as run.py)
-    python phased_run.py full "做一个 FastAPI 商城后端"
-
-State files:
-    After each execute-task or step, task status is saved to
-    <plan_file>.state.json so subsequent steps resume correctly.
+线程现实：director 层 + 顶层 hook(director 的 PATTERN_AFTER_EXECUTE) 在主线程，
+pdb 可用；coder 的 execute 跑在 spawn_agent 工具的独立线程（_make_thread_safe_invoke
+里 asyncio.run），该层的 STEP/TOOL/LLM/AFTER_EXECUTE hook 在工具线程触发，断点
+受限、打印仍正常（输出可能与主线程交错）。
 """
 
+# ruff: noqa: E402 — sys.path bootstrap 必须先于 openagents 包 import，全文件豁免 E402
 from __future__ import annotations
 
 import argparse
@@ -31,407 +30,276 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
-# Ensure src/ is on PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from openagents_orchestration.core.runner import OrchestratorRunner, RunnerDeps
-from openagents_orchestration.core.state_board import Budget, StateBoard
-from openagents_orchestration.models.task import TaskGraph, TaskStatus
-from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
+# mock 跑不打真实 API；但 agents/_base.json 用 ${LLM_API_BASE} 等占位，config 加载期
+# 需这些 env 存在。优先读项目 .env，缺失则设 mock 占位（FakeLLMClient 顶掉真实 client）。
+_env_file = Path(__file__).parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text(encoding="utf-8").splitlines():
+        if _line.strip() and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+for _k, _v in {
+    "LLM_API_BASE": "http://mock-llm.local/v1",
+    "LLM_API_KEY": "mock-key",
+    "LLM_MODEL": "mock-model",
+}.items():
+    os.environ.setdefault(_k, _v)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from openagents_orchestration.core.runner import OrchestratorRunner
+from openagents_orchestration.core.state_board import Budget
+from openagents_orchestration.hooks import HookEvent
+from openagents_orchestration.models.task import TaskGraph, TaskNode
+from openagents_orchestration.tools.director.classify_intent import ClassifyIntentTool
+from openagents_orchestration.tools.director.decompose import DecomposeTool
 
-
-def _load_env() -> None:
-    env_path = Path(__file__).parent / ".env"
-    if env_path.exists():
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            if line.strip() and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-
-
-def _plan_path(path: str) -> Path:
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Plan file not found: {p}")
-    return p
-
-
-def _state_path(plan_path: Path) -> Path:
-    return plan_path.with_suffix(".state.json")
+OBJECTIVE = "Create a hello.py file that prints hello"
 
 
-def _load_state(plan_path: Path) -> dict[str, Any]:
-    sp = _state_path(plan_path)
-    if sp.exists():
-        with open(sp, encoding="utf-8") as f:
-            return json.load(f)
-    return {}
+# ── mock LLM（与 tests/test_director_e2e_mock.py 同形）─────────────────────
+@dataclass
+class FakeToolCall:
+    name: str
+    arguments: dict[str, Any]
+    id: str = "call_1"
 
 
-def _save_state(plan_path: Path, state: dict[str, Any]) -> None:
-    sp = _state_path(plan_path)
-    with open(sp, "w", encoding="utf-8") as f:
-        json.dump(state, f, indent=2, ensure_ascii=False)
+@dataclass
+class FakeResponse:
+    output_text: str = ""
+    content: list[dict[str, Any]] | None = None
+    tool_calls: list[FakeToolCall] = field(default_factory=list)
+    usage: Any | None = None
 
 
-class _SimpleCtx:
-    """Minimal context for tool.invoke() outside of a full Pattern loop."""
+class FakeLLMClient:
+    """回放脚本；tool-less(planning)调用喂固定 plan，不消耗主脚本。"""
 
-    def __init__(self, deps: Any):
-        self.deps = deps
+    _PLAN_JSON = '{"steps": ["do it"], "confidence": 8}'
 
+    def __init__(self, responses: list[Any]):
+        self._responses = list(responses)
+        self._index = 0
+        self.provider_name = "openai_compatible"
 
-# ---------------------------------------------------------------------------
-# Phase commands
-# ---------------------------------------------------------------------------
-
-
-async def cmd_plan(objective: str, output_file: Path) -> int:
-    """Phase 1: Director decomposes objective into TaskGraph."""
-    _load_env()
-    runner = OrchestratorRunner(Path(__file__).parent / "agent.json")
-
-    print(f"\n{'='*60}")
-    print("PHASE 1: PLAN")
-    print(f"{'='*60}")
-    print(f"Objective: {objective}")
-    print("Decomposing... (this calls the Director LLM)")
-
-    graph = await runner._initial_decompose(objective)
-    graph.validate()
-
-    # Save
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(graph.to_dict(), f, indent=2, ensure_ascii=False)
-
-    # Print human-readable review
-    _print_plan_review(graph)
-    print(f"\nPlan saved to: {output_file}")
-    print(f"State file: {_state_path(output_file)}")
-    return 0
+    async def generate(self, **kwargs: Any) -> Any:
+        if kwargs.get("tools") is None:
+            return FakeResponse(output_text=self._PLAN_JSON)
+        if self._index >= len(self._responses):
+            return FakeResponse(output_text="")
+        r = self._responses[self._index]
+        self._index += 1
+        return r
 
 
-def _print_plan_review(graph: TaskGraph) -> None:
-    layers = graph.topological_layers()
-    print(f"\n  Tasks: {len(graph.tasks)} | Layers: {len(layers)}")
-
-    for i, layer in enumerate(layers):
-        print(f"\n  --- Layer {i} ({len(layer)} task{'s' if len(layer) > 1 else ''}) ---")
-        for t in layer:
-            deps = f"  (deps: {', '.join(t.dependencies)})" if t.dependencies else ""
-            arts = f"  -> {', '.join(t.expected_artifacts)}" if t.expected_artifacts else ""
-            print(f"    [{t.agent_type:8}] {t.task_id}: {t.description}{deps}{arts}")
-            if t.input_context:
-                preview = t.input_context[:120].replace("\n", " ")
-                print(f"             context: {preview}{'...' if len(t.input_context) > 120 else ''}")
-
-    # Warnings
-    issues: list[str] = []
-    for t in graph.tasks:
-        if not t.input_context:
-            issues.append(f"{t.task_id}: missing input_context")
-        if not t.expected_artifacts:
-            issues.append(f"{t.task_id}: no expected_artifacts")
-        if t.estimated_complexity > 3:
-            issues.append(f"{t.task_id}: high complexity ({t.estimated_complexity})")
-    if issues:
-        print(f"\n  Warnings ({len(issues)}):")
-        for issue in issues:
-            print(f"    ! {issue}")
-    else:
-        print("\n  No warnings.")
+# ── trace 输出 ────────────────────────────────────────────────────────────
+def _p(msg: str) -> None:
+    print(msg, file=sys.stderr, flush=True)
 
 
-async def cmd_review_plan(plan_file: Path) -> int:
-    """Phase 1.5: Review a saved plan without calling LLM."""
-    with open(plan_file, encoding="utf-8") as f:
-        graph = TaskGraph.from_dict(json.load(f))
-
-    print(f"\n{'='*60}")
-    print("PHASE 1.5: REVIEW PLAN")
-    print(f"{'='*60}")
-    print(f"File: {plan_file}")
-
-    try:
-        graph.validate()
-        print("Validation: PASS (no cycles, no unknown deps)")
-    except ValueError as e:
-        print(f"Validation: FAIL — {e}")
-        return 1
-
-    _print_plan_review(graph)
-
-    # Show current execution state if exists
-    state = _load_state(plan_file)
-    if state:
-        print(f"\n  Execution state ({_state_path(plan_file)}):")
-        for tid, tstate in state.get("tasks", {}).items():
-            print(f"    {tid}: {tstate['status']}")
-    else:
-        print("\n  No execution state yet. Run 'execute-task' or 'step' to progress.")
-
-    return 0
+def _short(v: Any, n: int = 90) -> str:
+    s = repr(v)
+    return s if len(s) <= n else s[:n] + "…"
 
 
-async def cmd_spawn(agent_type: str, input_text: str) -> int:
-    """Phase 2: Spawn a single tactical agent directly."""
-    _load_env()
+def _register_printers(runner: OrchestratorRunner, break_layer: str | None) -> None:
+    """把每层 printer 注册到 runner._hook_manager（与 pattern 共用的那个）。"""
 
-    # Resolve @file.txt references
-    if input_text.startswith("@"):
-        input_text = Path(input_text[1:]).read_text(encoding="utf-8")
+    def on_step(payload: dict) -> dict:
+        _p(f"  [STEP ] step={payload.get('step')}/{payload.get('max_steps')}")
+        if break_layer == "step":
+            breakpoint()
+        return payload
 
-    runner = OrchestratorRunner(Path(__file__).parent / "agent.json")
+    def on_llm(payload: dict) -> dict:
+        msgs = payload.get("messages") or []
+        tools = payload.get("tools") or []
+        sys_c = sum(len(json.dumps(m, default=str)) for m in msgs if m.get("role") == "system")
+        hist_c = sum(len(json.dumps(m, default=str)) for m in msgs if m.get("role") != "system")
+        tool_c = len(json.dumps(tools, default=str))
+        _p(
+            f"  [LLM  ] in≈{(sys_c + hist_c + tool_c) // 4} tok "
+            f"(system {sys_c // 4} + history {hist_c // 4} + tools {tool_c // 4})  "
+            f"msgs={len(msgs)} tools={len(tools)}"
+        )
+        return payload
 
-    print(f"\n{'='*60}")
-    print("PHASE 2: SPAWN")
-    print(f"{'='*60}")
-    print(f"Agent: {agent_type}")
-    print(f"Input:\n{'-'*40}\n{input_text}\n{'-'*40}")
+    def on_tool_before(payload: dict) -> dict:
+        _p(f"  [TOOL>] {payload.get('tool_id')}  params={_short(payload.get('params'))}")
+        if break_layer == "tool":
+            breakpoint()
+        return payload
 
-    try:
-        result = await runner.run_agent(agent_type, input_text)
-    finally:
-        await runner.close()
+    def on_tool_after(payload: dict) -> dict:
+        _p(f"  [TOOL<] {payload.get('tool_id')}  → {_short(payload.get('result'))}")
+        return payload
 
-    print(f"\n--- Result ---\n{result}")
-    return 0
+    def on_after_execute(payload: dict) -> dict:
+        outcome = payload.get("outcome")
+        status = getattr(outcome, "status", None)
+        status = getattr(status, "value", status)
+        _p(
+            f"  [HOOK ] after_execute  agent={payload.get('agent_id')} "
+            f"type={payload.get('agent_type')} task_id={payload.get('task_id')} status={status}"
+        )
+        if break_layer == "hook":
+            breakpoint()
+        return payload
+
+    def on_llm_after(payload: dict) -> dict:
+        m = payload.get("metrics")
+        if m is not None:
+            cached = getattr(m, "cached_tokens", 0)
+            flag = "  ★CACHE HIT" if cached else ""
+            _p(
+                f"  [LLM<] in={getattr(m, 'input_tokens', 0)} "
+                f"out={getattr(m, 'output_tokens', 0)} cached={cached}{flag}"
+            )
+        return payload
+
+    hm = runner._hook_manager
+    hm.register(HookEvent.PATTERN_BEFORE_STEP, on_step)
+    hm.register(HookEvent.PATTERN_BEFORE_LLM, on_llm)
+    hm.register(HookEvent.LLM_AFTER_CALL, on_llm_after)
+    hm.register(HookEvent.TOOL_BEFORE_INVOKE, on_tool_before)
+    hm.register(HookEvent.TOOL_AFTER_INVOKE, on_tool_after)
+    hm.register(HookEvent.PATTERN_AFTER_EXECUTE, on_after_execute)
 
 
-async def cmd_execute_task(plan_file: Path, task_id: str) -> int:
-    """Phase 3: Execute a single task from a saved plan."""
-    _load_env()
-    with open(plan_file, encoding="utf-8") as f:
-        graph = TaskGraph.from_dict(json.load(f))
+# ── 固定 mock 脚本（可复现）───────────────────────────────────────────────
+def _director_llm() -> FakeLLMClient:
+    return FakeLLMClient([
+        FakeResponse(tool_calls=[FakeToolCall("classify_intent", {"objective": OBJECTIVE})]),
+        FakeResponse(tool_calls=[FakeToolCall("decompose", {"objective": OBJECTIVE})]),
+        FakeResponse(tool_calls=[FakeToolCall("show_state", {})]),
+        FakeResponse(tool_calls=[FakeToolCall("spawn_agent", {"task_id": "t1"})]),
+        FakeResponse(tool_calls=[FakeToolCall("show_state", {})]),
+        FakeResponse(tool_calls=[FakeToolCall("finalize", {"summary": "Created hello.py"})]),
+        FakeResponse(output_text="Done"),
+    ])
 
-    task = graph.get_task(task_id)
-    if task is None:
-        print(f"Task '{task_id}' not found in plan")
-        return 1
 
-    print(f"\n{'='*60}")
-    print("PHASE 3: EXECUTE TASK")
-    print(f"{'='*60}")
-    print(f"Task: {task_id}")
-    print(f"Description: {task.description}")
-    print(f"Agent: {task.agent_type}")
-    print(f"Dependencies: {task.dependencies or '(none)'}")
+def _coder_llm() -> FakeLLMClient:
+    return FakeLLMClient([
+        FakeResponse(tool_calls=[FakeToolCall(
+            "write_file", {"file_path": "hello.py", "content": "print('hello')\n"})]),
+        FakeResponse(tool_calls=[FakeToolCall("bash", {"command": "python hello.py"})]),
+        FakeResponse(output_text="Completed.\n\nFILES_CREATED: hello.py"),
+    ])
 
-    # Build StateBoard with plan + saved execution state
-    board = StateBoard(graph.objective, budget=Budget(), echo=True)
+
+async def _fake_classify(self, params, context):  # noqa: ANN001
+    return {"intent": {
+        "task_type": "feature", "complexity": "complex", "external": [],
+        "priority": "normal", "confidence": 0.9, "reason": "mock", "source": "mock",
+    }}
+
+
+async def _fake_decompose(self, params, context):  # noqa: ANN001
+    board = getattr(getattr(context, "deps", None), "state_board", None)
+    graph = TaskGraph(objective=OBJECTIVE, tasks=[
+        TaskNode(
+            task_id="t1", description="Create hello.py", agent_type="coder",
+            input_context="Write hello.py that prints 'hello' when run.",
+            expected_artifacts=["hello.py"],
+        ),
+    ])
     board.add_tasks(graph)
+    return {"tasks_added": 1, "task_ids": ["t1"]}
 
-    # Load and apply saved state
-    state = _load_state(plan_file)
-    for tid, tstate in state.get("tasks", {}).items():
-        board.update_task(tid, status=TaskStatus(tstate["status"]), _force=True)
 
-    # Check if task is ready
-    completed = {t.task_id for t in board.tasks.values() if t.status == TaskStatus.COMPLETED}
-    if not task.is_ready(completed):
-        missing = set(task.dependencies) - completed
-        print(f"\nCannot execute: unmet dependencies {sorted(missing)}")
-        print(f"Completed so far: {sorted(completed) or '(none)'}")
-        return 1
+async def run_trace(
+    break_layer: str | None, real: bool = False, objective: str | None = None
+) -> None:
+    # mock 模式跑固定剧本(建 hello.py)，剧本写死故 objective 忽略；real 跑给定 objective。
+    run_objective = (objective or OBJECTIVE) if real else OBJECTIVE
+    work_dir = Path(tempfile.mkdtemp(prefix="phased_debug_"))
 
-    if task.status != TaskStatus.PENDING:
-        print(f"\nTask status is '{task.status.value}', not pending. Skipping.")
-        return 0
-
-    # Execute
-    runner = OrchestratorRunner(Path(__file__).parent / "agent.json")
-    runner._state_board = board
-
-    deps = RunnerDeps(
-        state_board=board,
-        runner_delegate=runner.run_agent,
-        runner=runner,
+    config_path = Path(__file__).parent / "agent.json"
+    runner = OrchestratorRunner(
+        config_path, enable_monitor_resident=False,
     )
-    ctx = _SimpleCtx(deps=deps)
-    tool = SpawnAgentTool()
+    _register_printers(runner, break_layer)
 
-    try:
-        result = await tool.invoke({"task_id": task_id}, ctx)
-    except Exception as exc:
-        print(f"\nTask failed: {exc}")
-        # Save failed state
-        state["tasks"] = state.get("tasks", {})
-        state["tasks"][task_id] = {"status": board.get_task(task_id).status.value}
-        _save_state(plan_file, state)
-        return 1
-    finally:
-        await runner.close()
+    _p("═" * 72)
+    _p(f"═══ RUN   mode={'REAL-LLM' if real else 'MOCK'}   objective={run_objective!r}")
+    _p(f"═══ work_dir={work_dir}")
+    if break_layer:
+        _p(f"═══ pdb armed @ layer={break_layer}  (director 层主线程可用; coder 层在工具线程受限)")
+    _p("═" * 72)
 
-    # Save state
-    state["tasks"] = state.get("tasks", {})
-    state["tasks"][task_id] = {"status": "completed"}
-    _save_state(plan_file, state)
+    budget = Budget(token_limit=300_000 if real else 10_000, time_limit_s=600, max_steps=50)
 
-    print(f"\nTask completed. Artifacts: {result.get('artifacts', [])}")
-    print(f"State saved to: {_state_path(plan_file)}")
-    return 0
+    if real:
+        # 真实 LLM：不掉包 llm_client、不 mock classify/decompose，用 .env 真实 key。
+        report = await runner.run(run_objective, budget=budget, work_dir=str(work_dir))
+    else:
+        # mock：掉包 LLM + mock 决策工具，跑固定剧本。
+        director_llm, coder_llm = _director_llm(), _coder_llm()
+        orig_bundle = OrchestratorRunner._ensure_bundle
 
+        def patched_bundle(self, agent_id: str):
+            bundle = orig_bundle(self, agent_id)
+            if agent_id == "director":
+                bundle.llm_client = director_llm
+            elif agent_id == "coder":
+                bundle.llm_client = coder_llm
+            return bundle
 
-async def cmd_step(plan_file: Path) -> int:
-    """Phase 4: Execute all currently ready tasks from the plan."""
-    _load_env()
-    with open(plan_file, encoding="utf-8") as f:
-        graph = TaskGraph.from_dict(json.load(f))
+        with (
+            patch(
+                "openagents_orchestration.patterns.corecoder._detect_project_type",
+                lambda cwd: {"type": "Python", "test_cmd": "python hello.py", "lint_cmd": ""},
+            ),
+            patch.object(OrchestratorRunner, "_ensure_bundle", patched_bundle),
+            patch.object(ClassifyIntentTool, "invoke", _fake_classify),
+            patch.object(DecomposeTool, "invoke", _fake_decompose),
+        ):
+            report = await runner.run(run_objective, budget=budget, work_dir=str(work_dir))
 
-    print(f"\n{'='*60}")
-    print("PHASE 4: STEP")
-    print(f"{'='*60}")
-
-    # Build StateBoard with saved state
-    board = StateBoard(graph.objective, budget=Budget(), echo=True)
-    board.add_tasks(graph)
-
-    state = _load_state(plan_file)
-    for tid, tstate in state.get("tasks", {}).items():
-        board.update_task(tid, status=TaskStatus(tstate["status"]), _force=True)
-
-    # Find ready tasks
-    ready = board.tasks_ready()
-    if not ready:
-        blocked = board.tasks_blocked()
-        running = [t for t in board.tasks.values() if t.status == TaskStatus.RUNNING]
-        if running:
-            print(f"No ready tasks. Currently running: {[t.task_id for t in running]}")
-        elif blocked:
-            print(f"No ready tasks. Blocked by failed deps: {[t.task_id for t in blocked]}")
-        elif board.all_terminal():
-            print("All tasks are in terminal state. Use 'review-plan' to see results.")
-        else:
-            print("No ready tasks. Waiting for dependencies...")
-        return 0
-
-    print(f"Ready tasks ({len(ready)}): {[t.task_id for t in ready]}")
-
-    # Execute each ready task
-    runner = OrchestratorRunner(Path(__file__).parent / "agent.json")
-    runner._state_board = board
-
-    deps = RunnerDeps(
-        state_board=board,
-        runner_delegate=runner.run_agent,
-        runner=runner,
-    )
-    ctx = _SimpleCtx(deps=deps)
-    tool = SpawnAgentTool()
-
-    exit_code = 0
-    for task in ready:
-        print(f"\n--- Executing {task.task_id} ---")
-        try:
-            result = await tool.invoke({"task_id": task.task_id}, ctx)
-            state["tasks"] = state.get("tasks", {})
-            state["tasks"][task.task_id] = {"status": "completed"}
-            print(f"  Done. Artifacts: {result.get('artifacts', [])}")
-        except Exception as exc:
-            print(f"  Failed: {exc}")
-            state["tasks"] = state.get("tasks", {})
-            state["tasks"][task.task_id] = {"status": board.get_task(task.task_id).status.value}
-            exit_code = 1
-
-    _save_state(plan_file, state)
-    await runner.close()
-
-    # Summary
-    completed = sum(1 for t in board.tasks.values() if t.status == TaskStatus.COMPLETED)
-    failed = sum(1 for t in board.tasks.values() if t.status == TaskStatus.FAILED)
-    pending = sum(1 for t in board.tasks.values() if t.status == TaskStatus.PENDING)
-    print(f"\nStep complete. Completed: {completed}, Failed: {failed}, Pending: {pending}")
-    print(f"State saved to: {_state_path(plan_file)}")
-    return exit_code
-
-
-async def cmd_full(objective: str) -> int:
-    """Phase 5: Full orchestration (same as run.py)."""
-    _load_env()
-    from run import main as run_main
-
-    # Patch sys.argv so run.py gets the objective
-    original_argv = sys.argv
-    sys.argv = ["run.py", objective]
-    try:
-        await run_main()
-    finally:
-        sys.argv = original_argv
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+    board = runner.state_board
+    _p("═" * 72)
+    _p("═══ FINAL board.snapshot()  (截断 2000 字符)")
+    _p(json.dumps(board.snapshot(), ensure_ascii=False, indent=2, default=str)[:2000])
+    _p("═" * 72)
+    _p("═══ REPORT")
+    _p(f"  objective: {report.objective}")
+    _p(f"  success:   {report.success_rate:.0%}")
+    for tr in report.task_results:
+        _p(f"  - {tr.task_id}: {tr.status}   artifacts={tr.artifacts}")
+    files = [str(p.relative_to(work_dir)) for p in sorted(work_dir.rglob("*")) if p.is_file()]
+    _p(f"═══ 产物文件({len(files)}): {files}")
+    _p("═" * 72)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Phased orchestration — test each phase independently",
+        description="全链路 trace debug — 跑通编排、逐层看变量(mock 固定剧本 / --real 真实 LLM)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s plan "做一个 FastAPI 商城后端" -o shop.json
-  %(prog)s review-plan shop.json
-  %(prog)s spawn coder "写一个 add(a,b) 函数"
-  %(prog)s execute-task shop.json t1
-  %(prog)s step shop.json
-  %(prog)s full "做一个 FastAPI 商城后端"
-        """,
+        epilog=(
+            "层(--break): step=PATTERN_BEFORE_STEP  tool=TOOL_BEFORE_INVOKE  hook=PATTERN_AFTER_EXECUTE\n"
+            "默认 mock(固定剧本建 hello.py); --real 用 .env 真实 LLM 跑给定 objective、看每步真实动作。"
+        ),
     )
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    # plan
-    p = sub.add_parser("plan", help="Decompose objective into a TaskGraph plan")
-    p.add_argument("objective", nargs="+", help="The objective to decompose")
-    p.add_argument("-o", "--output", type=Path, default=Path("plan.json"), help="Output plan file")
-
-    # review-plan
-    p = sub.add_parser("review-plan", help="Review a saved plan without LLM calls")
-    p.add_argument("plan_file", type=Path, help="Path to plan.json")
-
-    # spawn
-    p = sub.add_parser("spawn", help="Spawn a single agent directly")
-    p.add_argument("agent_type", choices=["coder", "reviewer", "tester", "researcher", "monitor"], help="Agent type")
-    p.add_argument("input", help='Input text (use @file.txt to read from file)')
-
-    # execute-task
-    p = sub.add_parser("execute-task", help="Execute one task from a saved plan")
-    p.add_argument("plan_file", type=Path, help="Path to plan.json")
-    p.add_argument("task_id", help="Task ID to execute")
-
-    # step
-    p = sub.add_parser("step", help="Execute all currently ready tasks")
-    p.add_argument("plan_file", type=Path, help="Path to plan.json")
-
-    # full
-    p = sub.add_parser("full", help="Full orchestration (same as run.py)")
-    p.add_argument("objective", nargs="+", help="The objective")
-
+    parser.add_argument("objective", nargs="*", help="objective(--real 时生效; mock 时用固定剧本)")
+    parser.add_argument(
+        "--real", action="store_true",
+        help="用真实 LLM 跑(读 .env 真实 key)，不 mock；看真实 director 每步动作",
+    )
+    parser.add_argument(
+        "--break", dest="break_layer", choices=["step", "tool", "hook"], default=None,
+        help="在指定层 breakpoint() 进 pdb",
+    )
     args = parser.parse_args()
-
-    if args.command == "plan":
-        objective = " ".join(args.objective)
-        return asyncio.run(cmd_plan(objective, args.output))
-    elif args.command == "review-plan":
-        return asyncio.run(cmd_review_plan(args.plan_file))
-    elif args.command == "spawn":
-        return asyncio.run(cmd_spawn(args.agent_type, args.input))
-    elif args.command == "execute-task":
-        return asyncio.run(cmd_execute_task(args.plan_file, args.task_id))
-    elif args.command == "step":
-        return asyncio.run(cmd_step(args.plan_file))
-    elif args.command == "full":
-        objective = " ".join(args.objective)
-        return asyncio.run(cmd_full(objective))
-
+    obj = " ".join(args.objective) if args.objective else None
+    asyncio.run(run_trace(args.break_layer, real=args.real, objective=obj))
     return 0
 
 

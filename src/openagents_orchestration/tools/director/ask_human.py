@@ -17,9 +17,24 @@ class AskHumanTool(ToolPlugin):
 
     name = "ask_human"
     description = (
-        "Ask the human user a clarifying question. Use when: ambiguous "
-        "requirements, missing credentials, design decisions that affect "
-        "the whole project. Record the question in the state board."
+        "Ask the human user a clarifying question and pause for an answer. "
+        "The question is recorded in the StateBoard and the orchestrator waits "
+        "for a human reply before continuing.\n\n"
+        "Use ask_human when:\n"
+        "- requirements are ambiguous or incomplete\n"
+        "- a design decision affects the whole project\n"
+        "- missing credentials, API keys, or environment info\n"
+        "- you need the human to choose between 2+ valid approaches\n"
+        "- you are stuck after multiple retries and need guidance\n\n"
+        "How to write a good question:\n"
+        "1. State the concrete problem in one sentence.\n"
+        "2. Provide the options or the exact information you need.\n"
+        "3. Explain the impact of each option on the project.\n"
+        "4. Use the 'options' field for multiple-choice answers.\n\n"
+        "Good example: 'Should I use SQLite (simpler, single-file) or PostgreSQL "
+        "(scales better) for the task store? The rest of the code is async; pick "
+        "one and I will implement it.'\n"
+        "Bad example: 'What should I do?'"
     )
     durable_idempotent = True
 

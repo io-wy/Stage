@@ -8,6 +8,7 @@ standalone CoreCoder runs (creates a local runner).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from openagents_orchestration.core.agent_loader import (
 )
 from openagents_orchestration.core.runner import OrchestratorRunner
 
-_MAX_SUB_AGENT_DEPTH = 2
+_MAX_SUB_AGENT_DEPTH = 1
 
 
 @dataclass
@@ -50,7 +51,7 @@ class SubAgentTool(ToolPlugin):
         "context window. Either choose an existing agent_type (e.g. reviewer, "
         "researcher, coder), OR pass agent_spec to define a one-off agent inline "
         "(id + prompts + tools, extends the shared base). "
-        "Sub-agents cannot spawn further sub-agents beyond depth 2, "
+        "Sub-agents cannot spawn further sub-agents beyond depth 1, "
         "so keep the task self-contained. "
         "Use for tasks that need focused exploration or independent verification, "
         "not for trivial edits under ~3 file reads."
@@ -133,15 +134,15 @@ class SubAgentTool(ToolPlugin):
             agent_type = agent_def.id
 
         if not agent_type:
-            raise ToolError(
-                "agent_type or agent_spec is required", tool_name=self.name
-            )
+            raise ToolError("agent_type or agent_spec is required", tool_name=self.name)
         if not instruction:
             raise ToolError("instruction is required", tool_name=self.name)
 
         current_depth = 0
         if context is not None:
-            current_depth = int(getattr(context, "state", {}).get("__sub_agent_depth__", 0) or 0)
+            current_depth = int(
+                getattr(context, "state", {}).get("__sub_agent_depth__", 0) or 0
+            )
         if current_depth >= _MAX_SUB_AGENT_DEPTH:
             raise ToolError(
                 f"Sub-agent depth limit ({_MAX_SUB_AGENT_DEPTH}) reached. "
@@ -167,20 +168,16 @@ class SubAgentTool(ToolPlugin):
     async def _spawn_via_runner(
         self, runner: Any, agent_type: str, instruction: str, depth: int
     ) -> dict[str, Any]:
+        # Leaf-ify the child: strip the sub_agent tool so it physically cannot
+        # recurse further — a hard guard complementing the depth counter.
+        leaf_type = self._leafify(agent_type, runner)
         agent_id = f"sub-{agent_type}-{self._short_id()}"
         try:
-            output = await runner.run_agent(
-                agent_type=agent_type,
+            outcome = await runner.run_agent(
+                agent_type=leaf_type,
                 input_text=instruction,
                 agent_id=agent_id,
                 state={"__sub_agent_depth__": depth},
-            )
-        except TypeError:
-            # Older runners may not accept state=.
-            output = await runner.run_agent(
-                agent_type=agent_type,
-                input_text=instruction,
-                agent_id=agent_id,
             )
         except Exception as exc:
             return {
@@ -191,13 +188,20 @@ class SubAgentTool(ToolPlugin):
                 "error": str(exc),
                 "message": f"Sub-agent {agent_type} failed: {exc}",
             }
+        output = str(getattr(outcome, "output", "") or "")
+        status_value = getattr(getattr(outcome, "status", None), "value", "")
+        status = "completed" if status_value == "completed" else "failed"
         return {
             "agent_type": agent_type,
             "agent_id": agent_id,
-            "status": "completed",
+            "status": status,
             "output": output,
-            "error": None,
-            "message": f"Sub-agent {agent_type} completed.",
+            "error": None if status == "completed" else status_value,
+            "message": (
+                f"Sub-agent {agent_type} completed. Result: {self._clean_output(output)[:600]}"
+                if status == "completed"
+                else f"Sub-agent {agent_type} failed: {status_value}"
+            ),
         }
 
     async def _spawn_standalone(
@@ -218,16 +222,19 @@ class SubAgentTool(ToolPlugin):
         runner._current_work_dir = repo_root
         runner._deps = _MinimalDeps()
 
+        leaf_type = self._leafify(agent_type, runner)
         agent_id = f"sub-{agent_type}-{self._short_id()}"
         try:
             result = await runner._run_single(
                 agent_id=agent_id,
-                agent_type=agent_type,
+                agent_type=leaf_type,
                 input_text=instruction,
                 state={"__sub_agent_depth__": depth},
             )
             output = result.final_output or ""
-            status = "completed" if result.stop_reason.value == "completed" else "failed"
+            status = (
+                "completed" if result.stop_reason.value == "completed" else "failed"
+            )
             error = None if status == "completed" else str(result.stop_reason)
         except Exception as exc:
             output = ""
@@ -243,7 +250,7 @@ class SubAgentTool(ToolPlugin):
             "output": output,
             "error": error,
             "message": (
-                f"Sub-agent {agent_type} completed."
+                f"Sub-agent {agent_type} completed. Result: {self._clean_output(output)[:600]}"
                 if status == "completed"
                 else f"Sub-agent {agent_type} failed: {error}"
             ),
@@ -267,3 +274,56 @@ class SubAgentTool(ToolPlugin):
         import uuid
 
         return uuid.uuid4().hex[:6]
+
+    @staticmethod
+    def _clean_output(raw: Any) -> str:
+        """Extract clean text from a sub-agent's output.
+
+        PIT-001: ``run_agent`` sometimes yields an outcome whose ``output`` is the
+        repr of a nested ``PatternOutcome`` rather than plain text. Pull the inner
+        ``output=...`` value out so the parent coder sees the real result instead
+        of a struct dump.
+        """
+        s = str(raw or "").strip()
+        if s.startswith("PatternOutcome(output="):
+            m = re.search(r"output=(['\"])(.*?)\1(?:, status=|\))", s, re.DOTALL)
+            if m:
+                return m.group(2).strip()
+        return s
+
+    @staticmethod
+    def _tool_ref_id(ref: Any) -> str:
+        """Extract the tool id from a compiled ToolRef (dict or pydantic model)."""
+        if isinstance(ref, dict):
+            return str(ref.get("id", ""))
+        return str(getattr(ref, "id", ""))
+
+    def _leafify(self, agent_type: str, runner: Any) -> str:
+        """Return an id for a leaf clone of ``agent_type`` with ``sub_agent`` stripped.
+
+        Children spawned by a coder are leaves: at MAX_DEPTH=1 the coder may
+        delegate exactly one level, and that level must not recurse. Removing
+        the sub_agent tool from the child is a deterministic guard that does
+        not rely on the LLM honoring the depth counter. Falls back to the
+        original type if the role is unknown or not clonable (the depth counter
+        still bounds it).
+        """
+        leaf_id = f"{agent_type}__leaf"
+        agents = getattr(runner, "_agents_by_id", None)
+        if not isinstance(agents, dict):
+            return agent_type
+        if leaf_id in agents:
+            return leaf_id
+        src = agents.get(agent_type)
+        if src is None or not hasattr(src, "model_copy"):
+            return agent_type
+        src_tools = list(getattr(src, "tools", []))
+        # 本就不带 sub_agent 的角色无需叶子化（避免冗余 __leaf 副本）。
+        if not any(self._tool_ref_id(t) == "sub_agent" for t in src_tools):
+            return agent_type
+        leaf_tools = [t for t in src_tools if self._tool_ref_id(t) != "sub_agent"]
+        leaf_def = src.model_copy(update={"id": leaf_id, "tools": leaf_tools})
+        agents[leaf_id] = leaf_def
+        if hasattr(runner, "_bundles"):
+            runner._bundles.pop(leaf_id, None)
+        return leaf_id

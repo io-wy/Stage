@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import contextlib
 import difflib
-from pathlib import Path
 from typing import Any
 
 from openagents.errors.exceptions import ModelRetryError, ToolError
@@ -19,36 +18,11 @@ from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 from openagents_orchestration.store.artifact_store import infer_task_id
+from openagents_orchestration.tools.corecoder._paths import (
+    resolve_agent_path as _resolve_path,
+)
 
 _MAX_DIFF_CHARS = 3000
-
-
-def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
-    """Resolve a file path relative to the agent's working directory."""
-    path = Path(file_path)
-    if path.is_absolute():
-        return path
-    base: Path | None = None
-    if context is not None:
-        cached = context.scratch.get("bash_cwd")
-        if isinstance(cached, str):
-            base = Path(cached)
-        else:
-            runner = getattr(getattr(context, "deps", None), "runner", None)
-            cwd = getattr(runner, "_current_work_dir", None)
-            if cwd is not None:
-                base = Path(cwd)
-    if base is None:
-        base = Path.cwd()
-
-    # Agents sometimes include the work-dir basename even though paths are
-    # already resolved relative to it. Strip that leading segment to avoid
-    # looking under a nested work directory.
-    parts = path.parts
-    if parts and parts[0] == base.name:
-        path = Path(*parts[1:])
-
-    return base / path
 
 
 class EditFileTool(ToolPlugin):
@@ -56,9 +30,34 @@ class EditFileTool(ToolPlugin):
 
     name = "edit_file"
     description = (
-        "Edit a file by replacing an exact substring match. The old_string MUST "
-        "appear exactly once; include enough surrounding context to make it unique. "
-        "Returns a unified diff."
+        "Edit a file by replacing one exact, unique substring. "
+        "The preferred tool for changing an existing file — surgical and cheap.\n\n"
+        "# Effects\n"
+        "- Replaces the single occurrence of `old_string` with `new_string` and "
+        "returns a unified diff.\n"
+        "- Records the path as dirty and shares the new content via the ArtifactStore.\n\n"
+        "# When to use\n"
+        "- Any targeted change to an existing file: fix a line, rename a local symbol, "
+        "tweak a value.\n\n"
+        "# When NOT to use\n"
+        "- Creating a new file or fully rewriting one — use write_file.\n"
+        "- A change spanning many files or hunks — use apply_patch.\n"
+        "- The change is described in prose, not an exact string you can copy — use "
+        "semantic_edit.\n\n"
+        "# Matching rules\n"
+        "- `old_string` must appear EXACTLY ONCE. Zero matches or multiple matches are "
+        "rejected, and you must retry with more surrounding context.\n"
+        "- Copy `old_string` verbatim from read_file output (whitespace and indentation "
+        "included), but DROP the leading line-number-and-tab prefix.\n\n"
+        "# Paths\n"
+        "- file_path may be absolute, or relative to your working directory (the cwd "
+        "shown in your task input); relative is preferred.\n"
+        "- Do NOT prepend the work directory's own name: if cwd is `.eval_work`, use "
+        "`src/foo.py`, not `.eval_work/src/foo.py` (that leading segment is auto-stripped).\n\n"
+        "# Common mistakes\n"
+        "- Too little context, so `old_string` matches several places (rejected).\n"
+        "- Pasting the leading line-number-and-tab prefix from read_file into "
+        "`old_string` (it won't match)."
     )
     durable_idempotent = False
 
@@ -94,7 +93,9 @@ class EditFileTool(ToolPlugin):
         if not file_path:
             raise ToolError("file_path is required", tool_name=self.name)
         if not isinstance(old_string, str) or not old_string:
-            raise ToolError("old_string must be a non-empty string", tool_name=self.name)
+            raise ToolError(
+                "old_string must be a non-empty string", tool_name=self.name
+            )
         if not isinstance(new_string, str):
             raise ToolError("new_string must be a string", tool_name=self.name)
 

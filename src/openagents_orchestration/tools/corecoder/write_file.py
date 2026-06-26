@@ -9,7 +9,6 @@ or run a verification pass over only the touched files.
 from __future__ import annotations
 
 import contextlib
-from pathlib import Path
 from typing import Any
 
 from openagents.errors.exceptions import ToolError
@@ -17,46 +16,9 @@ from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
 from openagents_orchestration.store.artifact_store import infer_task_id
-
-
-def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
-    """Resolve a file path relative to the agent's working directory.
-
-    Priority:
-    1. Already absolute → use as-is
-    2. bash_cwd cached in scratch → resolve relative to that
-    3. runner._current_work_dir → resolve relative to that
-    4. Fallback to Path.cwd()
-
-    Also strips the work-dir basename prefix when the agent accidentally
-    includes it in the relative path (e.g. writing to
-    `.eval_work/src/foo.py` while cwd is already `.eval_work`).
-    """
-    path = Path(file_path)
-    if path.is_absolute():
-        return path
-
-    base: Path | None = None
-    if context is not None:
-        cached = context.scratch.get("bash_cwd")
-        if isinstance(cached, str):
-            base = Path(cached)
-        else:
-            runner = getattr(getattr(context, "deps", None), "runner", None)
-            cwd = getattr(runner, "_current_work_dir", None)
-            if cwd is not None:
-                base = Path(cwd)
-    if base is None:
-        base = Path.cwd()
-
-    # Agents sometimes include the work-dir basename even though writes are
-    # already rooted at work_dir. Strip that leading segment to avoid
-    # creating nested work directories.
-    parts = path.parts
-    if parts and parts[0] == base.name:
-        path = Path(*parts[1:])
-
-    return base / path
+from openagents_orchestration.tools.corecoder._paths import (
+    resolve_agent_path as _resolve_path,
+)
 
 
 class WriteFileTool(ToolPlugin):
@@ -64,9 +26,31 @@ class WriteFileTool(ToolPlugin):
 
     name = "write_file"
     description = (
-        "Write a complete file, always replacing the entire existing content. "
-        "You must provide the FULL file content, not just the changed lines. "
-        "Creates parent directories. Returns line count."
+        "Write a complete file, overwriting any existing content entirely. "
+        "Use it to create new files or fully rewrite small ones.\n\n"
+        "# Effects\n"
+        "- Replaces the whole file with `content` (no merge); missing parent "
+        "directories are created automatically.\n"
+        "- Records the path as dirty for the run's verification pass and shares it "
+        "with other agents via the ArtifactStore.\n"
+        "- Returns lines_written, bytes_written, and the resolved absolute file_path.\n\n"
+        "# When to use\n"
+        "- Creating a brand-new file.\n"
+        "- Rewriting a short file where a full replacement is clearer than a patch.\n\n"
+        "# When NOT to use\n"
+        "- Changing a few lines of an existing file — use edit_file (cheaper, and it "
+        "won't clobber unrelated code).\n"
+        "- A change spanning several files or hunks — use apply_patch.\n"
+        "- You only have the changed lines, not the whole file — write_file needs the "
+        "COMPLETE content, or it truncates the file down to just what you pass.\n\n"
+        "# Paths\n"
+        "- file_path may be absolute, or relative to your working directory (the cwd "
+        "shown in your task input); relative is preferred.\n"
+        "- Do NOT prepend the work directory's own name: if cwd is `.eval_work`, use "
+        "`src/foo.py`, not `.eval_work/src/foo.py` (that leading segment is auto-stripped).\n\n"
+        "# Common mistakes\n"
+        "- Passing a partial snippet as `content` — everything else in the file is lost.\n"
+        "- Using write_file for a one-line tweak instead of edit_file."
     )
     durable_idempotent = False  # writes are not safe to replay blindly
 
@@ -82,8 +66,14 @@ class WriteFileTool(ToolPlugin):
         return {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string"},
-                "content": {"type": "string"},
+                "file_path": {
+                    "type": "string",
+                    "description": "File to write. Absolute, or relative to your working directory.",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Complete new file content — replaces the entire file.",
+                },
             },
             "required": ["file_path", "content"],
         }
@@ -101,7 +91,9 @@ class WriteFileTool(ToolPlugin):
         path = _resolve_path(file_path, context)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        n_lines = content.count("\n") + (0 if content.endswith("\n") or not content else 1)
+        n_lines = content.count("\n") + (
+            0 if content.endswith("\n") or not content else 1
+        )
 
         if context is not None:
             dirty = context.scratch.setdefault("dirty_files", set())

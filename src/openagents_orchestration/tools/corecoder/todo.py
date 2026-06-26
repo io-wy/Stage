@@ -167,7 +167,9 @@ class TodoReadTool(ToolPlugin):
 
         counts = {"pending": 0, "in_progress": 0, "completed": 0}
         for t in todos:
-            counts[t.get("status", "pending")] = counts.get(t.get("status", "pending"), 0) + 1
+            counts[t.get("status", "pending")] = (
+                counts.get(t.get("status", "pending"), 0) + 1
+            )
 
         lines = [f"Todo list ({counts['completed']}/{len(todos)} done):"]
         for t in todos:

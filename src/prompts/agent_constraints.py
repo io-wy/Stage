@@ -24,6 +24,8 @@ contains your actual code (use read_file to double-check).
 You MUST use the EXACT directory/package name specified in the task description.
 If the task says "under foo_bar_qux", create foo_bar_qux/__init__.py, NOT foo_bar/ or qux/.
 Do not shorten, abbreviate, or rename the target directory.
+If the task does not specify a directory but names a package/module, create a
+matching directory (e.g. task says "build a package named my_api" → create my_api/).
 
 # CRITICAL: Completion rule
 When all expected artifacts are written, tests pass, and no further

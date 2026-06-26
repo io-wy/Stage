@@ -14,33 +14,14 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
+from openagents_orchestration.tools.corecoder._paths import (
+    resolve_agent_path as _resolve_path,
+)
+
 _SKIP_DIRS = frozenset(
     {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"}
 )
 _MAX_RESULTS = 200
-
-
-def _resolve_path(path_str: str, context: RunContext[Any] | None) -> Path:
-    """Resolve a path relative to the agent's working directory."""
-    path = Path(path_str)
-    if path.is_absolute():
-        return path
-    base: Path | None = None
-    if context is not None:
-        cached = context.scratch.get("bash_cwd")
-        if isinstance(cached, str):
-            base = Path(cached)
-        else:
-            runner = getattr(getattr(context, "deps", None), "runner", None)
-            cwd = getattr(runner, "_current_work_dir", None)
-            if cwd is not None:
-                base = Path(cwd)
-    if base is None:
-        base = Path.cwd()
-    parts = path.parts
-    if parts and parts[0] == base.name:
-        path = Path(*parts[1:])
-    return base / path
 
 
 class ListDirectoryTool(ToolPlugin):
@@ -48,9 +29,27 @@ class ListDirectoryTool(ToolPlugin):
 
     name = "list_directory"
     description = (
-        "List files and directories at a path. Returns a tree-like listing "
-        "with entries sorted alphabetically. Use this to understand project "
-        "structure before reading files."
+        "List files and directories under a path, as an indented tree. "
+        "Use it to learn project layout before reading or editing.\n\n"
+        "# Effects / returns\n"
+        "- A sorted tree (directories first), each entry tagged dir/file, plus a "
+        "structured entries list.\n"
+        "- Skips noise dirs (.git, node_modules, __pycache__, .venv, dist, build, ...).\n\n"
+        "# When to use\n"
+        "- Orienting in an unfamiliar directory before read_file.\n"
+        "- Confirming a file or folder was actually created.\n\n"
+        "# When NOT to use\n"
+        "- Finding files by name pattern across the tree — use glob.\n"
+        "- Searching file contents — use grep.\n\n"
+        "# Paths\n"
+        "- path may be absolute, or relative to your working directory (the cwd "
+        "shown in your task input); defaults to '.'.\n"
+        "- Do NOT prepend the work directory's own name (it is auto-stripped).\n\n"
+        "# Parameters\n"
+        "- path (default '.'): directory to list.\n"
+        "- depth (default 1, max 3): recursion levels (0 = just the given path).\n\n"
+        "# Common mistakes\n"
+        "- Huge depth on a big tree — output is capped; narrow the path instead."
     )
     durable_idempotent = True
 
@@ -121,7 +120,9 @@ def _walk(
     if depth > max_depth:
         return
     try:
-        items = sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        items = sorted(
+            current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())
+        )
     except (OSError, PermissionError):
         return
     for item in items:

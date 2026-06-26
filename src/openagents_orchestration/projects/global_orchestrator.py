@@ -19,13 +19,13 @@ from typing import Any
 from openagents_orchestration.core.runner import OrchestratorRunner
 from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.core.sub_state_board import SubStateBoard
+from openagents_orchestration.models.delivery import DeliveryReport
 from openagents_orchestration.projects.human_channel import HumanChannel
 from openagents_orchestration.projects.metrics import OrchestrationMetrics
 from openagents_orchestration.projects.monitor_agent import MonitorAgent
 from openagents_orchestration.projects.project import Project, ProjectStatus
 from openagents_orchestration.projects.security import AuditLog
 from openagents_orchestration.projects.team import Team, TeamSpec
-from openagents_orchestration.models.delivery import DeliveryReport
 from openagents_orchestration.transport.channel_policy import (
     DEFAULT_GLOBAL_POLICY,
 )
@@ -62,7 +62,6 @@ class GlobalOrchestrator:
         config_path: str | Path,
         *,
         persist_dir: str | None = None,
-        collaborative_mode: str = "auto",
         enable_monitor: bool = True,
         global_budget: Budget | None = None,
     ):
@@ -77,7 +76,6 @@ class GlobalOrchestrator:
         self._audit_log = AuditLog()
         self._metrics = OrchestrationMetrics()
         self._persist_dir = Path(persist_dir) if persist_dir else None
-        self._collaborative_mode = collaborative_mode
         self._enable_monitor = enable_monitor
         self._monitor: MonitorAgent | None = None
 
@@ -121,12 +119,11 @@ class GlobalOrchestrator:
             self._runner = OrchestratorRunner(
                 self._config_path,
                 persist_dir=str(self._persist_dir) if self._persist_dir else None,
-                collaborative_mode=self._collaborative_mode,
                 enable_monitor_resident=False,  # GlobalOrchestrator uses its own MonitorAgent
             )
             # Wire human channel into project state board
             if project.state_board is not None:
-                project.state_board._human_channel = self._human_channel
+                project.state_board.human_channel_service.channel = self._human_channel
 
             report = await self._runner.run(
                 objective=objective,
@@ -172,7 +169,7 @@ class GlobalOrchestrator:
 
         # Wire human channel
         if project.state_board is not None:
-            project.state_board._human_channel = self._human_channel
+            project.state_board.human_channel_service.channel = self._human_channel
 
         # Allocate from global budget
         allocated = self._allocate_budget(project.project_id, budget)

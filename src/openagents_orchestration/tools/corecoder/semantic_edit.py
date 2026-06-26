@@ -8,7 +8,6 @@ More forgiving than edit_file when the agent struggles with exact string matchin
 from __future__ import annotations
 
 import difflib
-from pathlib import Path
 from typing import Any
 
 from openagents.errors.exceptions import ModelRetryError, ToolError
@@ -16,33 +15,9 @@ from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 from pydantic import BaseModel
 
-
-def _resolve_path(file_path: str, context: RunContext[Any] | None) -> Path:
-    """Resolve a file path relative to the agent's working directory."""
-    path = Path(file_path)
-    if path.is_absolute():
-        return path
-    base: Path | None = None
-    if context is not None:
-        cached = context.scratch.get("bash_cwd")
-        if isinstance(cached, str):
-            base = Path(cached)
-        else:
-            runner = getattr(getattr(context, "deps", None), "runner", None)
-            cwd = getattr(runner, "_current_work_dir", None)
-            if cwd is not None:
-                base = Path(cwd)
-    if base is None:
-        base = Path.cwd()
-
-    # Agents sometimes include the work-dir basename even though paths are
-    # already resolved relative to it. Strip that leading segment to avoid
-    # looking under a nested work directory.
-    parts = path.parts
-    if parts and parts[0] == base.name:
-        path = Path(*parts[1:])
-
-    return base / path
+from openagents_orchestration.tools.corecoder._paths import (
+    resolve_agent_path as _resolve_path,
+)
 
 _MAX_DIFF_CHARS = 3000
 
@@ -59,11 +34,30 @@ class SemanticEditTool(ToolPlugin):
 
     name = "semantic_edit"
     description = (
-        "Edit a file using a natural-language instruction. "
-        "The LLM reads the file, applies the described change, and writes back the result. "
-        "Use this when edit_file fails due to exact-match issues, or when the desired change "
-        "is complex (e.g. 'refactor this function to use async/await', 'add try/except around all DB calls'). "
-        "WARNING: This consumes extra LLM tokens — prefer edit_file for simple, well-defined changes."
+        "Edit a file by describing the change in natural language; an LLM rewrites the "
+        "whole file and saves it. The forgiving fallback when exact-match editing fails.\n\n"
+        "# Effects\n"
+        "- Sends the current file plus your `instruction` to the LLM, overwrites the "
+        "file with the result, and returns a unified diff.\n"
+        "- Returns changed=false (no write) when the model hands back identical content.\n"
+        "- Costs extra LLM tokens and latency — it is a full read+generate+write cycle.\n\n"
+        "# When to use\n"
+        "- edit_file keeps failing because the exact string is hard to pin down.\n"
+        "- The change is broad or pattern-based: 'refactor this function to async/await', "
+        "'wrap every DB call in try/except'.\n\n"
+        "# When NOT to use\n"
+        "- A simple, well-defined change — use edit_file (far cheaper and deterministic).\n"
+        "- Creating a file — use write_file.\n"
+        "- Large files — the entire file passes through the model under a ~4k-token "
+        "output cap, so big files may be truncated or fail.\n\n"
+        "# Paths\n"
+        "- file_path may be absolute, or relative to your working directory (the cwd "
+        "shown in your task input); relative is preferred.\n"
+        "- Do NOT prepend the work directory's own name: if cwd is `.eval_work`, use "
+        "`src/foo.py`, not `.eval_work/src/foo.py` (that leading segment is auto-stripped).\n\n"
+        "# Common mistakes\n"
+        "- Vague instructions ('make it better') — name the function, pattern, or lines.\n"
+        "- Reaching for this before trying edit_file."
     )
     durable_idempotent = False
 
@@ -161,9 +155,7 @@ class SemanticEditTool(ToolPlugin):
                 tools=None,
             )
         except Exception as exc:
-            raise ModelRetryError(
-                f"LLM call failed for semantic_edit: {exc}"
-            ) from exc
+            raise ModelRetryError(f"LLM call failed for semantic_edit: {exc}") from exc
 
         raw_text = (response.output_text or "").strip()
         if not raw_text:

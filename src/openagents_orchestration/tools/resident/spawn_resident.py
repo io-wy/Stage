@@ -17,10 +17,19 @@ class SpawnResidentTool(ToolPlugin):
 
     name = "spawn_resident"
     description = (
-        "Start a persistent resident agent. The agent stays in memory, "
-        "waits for messages via send_to_resident, and processes them with "
-        "persistent conversation history. Use for roles that need ongoing "
-        "collaboration (e.g. a lead coder that handles multiple tasks)."
+        "Start a persistent resident agent that stays in memory and processes "
+        "messages asynchronously. Unlike spawn_agent (one-shot), a resident keeps "
+        "its transcript and state across multiple turns.\n\n"
+        "Use spawn_resident when:\n"
+        "- A task needs sustained iteration (debugging, complex refactoring, multi-turn coding).\n"
+        "- You want a dedicated worker that handles a stream of related sub-tasks.\n"
+        "- A spawn_agent task failed because it needed more back-and-forth than a single context allows.\n\n"
+        "Do NOT use spawn_resident when:\n"
+        "- The task is a single, bounded unit of work — use spawn_agent instead.\n"
+        "- You only need a one-time answer — use spawn_agent instead.\n"
+        "- You are not ready to send work immediately — an idle resident may time out.\n\n"
+        "After spawning, you MUST immediately call send_to_resident with the first task. "
+        "Returns a resident_id used for subsequent send_to_resident and stop_resident calls."
     )
     durable_idempotent = False
 

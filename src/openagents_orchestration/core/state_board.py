@@ -6,8 +6,6 @@ that can be serialized into an LLM-readable snapshot for decision-making.
 
 from __future__ import annotations
 
-import asyncio
-import concurrent.futures
 import contextlib
 import sys
 import time
@@ -19,23 +17,13 @@ from openagents_orchestration.core.decision_history import (
     DecisionHistory,
     DecisionRecord,
 )
+from openagents_orchestration.core.mailbox_manager import MailboxManager
 from openagents_orchestration.core.task_state_machine import TaskStateMachine
-from openagents_orchestration.projects.human_channel import HumanChannel
-from openagents_orchestration.mailbox.base import Mailbox
-from openagents_orchestration.mailbox.memory import InMemoryMailbox
 from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
-from openagents_orchestration.models.message import MessageHeader, StructuredMessage
+from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.models.trace import TraceContext
-from openagents_orchestration.transport.channel_policy import (
-    DEFAULT_GLOBAL_POLICY,
-    ChannelPolicy,
-    ChannelPolicyError,
-)
-from openagents_orchestration.transport.routing import RoutingTable, TopologyType
-
-# Module-level thread pool singleton for _run_sync bridge calls.
-_sync_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="sb-sync")
+from openagents_orchestration.projects.human_channel_service import HumanChannelService
 
 
 class AgentStatus(StrEnum):
@@ -192,12 +180,15 @@ class StateBoard:
         snapshotter: Any = None,
         mailbox_backend: str = "memory",
         redis_url: str | None = None,
-        channel_policy: ChannelPolicy | None = None,
-        human_channel: HumanChannel | None = None,
+        channel_policy: Any = None,
+        human_channel: Any = None,
+        mailbox_manager: MailboxManager | None = None,
+        human_channel_service: HumanChannelService | None = None,
         project_id: str = "",
         team_id: str = "",
         max_events: int = 10_000,
         snapshot_interval_s: float = 5.0,
+        hooks: Any = None,
     ):
         self.objective = objective
         self.project_id = project_id
@@ -211,31 +202,25 @@ class StateBoard:
         self._max_events = max_events
         self._final_summary: str = ""
         self._echo = echo
-        self._human_channel = human_channel or HumanChannel()
         self._recorder = recorder
         self._snapshotter = snapshotter
         self._last_snapshot_ts: float = 0.0
         self._snapshot_interval_s = snapshot_interval_s
         self._observers: list[Any] = []  # event bus subscribers
+        self._hooks = hooks
 
-        # Mailbox system (v2)
-        self._mailbox_backend = mailbox_backend
-        self._redis_client: Any = None
-        self._mailboxes: dict[str, Mailbox] = {}
-        if mailbox_backend == "redis" and redis_url:
-            self._init_redis(redis_url)
-
-        # Mailbox system helpers (added after init so mypy sees them)
-        self._mailbox_cls = InMemoryMailbox
-
-        # Channel policy
-        self._channel_policy = channel_policy or DEFAULT_GLOBAL_POLICY
+        # Messaging and human-channel are now composed services.
+        self._mailbox_manager = mailbox_manager or MailboxManager(
+            mailbox_backend=mailbox_backend,
+            redis_url=redis_url,
+            channel_policy=channel_policy,
+        )
+        self._human_channel_service = human_channel_service or HumanChannelService(
+            human_channel
+        )
 
         # Tracing (P4)
         self._traces: dict[str, TraceContext] = {}
-
-        # Routing (P5)
-        self._routing_table = RoutingTable()
 
         # Change tracking for incremental snapshot diff
         self._previous_task_status: dict[str, str] = {}
@@ -244,64 +229,24 @@ class StateBoard:
         self.project_context: dict[str, Any] = {
             "test_reports": [],      # latest pytest output per module
             "error_logs": [],        # structured errors from agent runs
-            "code_changes": [],      # diff-like summary of recent edits
-            "shared_notes": {},      # key findings agents want to persist
         }
-        self._mail_sent_callbacks: list[Any] = []  # collaboration loop wake hooks
+
+    @property
+    def mailbox_manager(self) -> MailboxManager:
+        """Exposed for callers that need direct mailbox access (e.g. Runner)."""
+        return self._mailbox_manager
+
+    @property
+    def human_channel_service(self) -> HumanChannelService:
+        """Exposed for callers that need direct human-channel access."""
+        return self._human_channel_service
 
     def on_mail_sent(self, callback: Any) -> None:
         """Register a callback invoked on every ``send_structured``.
 
-        Called as ``callback()`` — no arguments. Used by the collaboration
-        loop to wake when a resident sends a signal via mailbox.
+        Delegated to ``MailboxManager``.
         """
-        self._mail_sent_callbacks.append(callback)
-
-    # -- mailbox v2 helpers --------------------------------------------------
-
-    def _init_redis(self, redis_url: str) -> None:
-        """Attempt to connect to Redis; fall back to memory on failure."""
-        try:
-            import redis.asyncio as aioredis
-            self._redis_client = aioredis.from_url(redis_url, decode_responses=True)
-            self._mailbox_cls = None
-        except (ImportError, ValueError, OSError, ConnectionError) as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Redis init failed for %s (%s: %s), falling back to memory",
-                redis_url, type(exc).__name__, exc,
-            )
-            self._mailbox_backend = "memory"
-            self._redis_client = None
-
-    async def validate_redis(self) -> bool:
-        """Ping Redis if configured; downgrade to memory on failure."""
-        if self._mailbox_backend != "redis" or self._redis_client is None:
-            return True
-        try:
-            await self._redis_client.ping()
-            return True
-        except (OSError, ConnectionError, TimeoutError) as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Redis unreachable (%s: %s), falling back to in-memory mailbox",
-                type(exc).__name__, exc,
-            )
-            self._mailbox_backend = "memory"
-            self._redis_client = None
-            return False
-
-    def _get_or_create_mailbox(self, agent_id: str) -> Mailbox:
-        """Return the mailbox for an agent, creating it if necessary."""
-        if agent_id not in self._mailboxes:
-            if self._mailbox_backend == "redis" and self._redis_client is not None:
-                from openagents_orchestration.mailbox.redis import RedisMailbox
-                self._mailboxes[agent_id] = RedisMailbox(
-                    self._redis_client, agent_id
-                )
-            else:
-                self._mailboxes[agent_id] = InMemoryMailbox()
-        return self._mailboxes[agent_id]
+        self._mailbox_manager.on_mail_sent(callback)
 
     # -- tracing helpers -----------------------------------------------------
 
@@ -339,11 +284,15 @@ class StateBoard:
                 return msg
         return msg
 
-    # -- routing helpers -----------------------------------------------------
+    # -- mailbox / routing adapters ------------------------------------------
+
+    async def validate_redis(self) -> bool:
+        """Delegated to ``MailboxManager``."""
+        return await self._mailbox_manager.validate_redis()
 
     def subscribe_topic(self, agent_id: str, topic: str) -> None:
-        """Subscribe an agent to a pubsub topic."""
-        self._routing_table.subscribe(agent_id, topic)
+        """Delegated to ``MailboxManager``; also logs the event."""
+        self._mailbox_manager.subscribe_topic(agent_id, topic)
         self.log_event(
             "routing.subscribe",
             agent_id=agent_id,
@@ -352,70 +301,146 @@ class StateBoard:
         )
 
     def unsubscribe_topic(self, agent_id: str, topic: str) -> None:
-        """Unsubscribe an agent from a pubsub topic."""
-        self._routing_table.unsubscribe(agent_id, topic)
+        """Delegated to ``MailboxManager``."""
+        self._mailbox_manager.unsubscribe_topic(agent_id, topic)
 
     def add_route(self, pattern: str, topology: str, *, priority_boost: int = 0) -> None:
-        """Add a routing rule (e.g. pattern='type:reviewer', topology='broadcast')."""
-        from openagents_orchestration.transport.routing import RouteEntry
-        self._routing_table.add_route(
-            RouteEntry(pattern=pattern, topology=topology, priority_boost=priority_boost)
-        )
-
-    # -- DLQ inspection ------------------------------------------------------
+        """Delegated to ``MailboxManager``."""
+        self._mailbox_manager.add_route(pattern, topology, priority_boost=priority_boost)
 
     async def inspect_dlq(self) -> dict[str, dict[str, Any]]:
-        """Return DLQ summary per agent.  Called by the Director each cycle."""
-        result: dict[str, dict[str, Any]] = {}
-        for agent_id, mbox in self._mailboxes.items():
-            size = await mbox.dlq_size()
-            if size:
-                result[agent_id] = {
-                    "size": size,
-                    "latest": await mbox.dlq_peek(limit=3),
-                }
-        return result
+        """Delegated to ``MailboxManager``."""
+        return await self._mailbox_manager.inspect_dlq()
 
     def aggregate_mailbox_metrics(self) -> dict[str, Any]:
-        """Return aggregated mailbox metrics across all agents.
+        """Delegated to ``MailboxManager``."""
+        return self._mailbox_manager.aggregate_mailbox_metrics()
 
-        Provides a global view of the messaging subsystem: total enqueued,
-        dequeued, acked, nacked, DLQ size, and circuit-breaker state.
-        Useful for monitoring, alerting, and Prometheus export.
-        """
-        total = {
-            "mailbox_count": 0,
-            "total_enqueued": 0,
-            "total_dequeued": 0,
-            "total_acked": 0,
-            "total_nacked": 0,
-            "total_enqueue_rejected": 0,
-            "total_expired": 0,
-            "total_dlq_size": 0,
-            "total_dlq_moved": 0,
-            "total_dlq_replayed": 0,
-            "per_agent": {},
-        }
-        for agent_id, mbox in self._mailboxes.items():
-            total["mailbox_count"] += 1
-            metrics = getattr(mbox, "metrics", None)
-            if metrics is not None:
-                snap = metrics.snapshot()
-                total["total_enqueued"] += snap["enqueued"]
-                total["total_dequeued"] += snap["dequeued"]
-                total["total_acked"] += snap["acked"]
-                total["total_nacked"] += snap["nacked"]
-                total["total_enqueue_rejected"] += snap["enqueue_rejected"]
-                total["total_expired"] += snap["expired"]
-                total["total_dlq_moved"] += snap["dlq_moved"]
-                total["total_dlq_replayed"] += snap["dlq_replayed"]
-                total["per_agent"][agent_id] = snap
-            # Circuit breaker state (InMemoryMailbox only)
-            cb_state = getattr(mbox, "_circuit_state", None)
-            if cb_state and cb_state != "closed":
-                total["per_agent"][agent_id] = total["per_agent"].get(agent_id, {})
-                total["per_agent"][agent_id]["circuit_state"] = cb_state
-        return total
+    # -- mailbox legacy sync adapters ----------------------------------------
+
+    def send_mail(self, from_id: str, to_id: str, content: str) -> None:
+        """Delegated to ``MailboxManager`` (legacy sync API)."""
+        self._mailbox_manager.send_mail(from_id, to_id, content)
+
+    def messages_for(self, recipient: str) -> list[dict[str, Any]]:
+        """Delegated to ``MailboxManager`` (legacy sync API)."""
+        return self._mailbox_manager.messages_for(recipient)
+
+    def clear_mail(self, recipient: str | None = None) -> int:
+        """Delegated to ``MailboxManager`` (legacy sync API)."""
+        return self._mailbox_manager.clear_mail(recipient)
+
+    # -- mailbox async adapters ----------------------------------------------
+
+    async def send_structured(self, msg: StructuredMessage) -> bool:
+        """Inject trace context, then delegate delivery to ``MailboxManager``."""
+        self.propagate_trace(msg)
+        agent = self.agents.get(msg.header.sender)
+        if agent is not None and getattr(agent, "_capability_token", None) is not None:
+            token = agent._capability_token
+            if not token.can_with_verify("send_message", msg.header.recipient):
+                self.log_event(
+                    "mail.auth_failed",
+                    agent_id=msg.header.sender,
+                    message=f"Token does not authorize send_message to {msg.header.recipient}",
+                )
+                return False
+        return await self._mailbox_manager.send_structured(msg)
+
+    async def peek_mailbox(
+        self,
+        recipient: str,
+        limit: int = 5,
+        *,
+        msg_type: str | None = None,
+        sender: str | None = None,
+        priority_min: int | None = None,
+    ) -> list[StructuredMessage]:
+        """Delegated to ``MailboxManager``."""
+        return await self._mailbox_manager.peek_mailbox(
+            recipient, limit, msg_type=msg_type, sender=sender, priority_min=priority_min
+        )
+
+    async def claim_message(self, recipient: str, msg_id: str) -> StructuredMessage | None:
+        """Delegated to ``MailboxManager``."""
+        return await self._mailbox_manager.claim_message(recipient, msg_id)
+
+    async def claim_messages(self, recipient: str, batch_size: int = 10) -> list[StructuredMessage]:
+        """Delegated to ``MailboxManager``."""
+        return await self._mailbox_manager.claim_messages(recipient, batch_size=batch_size)
+
+    async def ack_message(self, recipient: str, msg_id: str) -> None:
+        """Delegated to ``MailboxManager``."""
+        await self._mailbox_manager.ack_message(recipient, msg_id)
+
+    async def nack_message(self, recipient: str, msg_id: str, reason: str = "") -> None:
+        """Delegated to ``MailboxManager``."""
+        await self._mailbox_manager.nack_message(recipient, msg_id, reason)
+
+    async def dlq_replay(self, recipient: str, msg_id: str) -> bool:
+        """Delegated to ``MailboxManager``."""
+        return await self._mailbox_manager.dlq_replay(recipient, msg_id)
+
+    # -- human-channel adapters ----------------------------------------------
+
+    def human_post(self, human_id: str, content: str, *, target_team: str = "") -> None:
+        """Delegated to ``HumanChannelService``."""
+        target_agent = "director" if not target_team else ""
+        self._human_channel_service.human_post(
+            project_id=self.project_id,
+            human_id=human_id,
+            content=content,
+            target_team=target_team,
+            target_agent=target_agent,
+        )
+        self.log_event(
+            "human.post",
+            message=content[:100],
+            human_id=human_id,
+            target_team=target_team,
+        )
+
+    def get_human_conversation(self) -> list[dict[str, Any]]:
+        """Delegated to ``HumanChannelService``."""
+        return self._human_channel_service.get_human_conversation(self.project_id)
+
+    def ask_human(self, question: str, *, options: str = "", from_agent: str = "") -> str:
+        """Delegated to ``HumanChannelService``."""
+        qid = self._human_channel_service.ask_human(
+            project_id=self.project_id,
+            question=question,
+            options=options,
+            from_agent=from_agent,
+            team_id=self.team_id,
+        )
+        self.log_event(
+            "human.asked",
+            agent_id=from_agent,
+            message=f"{qid}: {question[:100]}",
+            question=question,
+            options=options,
+            from_agent=from_agent,
+        )
+        return qid
+
+    def reply_human(self, qid: str, answer: str) -> bool:
+        """Delegated to ``HumanChannelService``."""
+        ok = self._human_channel_service.reply_human(qid, answer)
+        if ok:
+            self.send_mail("human", "director", f"[回复 {qid}] {answer}")
+            self.log_event(
+                "human.replied",
+                message=f"{qid}: {answer[:100]}",
+                qid=qid,
+                answer=answer,
+            )
+        return ok
+
+    def get_human_questions(self, answered: bool | None = None) -> list[dict[str, Any]]:
+        """Delegated to ``HumanChannelService``."""
+        return self._human_channel_service.get_human_questions(
+            project_id=self.project_id, answered=answered
+        )
 
     # -- task management -----------------------------------------------------
 
@@ -483,6 +508,17 @@ class StateBoard:
                 message=", ".join(changed),
                 fields=serializable_fields,
             )
+            # Hook: stateboard.task.update
+            if self._hooks is not None:
+                self._hooks.run(
+                    "stateboard.task.update",
+                    {
+                        "task_id": task_id,
+                        "changed": changed,
+                        "fields": serializable_fields,
+                        "status": status_val,
+                    },
+                )
 
     def get_task(self, task_id: str) -> TaskNode | None:
         return self.tasks.get(task_id)
@@ -513,7 +549,7 @@ class StateBoard:
     def register_agent(self, agent_id: str, agent_type: str) -> None:
         if agent_id not in self.agents:
             self.agents[agent_id] = AgentState(agent_id=agent_id, agent_type=agent_type)
-            self._routing_table.register_agent(agent_id, agent_type)
+            self._mailbox_manager.register_agent(agent_id, agent_type)
             self.log_event("agent.registered", agent_id=agent_id, message=f"Registered {agent_type}")
 
     def set_agent_token(self, agent_id: str, token: Any) -> None:
@@ -529,7 +565,7 @@ class StateBoard:
     def unregister_agent(self, agent_id: str) -> None:
         """Remove an agent from the board and routing table."""
         self.agents.pop(agent_id, None)
-        self._routing_table.unregister_agent(agent_id)
+        self._mailbox_manager.unregister_agent(agent_id)
         self.log_event("agent.unregistered", agent_id=agent_id)
 
     def update_agent(self, agent_id: str, **fields: Any) -> None:
@@ -567,6 +603,17 @@ class StateBoard:
                 message=", ".join(changed),
                 fields=serializable_fields,
             )
+            # Hook: stateboard.agent.update
+            if self._hooks is not None:
+                self._hooks.run(
+                    "stateboard.agent.update",
+                    {
+                        "agent_id": agent_id,
+                        "changed": changed,
+                        "fields": serializable_fields,
+                        "status": status_val,
+                    },
+                )
 
     def get_agent(self, agent_id: str) -> AgentState | None:
         return self.agents.get(agent_id)
@@ -701,6 +748,18 @@ class StateBoard:
             print(" ".join(parts), file=sys.stderr, flush=True)
         # Trigger snapshot if threshold reached
         self._maybe_snapshot()
+        # Hook: stateboard.event.log
+        if self._hooks is not None:
+            self._hooks.run(
+                "stateboard.event.log",
+                {
+                    "event_type": event_type,
+                    "task_id": task_id,
+                    "agent_id": agent_id,
+                    "message": message,
+                    "payload": dict(payload),
+                },
+            )
 
     def _maybe_snapshot(self) -> None:
         """Trigger periodic snapshot if snapshotter is attached and interval elapsed.
@@ -947,9 +1006,9 @@ class StateBoard:
         suggestions: list[str] = []
 
         # 高优先级：需要 human 回复
-        unanswered = self._human_channel.get_pending_questions(project_id=self.project_id)
+        unanswered = self._human_channel_service.get_pending_questions(project_id=self.project_id)
         if unanswered:
-            suggestions.append("check_messages")
+            suggestions.append("show_state")
             return suggestions
 
         # 高优先级：deadline overdue tasks need immediate action
@@ -963,12 +1022,9 @@ class StateBoard:
             suggestions.extend(["spawn_resident", "ask_human"])
 
         # 高优先级：pending messages
-        pending_count = sum(
-            self._run_sync(mbox.size())
-            for mbox in self._mailboxes.values()
-        )
+        pending_count = self._mailbox_manager.aggregate_mailbox_metrics()["total_enqueued"]
         if pending_count:
-            suggestions.append("check_messages")
+            suggestions.append("show_state")
 
         # 有 failed 任务 → 先看原因再决定
         failed = [t for t in self.tasks.values() if t.status == TaskStatus.FAILED]
@@ -996,308 +1052,6 @@ class StateBoard:
             suggestions.append("show_state")
 
         return suggestions
-
-    # -- mailbox API (v2 — legacy sync wrapper over async Mailbox) ------------
-
-
-
-    async def _deliver_to_targets(
-        self,
-        msg: StructuredMessage,
-        topology: TopologyType,
-        targets: list[str],
-    ) -> bool:
-        """Deliver a message to resolved targets (async).
-
-        Populates causality, chains pipeline messages, and logs ``mail.routed``.
-        Called from ``send_structured`` directly and from ``_sync_enqueue``
-        via ``_run_sync``.
-        """
-        self._populate_causality_if_needed(msg)
-
-        success = True
-        chain_causality = msg.header.causality
-        parent_id = msg.msg_id
-        for agent_id in targets:
-            if topology == TopologyType.PIPELINE and agent_id != targets[0]:
-                chain_causality = chain_causality + (parent_id,)
-                payload = dict(msg.payload)
-                payload["pipeline_stage"] = agent_id
-                chain_msg = StructuredMessage(
-                    header=MessageHeader(
-                        sender=msg.header.sender, recipient=agent_id,
-                        msg_type=msg.header.msg_type, priority=msg.header.priority,
-                        parent_id=parent_id, trace_id=msg.header.trace_id,
-                        causality=chain_causality,
-                    ),
-                    payload=payload, text=msg.text,
-                )
-                parent_id = chain_msg.msg_id
-                mbox = self._get_or_create_mailbox(agent_id)
-                ok = await mbox.enqueue(chain_msg)
-            else:
-                mbox = self._get_or_create_mailbox(agent_id)
-                ok = await mbox.enqueue(msg)
-            success = success and ok
-
-        self.log_event(
-            "mail.routed",
-            agent_id=msg.header.sender,
-            message=f"topology={topology.value} targets={targets}",
-            topology=topology.value,
-            targets=targets,
-        )
-        return success
-
-    @staticmethod
-    def _populate_causality_if_needed(msg: StructuredMessage) -> None:
-        """Populate the causality chain when a message is a reply (has parent_id).
-
-        Extracted to avoid duplication between ``_sync_enqueue`` and
-        ``send_structured``.
-        """
-        if msg.header.parent_id and not msg.header.causality:
-            msg.header = MessageHeader(
-                msg_id=msg.header.msg_id,
-                parent_id=msg.header.parent_id,
-                trace_id=msg.header.trace_id,
-                parent_span_id=msg.header.parent_span_id,
-                causality=(msg.header.parent_id,),
-                idempotency_key=msg.header.idempotency_key,
-                sender=msg.header.sender,
-                recipient=msg.header.recipient,
-                msg_type=msg.header.msg_type,
-                priority=msg.header.priority,
-                created_at=msg.header.created_at,
-                ttl_s=msg.header.ttl_s,
-                delivery_count=msg.header.delivery_count,
-            )
-
-    def _sync_enqueue(
-        self, msg: StructuredMessage, *, bypass_policy: bool = False
-    ) -> bool:
-        """Synchronously enqueue a message.
-
-        When *bypass_policy* is True (legacy ``send_mail`` path), channel
-        policy is skipped — health monitors, event replayers, and human
-        replies need this unconditionally.
-
-        New code should use ``send_structured()`` which always enforces policy.
-        """
-        self.propagate_trace(msg)
-
-        if bypass_policy:
-            # send_mail() legacy contract: deliver to any target,
-            # regardless of channel policy rules.
-            topology, targets = self._routing_table.route(msg)
-            if not targets:
-                targets = [msg.header.recipient]  # unregistered target: create mailbox on-the-fly
-        else:
-            try:
-                self._channel_policy.assert_allowed(msg.header.sender, msg.header.recipient)
-            except ChannelPolicyError as exc:
-                self.log_event(
-                    "mail.policy_blocked",
-                    agent_id=msg.header.sender,
-                    message=str(exc),
-                    to_id=msg.header.recipient,
-                )
-                return False
-            topology, targets = self._routing_table.route(msg)
-            if not targets:
-                return True
-
-        return self._run_sync(self._deliver_to_targets(msg, topology, targets))
-
-    @staticmethod
-    def _run_sync(coro: Any) -> Any:
-        """Run a coroutine synchronously, handling nested event loops.
-
-        Uses a module-level thread-pool singleton to avoid the overhead of
-        creating a new executor on every call. This should only be used for
-        trivial, fast mailbox operations.
-        """
-        try:
-            asyncio.get_running_loop()
-            future = _sync_pool.submit(asyncio.run, coro)
-            return future.result(timeout=30)
-        except RuntimeError:
-            return asyncio.run(coro)
-
-    def send_mail(self, from_id: str, to_id: str, content: str) -> None:
-        """Synchronous legacy API — delivers via Mailbox v2.
-
-        Intentionally bypasses channel policy so health monitors,
-        event replayers, human replies, and other system callers always
-        deliver regardless of the policy table.
-
-        New code should prefer send_structured() for policy-aware delivery.
-        """
-        msg = StructuredMessage.from_text(from_id, to_id, content)
-        self._sync_enqueue(msg, bypass_policy=True)
-        self.log_event(
-            "mail.sent",
-            agent_id=from_id,
-            message=f"To {to_id}: {content[:100]}",
-            to_id=to_id,
-            content=content,
-        )
-
-    def messages_for(self, recipient: str) -> list[dict[str, Any]]:
-        """Synchronous legacy API — returns plain dicts from Mailbox v2."""
-        mbox = self._get_or_create_mailbox(recipient)
-        if isinstance(mbox, InMemoryMailbox):
-            structured = mbox._sync_peek(limit=1000)
-        else:
-            structured = self._run_sync(mbox.peek(limit=1000))
-
-        return [
-            {
-                "from": msg.sender,
-                "to": msg.recipient,
-                "content": msg.text,
-                "ts": msg.header.created_at.timestamp(),
-            }
-            for msg in structured
-        ]
-
-    def clear_mail(self, recipient: str | None = None) -> int:
-        """Clear Mailbox v2 queues for one or all agents."""
-        cleared = 0
-        targets = list(self._mailboxes.keys()) if recipient is None else [recipient]
-
-        for agent_id in targets:
-            mbox = self._mailboxes.get(agent_id)
-            if mbox is None:
-                continue
-            if isinstance(mbox, InMemoryMailbox):
-                cleared += mbox._sync_clear()
-            else:
-                # Redis/other backends: peek + ack all visible messages
-                messages = self._run_sync(mbox.peek(limit=10_000))
-                for msg in messages:
-                    self._run_sync(mbox.ack(msg.msg_id))
-                    cleared += 1
-
-        if cleared > 0:
-            self.log_event(
-                "mail.cleared",
-                message=f"Cleared {cleared} message(s) for {recipient or 'all'}",
-            )
-        return cleared
-
-    async def send_structured(self, msg: StructuredMessage) -> bool:
-        """New async API — delivers via Mailbox with back-pressure awareness.
-
-        Uses the routing table to support broadcast, pubsub, pipeline and p2p.
-        Enforces ChannelPolicy before delivery.
-        Returns False when any target mailbox is full.
-
-        Pipeline delivery chains messages via ``parent_id``: each downstream
-        stage receives a copy of the message whose ``parent_id`` points to
-        the preceding stage's ``msg_id``, forming a causal chain.
-        """
-        # Propagate trace context before delivery
-        self.propagate_trace(msg)
-
-        # Enforce sender's capability token if one is registered
-        agent = self.agents.get(msg.header.sender)
-        if agent is not None and getattr(agent, "_capability_token", None) is not None:
-            token = agent._capability_token
-            if not token.can_with_verify("send_message", msg.header.recipient):
-                self.log_event(
-                    "mail.auth_failed",
-                    agent_id=msg.header.sender,
-                    message=f"Token does not authorize send_message to {msg.header.recipient}",
-                )
-                return False
-
-        # Enforce channel policy
-        try:
-            self._channel_policy.assert_allowed(msg.header.sender, msg.header.recipient)
-        except ChannelPolicyError as exc:
-            self.log_event(
-                "mail.policy_blocked",
-                agent_id=msg.header.sender,
-                message=str(exc),
-                to_id=msg.header.recipient,
-            )
-            return False
-
-        topology, targets = self._routing_table.route(msg)
-        if not targets:
-            return True  # No recipients is not a failure
-
-        ok = await self._deliver_to_targets(msg, topology, targets)
-        # Wake collaboration loop on every message send (event-driven)
-        for cb in self._mail_sent_callbacks:
-            with contextlib.suppress(Exception):
-                cb()
-        return ok
-
-    async def peek_mailbox(
-        self,
-        recipient: str,
-        limit: int = 5,
-        *,
-        msg_type: str | None = None,
-        sender: str | None = None,
-        priority_min: int | None = None,
-    ) -> list[StructuredMessage]:
-        """Peek into the recipient's mailbox without consuming.
-
-        Optional filters narrow results by type, sender, or minimum priority.
-        """
-        mbox = self._get_or_create_mailbox(recipient)
-        return await mbox.peek(
-            limit=limit, msg_type=msg_type, sender=sender, priority_min=priority_min,
-        )
-
-    async def claim_message(
-        self, recipient: str, msg_id: str
-    ) -> StructuredMessage | None:
-        """Pull a specific message from the mailbox by msg_id.
-
-        Returns None if not found or already in-flight/acked.  Caller must ack.
-        """
-        mbox = self._get_or_create_mailbox(recipient)
-        return await mbox.dequeue_specific(msg_id)
-
-    async def claim_messages(
-        self, recipient: str, batch_size: int = 10
-    ) -> list[StructuredMessage]:
-        """Pull messages from the mailbox (dequeue).  Caller must ack() them."""
-        mbox = self._get_or_create_mailbox(recipient)
-        return await mbox.dequeue(batch_size=batch_size)
-
-    async def ack_message(self, recipient: str, msg_id: str) -> None:
-        """Acknowledge a message as fully processed."""
-        mbox = self._get_or_create_mailbox(recipient)
-        await mbox.ack(msg_id)
-
-    async def nack_message(
-        self, recipient: str, msg_id: str, reason: str = ""
-    ) -> None:
-        """Negative-acknowledge — triggers re-delivery or DLQ."""
-        mbox = self._get_or_create_mailbox(recipient)
-        await mbox.nack(msg_id, reason)
-
-    async def dlq_replay(self, recipient: str, msg_id: str) -> bool:
-        """Re-enqueue a dead-lettered message for the given recipient.
-
-        Returns True if the message was found in the DLQ and replayed.
-        Intended for use by the Director after inspecting ``inspect_dlq()``.
-        """
-        mbox = self._get_or_create_mailbox(recipient)
-        ok = await mbox.dlq_replay(msg_id)
-        if ok:
-            self.log_event(
-                "mail.dlq_replayed",
-                agent_id=recipient,
-                message=f"Replayed DLQ message {msg_id}",
-                msg_id=msg_id,
-            )
-        return ok
 
     def bind_agent_to_task(self, agent_id: str, task_id: str) -> None:
         """Bind a resident agent to a task for iterative work."""
@@ -1354,127 +1108,12 @@ class StateBoard:
         if len(self.project_context["error_logs"]) > 500:
             self.project_context["error_logs"] = self.project_context["error_logs"][-500:]
 
-    def add_code_change(self, file_path: str, description: str, agent_id: str = "") -> None:
-        """Record a code change in project context."""
-        self.project_context["code_changes"].append({
-            "file": file_path,
-            "description": description[:500],
-            "agent_id": agent_id,
-            "ts": time.time(),
-        })
-        if len(self.project_context["code_changes"]) > 500:
-            self.project_context["code_changes"] = self.project_context["code_changes"][-500:]
-
     def get_project_context(self) -> dict[str, Any]:
         """Return the shared project context for all agents."""
         return {
             "latest_test_report": self.project_context["test_reports"][-1] if self.project_context["test_reports"] else None,
             "recent_errors": self.project_context["error_logs"][-5:],
-            "recent_changes": self.project_context["code_changes"][-10:],
-            "shared_notes": self.project_context["shared_notes"],
         }
-
-    # -- human communication -------------------------------------------------
-
-    _MAX_HUMAN_MESSAGES = 1000
-
-    def human_post(self, human_id: str, content: str, *, target_team: str = "") -> None:
-        """Human proactively posts a message to a project or team."""
-        self._human_channel.post_message(
-            from_human=human_id,
-            content=content,
-            project_id=self.project_id,
-            team_id=target_team,
-            target_agent="director" if not target_team else "",
-        )
-        # Route to target team or director
-        if target_team:
-            self.send_mail("human", target_team, content)
-        else:
-            self.send_mail("human", "director", content)
-        self.log_event(
-            "human.post",
-            message=content[:100],
-            human_id=human_id,
-            target_team=target_team,
-        )
-
-    def get_human_conversation(self) -> list[dict[str, Any]]:
-        """Return full human conversation log (asks + posts)."""
-        return [
-            {
-                "type": item["type"],
-                "from": item.get("from_agent") or item.get("from_human"),
-                "content": item.get("question") or item.get("content"),
-                "ts": item["created_at"].timestamp() if item.get("created_at") else 0,
-            }
-            for item in self._human_channel.get_activity(project_id=self.project_id)
-        ]
-
-    # -- human questions -----------------------------------------------------
-
-    def ask_human(self, question: str, *, options: str = "", from_agent: str = "") -> str:
-        """Record a question for human input. Returns a question ID."""
-        qid = self._human_channel.ask(
-            project_id=self.project_id,
-            from_agent=from_agent,
-            question=question,
-            options=options,
-            team_id=self.team_id,
-        )
-        self.log_event(
-            "human.asked",
-            agent_id=from_agent,
-            message=f"{qid}: {question[:100]}",
-            question=question,
-            options=options,
-            from_agent=from_agent,
-        )
-        return qid
-
-    def reply_human(self, qid: str, answer: str) -> bool:
-        """Record a human reply. Returns True if the question was found and unanswered."""
-        ok = self._human_channel.answer(qid, answer)
-        if ok:
-            # Send reply to director via mailbox
-            self.send_mail("human", "director", f"[回复 {qid}] {answer}")
-            self.log_event(
-                "human.replied",
-                message=f"{qid}: {answer[:100]}",
-                qid=qid,
-                answer=answer,
-            )
-        return ok
-
-    def get_human_questions(self, answered: bool | None = None) -> list[dict[str, Any]]:
-        """Return human questions. answered=None returns all."""
-        if answered is None or answered is False:
-            pending = self._human_channel.get_pending_questions(project_id=self.project_id)
-        else:
-            pending = []
-        if answered is None or answered is True:
-            answered_qs = self._human_channel.get_answered_questions(project_id=self.project_id)
-        else:
-            answered_qs = []
-
-        result: list[dict[str, Any]] = []
-        for q in pending:
-            result.append({
-                "id": q.qid,
-                "from": q.from_agent,
-                "question": q.question,
-                "options": q.options,
-                "answer": q.answer,
-            })
-        for q in answered_qs:
-            result.append({
-                "id": q.qid,
-                "from": q.from_agent,
-                "question": q.question,
-                "options": q.options,
-                "answer": q.answer,
-            })
-        return result
 
     def agent_type_budget_summary(self) -> dict[str, Any]:
         """Aggregate resource usage and success rate by agent type.
@@ -1543,7 +1182,7 @@ class StateBoard:
         ready = self.tasks_ready()
         blocked = self.tasks_blocked()
         terminal = completed + failed + skipped
-        unanswered = self._human_channel.get_pending_questions(project_id=self.project_id)
+        unanswered = self._human_channel_service.get_pending_questions(project_id=self.project_id)
         return {
             "total_tasks": len(self.tasks),
             "completed_tasks": completed,
@@ -1585,7 +1224,7 @@ class StateBoard:
                 }
                 for e in self.events
             ],
-            "human_channel": self._human_channel.to_dict(),
+            "human_channel": self._human_channel_service.to_dict(),
             "decision_history": [
                 d for d in self.decision_history.recent(self.decision_history._max)
             ],
@@ -1720,11 +1359,11 @@ class StateBoard:
         # Restore human channel
         human_channel_data = data.get("human_channel")
         if human_channel_data:
-            board._human_channel = HumanChannel.from_dict(human_channel_data)
+            board._human_channel_service = HumanChannelService.from_dict(human_channel_data)
 
         if "project_context" in data:
-            restored_context = dict(data.get("project_context") or {})
-            board.project_context.update(restored_context)
+            board.project_context = dict(data.get("project_context") or {})
+
         board._final_summary = data.get("final_summary", "")
 
         # Restore decision history for resume continuity
@@ -1817,19 +1456,16 @@ class StateBoard:
         ready_sorted = sorted(ready, key=lambda t: (-getattr(t, "priority", 0), t.task_id))
         blocked = self.tasks_blocked()
         running = [t for t in self.tasks.values() if t.status == TaskStatus.RUNNING]
-        unanswered = self._human_channel.get_pending_questions(project_id=self.project_id)
-        recent_human_posts = self._human_channel.get_messages(project_id=self.project_id)[-5:]
+        unanswered = self._human_channel_service.get_pending_questions(project_id=self.project_id)
+        recent_human_posts = self._human_channel_service.get_messages(project_id=self.project_id)[-5:]
 
         # Per-agent pending message counts (LLM-readable and backend-agnostic)
-        pending_messages: dict[str, int] = {}
-        total_pending = 0
-        for agent_id, mbox in self._mailboxes.items():
-            if isinstance(mbox, InMemoryMailbox):
-                count = len(mbox._buffer)
-            else:
-                count = self._run_sync(mbox.size())
-            pending_messages[agent_id] = count
-            total_pending += count
+        mailbox_metrics = self._mailbox_manager.aggregate_mailbox_metrics()
+        pending_messages: dict[str, int] = {
+            agent_id: snap.get("enqueued", 0) - snap.get("dequeued", 0)
+            for agent_id, snap in mailbox_metrics.get("per_agent", {}).items()
+        }
+        total_pending = max(0, mailbox_metrics["total_enqueued"] - mailbox_metrics["total_dequeued"])
 
         # Detect expired deadlines
         now = time.time()
@@ -1870,7 +1506,7 @@ class StateBoard:
                         {"from": m.from_human, "content": m.content[:100]}
                         for m in recent_human_posts
                     ],
-                    "post_count": len(self._human_channel.get_messages(project_id=self.project_id)),
+                    "post_count": len(self._human_channel_service.get_messages(project_id=self.project_id)),
                 },
                 "all_done": self.all_terminal(),
             },
@@ -1880,6 +1516,89 @@ class StateBoard:
             "recent_decisions": self.decision_history.recent(15),
             "strategy_signals": self.strategy_signals(),
         }
+
+    # -- outcome application -------------------------------------------------
+
+    def apply_outcome(
+        self,
+        outcome: Any,
+        *,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        agent_type: str = "",
+    ) -> None:
+        """Apply a ``PatternOutcome`` to task and agent state.
+
+        This is the hook-driven entry point for StateBoard updates after a
+        Pattern finishes. Artifacts are **not** handled here; they flow through
+        ``artifact.claimed`` / ``artifact.verified`` hooks as soon as they are
+        produced.
+        """
+        # Avoid a hard dependency on PatternOutcome for tests/resume paths.
+        status = getattr(outcome, "status", None)
+        status_value = status.value if hasattr(status, "value") else str(status)
+        output = str(getattr(outcome, "output", "") or "")
+        error = getattr(outcome, "error", None)
+        error_message = ""
+        if error is not None:
+            error_message = str(getattr(error, "message", error) or "")
+
+        if agent_id and agent_id in self.agents:
+            if status_value in ("failed", "max_steps"):
+                self.update_agent(
+                    agent_id,
+                    status=AgentStatus.FAILED,
+                    end_time=time.time(),
+                    output_so_far=output[:2000],
+                )
+            elif status_value == "awaiting_human":
+                self.update_agent(
+                    agent_id,
+                    status=AgentStatus.WAITING_FOR_HUMAN,
+                    output_so_far=output[:2000],
+                )
+            elif status_value == "completed":
+                self.update_agent(
+                    agent_id,
+                    status=AgentStatus.DONE,
+                    end_time=time.time(),
+                    output_so_far=output[:2000],
+                )
+
+        if task_id and task_id in self.tasks:
+            task = self.tasks[task_id]
+            if status_value == "completed" and task.status != TaskStatus.COMPLETED:
+                self.update_task(
+                    task_id,
+                    status=TaskStatus.COMPLETED,
+                    result_output=output[:2000],
+                    _force=True,
+                )
+            elif status_value == "awaiting_human" and not task.is_terminal():
+                self.update_task(
+                    task_id,
+                    status=TaskStatus.WAITING_FOR_HUMAN,
+                    result_output=output[:2000],
+                    _force=True,
+                )
+            elif status_value in ("failed", "max_steps") and not task.is_terminal():
+                self.update_task(
+                    task_id,
+                    status=TaskStatus.FAILED,
+                    error=error_message or f"Agent outcome: {status_value}",
+                    _force=True,
+                )
+
+        self.log_event(
+            "pattern.outcome_applied",
+            task_id=task_id,
+            agent_id=agent_id,
+            message=f"status={status_value}",
+            outcome_status=status_value,
+            outcome_output=output[:200],
+            outcome_error=error_message[:500],
+            agent_type=agent_type,
+        )
 
     # -- report assembly -----------------------------------------------------
 

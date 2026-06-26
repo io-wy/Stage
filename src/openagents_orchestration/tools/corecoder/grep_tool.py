@@ -15,6 +15,8 @@ from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
+from openagents_orchestration.tools.corecoder._paths import resolve_agent_path
+
 _SKIP_DIRS = frozenset(
     {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build"}
 )
@@ -27,9 +29,23 @@ class GrepTool(ToolPlugin):
 
     name = "grep"
     description = (
-        "Search file contents with a Python regex. Returns matching lines as "
-        "'file:line: text'. Skips .git/node_modules/__pycache__/etc. Capped at "
-        "200 matches and 5000 files walked."
+        "Search file contents with a Python regex; returns 'file:line: text' rows.\n\n"
+        "# Effects / returns\n"
+        "- matches (up to 200), match_count, files_walked, and a capped flag.\n"
+        "- Skips .git/node_modules/__pycache__/.venv/dist/build; walks at most 5000 files.\n\n"
+        "# When to use\n"
+        "- Finding where a symbol, string, or pattern appears across the tree.\n"
+        "- Locating call sites before changing a function (change-impact scan).\n\n"
+        "# When NOT to use\n"
+        "- Finding files by name — use glob.\n"
+        "- Reading a known file — use read_file.\n\n"
+        "# Paths\n"
+        "- pattern (required) is a Python regex; path is a file or directory to search.\n"
+        "- path may be absolute, or relative to your working directory (the cwd "
+        "shown in your task input); defaults to '.'.\n"
+        "- include is an optional filename glob, e.g. '*.py'.\n\n"
+        "# Common mistakes\n"
+        "- An unanchored '.*' that hits the 200-cap — tighten the regex or scope with path/include."
     )
 
     def execution_spec(self) -> ToolExecutionSpec:
@@ -47,7 +63,7 @@ class GrepTool(ToolPlugin):
                 "pattern": {"type": "string", "description": "Python regex."},
                 "path": {
                     "type": "string",
-                    "description": "File or directory to search. Default: cwd.",
+                    "description": "File or directory to search. Absolute or relative to your working directory; defaults to '.'.",
                 },
                 "include": {
                     "type": "string",
@@ -73,7 +89,9 @@ class GrepTool(ToolPlugin):
         if include is not None and not isinstance(include, str):
             raise ToolError("include must be a string glob", tool_name=self.name)
 
-        base = Path(base_str).expanduser().resolve(strict=False)
+        base = resolve_agent_path(str(Path(base_str).expanduser()), context).resolve(
+            strict=False
+        )
         if not base.exists():
             raise ToolError(f"Path not found: {base_str}", tool_name=self.name)
 

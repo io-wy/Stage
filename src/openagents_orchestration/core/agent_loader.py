@@ -57,14 +57,12 @@ TOOL_REGISTRY: dict[str, str] = {
     "replan": "openagents_orchestration.tools.director.replan.ReplanTool",
     "finalize": "openagents_orchestration.tools.director.finalize.FinalizeTool",
     "ask_human": "openagents_orchestration.tools.director.ask_human.AskHumanTool",
-    "check_messages": "openagents_orchestration.tools.director.check_messages.CheckMessagesTool",
     "send_message": "openagents_orchestration.tools.director.send_message.SendMessageTool",
-    "recover_task": "openagents_orchestration.tools.director.recover_task.RecoverTaskTool",
-    "correct_task_status": "openagents_orchestration.tools.director.correct_task_status.CorrectTaskStatusTool",
+    "classify_intent": "openagents_orchestration.tools.director.classify_intent.ClassifyIntentTool",
+    "decompose": "openagents_orchestration.tools.director.decompose.DecomposeTool",
     # resident 工具
     "spawn_resident": "openagents_orchestration.tools.resident.spawn_resident.SpawnResidentTool",
     "send_to_resident": "openagents_orchestration.tools.resident.send_to_resident.SendToResidentTool",
-    "read_resident_state": "openagents_orchestration.tools.resident.read_resident_state.ReadResidentStateTool",
     "stop_resident": "openagents_orchestration.tools.resident.stop_resident.StopResidentTool",
     # github 工具
     "github_pr": "openagents_orchestration.tools.github.pr.GitHubPRTool",

@@ -28,8 +28,6 @@
     "+spawn_agent",
     "+show_state",
     "+replan",
-    "+recover_task",
-    "+correct_task_status",
     "+finalize"
   ],
   "runtime": {

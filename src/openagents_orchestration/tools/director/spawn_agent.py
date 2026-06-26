@@ -8,25 +8,21 @@ Supports two modes:
 from __future__ import annotations
 
 import asyncio
-import os
-import re
 import time
 from pathlib import Path
 from typing import Any
 
-from openagents.errors.exceptions import PermanentToolError, RetryableToolError
+from openagents.errors.exceptions import PermanentToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-from openagents_orchestration.core.state_board import AgentStatus
-from openagents_orchestration.models.task import TaskStatus
-from openagents_orchestration.reporting import summarize_agent_run
 from openagents_orchestration.core.agent_loader import (
     AgentSpecError,
     _load_json,
     compile_one_spec,
 )
+from openagents_orchestration.core.state_board import AgentStatus
+from openagents_orchestration.models.task import TaskStatus
 from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
-from prompts.corrections import build_hallucination_correction
 
 
 class SpawnAgentTool(ToolPlugin):
@@ -38,10 +34,41 @@ class SpawnAgentTool(ToolPlugin):
 
     name = "spawn_agent"
     description = (
-        "Execute pending task(s) by spawning tactical agent(s). "
-        "Single task: task_id. Batch parallel: task_ids (all must be independent and ready). "
-        "You may also provide agent_spec to define a one-off agent inline "
-        "(id + prompts + tools, extends agents/_base.json); it overrides the task's agent_type. "
+        "Spawn a tactical agent to execute one or more ready tasks. "
+        "This is the primary way to delegate work to specialist agents.\n\n"
+        "# Effects\n"
+        "- The agent receives the task description, dependencies, expected artifacts, and your optional 'context'.\n"
+        "- It runs in its own context window with the tools configured for its role (coder, reviewer, researcher, etc.).\n"
+        "- The runner's ``pattern.after_execute`` hook updates the StateBoard (task status, artifacts, decision history).\n"
+        "- This tool itself does NOT modify StateBoard beyond marking the task/agent as RUNNING before delegation.\n"
+        "- In batch mode, multiple independent agents run concurrently.\n\n"
+        "# When to use\n"
+        "- A task is ready (dependencies met) and you want a specialist to execute it.\n"
+        "- You need parallel work on multiple independent ready tasks.\n"
+        "- The task benefits from a different role's perspective (reviewer, researcher, monitor).\n"
+        "- The task is too large for a single context window and needs its own workspace.\n\n"
+        "# When NOT to use\n"
+        "- The task is not ready (dependencies missing or blocked) — wait or unblock first.\n"
+        "- The work needs sustained iteration across many turns — use spawn_resident instead.\n"
+        "- You only need a tiny edit you can verify yourself — use edit_file/apply_patch directly.\n"
+        "- You want synchronous back-and-forth — residents or send_message are better.\n\n"
+        "# Parameters\n"
+        "- task_id (string, required for single task): the ready task to execute.\n"
+        "- task_ids (list of strings, optional, for batch mode): multiple independent ready tasks. "
+        "All must be ready and not share unmet dependencies.\n"
+        "- context (string, optional but strongly recommended): extra task-shaped instructions. "
+        "A good context includes: goal, scope boundaries, key files, constraints, expected output, verification command, and known pitfalls.\n"
+        "- agent_spec (dict, optional): define a one-off role inline (id + prompts + tools). "
+        "It extends agents/_base.json and overrides the task's agent_type. Use rarely.\n\n"
+        "# Batch mode rules\n"
+        "- Only batch tasks that are truly independent.\n"
+        "- Do NOT batch tasks where one produces an artifact the other needs.\n"
+        "- Do NOT batch more tasks than max_concurrent_spawns allows.\n\n"
+        "# Common mistakes\n"
+        "- Bad context: 'Fix the email thing.' (no file, no verification, no scope).\n"
+        "- Good context: 'Implement validate_email in src/utils/validators.py. Read validate_phone for style. "
+        "Raise ValueError on empty input, return lower-cased email, no new deps. Add tests in tests/test_validators.py. "
+        "Run uv run pytest tests/test_validators.py -q and fix until green.'\n\n"
         "Returns the agent's output summary."
     )
     durable_idempotent = False
@@ -77,6 +104,21 @@ class SpawnAgentTool(ToolPlugin):
                         "Only valid for single task_id."
                     ),
                 },
+                "context": {
+                    "type": "string",
+                    "description": (
+                        "Optional extra context or instructions from the Director to the "
+                        "spawned agent. Appended to the constructed task input."
+                    ),
+                },
+                "verify": {
+                    "type": "boolean",
+                    "description": (
+                        "After the agent completes, spawn a verifier to confirm the task is "
+                        "actually done (files exist + match the requirement). Use for key "
+                        "tasks that downstream work depends on. Default false."
+                    ),
+                },
             },
         }
 
@@ -93,6 +135,8 @@ class SpawnAgentTool(ToolPlugin):
         task_ids = params.get("task_ids")
         task_id = str(params.get("task_id", "")).strip()
         agent_spec = params.get("agent_spec")
+        extra_context = str(params.get("context", "")).strip()
+        verify = bool(params.get("verify", False))
         agent_type_override: str | None = None
         if agent_spec:
             if task_ids:
@@ -104,13 +148,14 @@ class SpawnAgentTool(ToolPlugin):
 
         # Batch mode
         if task_ids:
-            return await self._spawn_batch(task_ids, board, runner_delegate, context)
+            return await self._spawn_batch(task_ids, board, runner_delegate, context, verify=verify)
 
         # Single mode
         if not task_id:
             raise PermanentToolError("task_id or task_ids is required", tool_name=self.name)
         return await self._spawn_single(
-            task_id, board, runner_delegate, context, agent_type=agent_type_override
+            task_id, board, runner_delegate, context,
+            agent_type=agent_type_override, extra_context=extra_context, verify=verify,
         )
 
     @staticmethod
@@ -151,7 +196,16 @@ class SpawnAgentTool(ToolPlugin):
         context: Any,
         *,
         agent_type: str | None = None,
+        extra_context: str = "",
+        verify: bool = False,
     ) -> dict[str, Any]:
+        """Pure delegation: check readiness, run the agent, return the outcome.
+
+        StateBoard updates (task status, agent status, artifacts, decision history)
+        are handled by the ``pattern.after_execute`` hook registered on the runner.
+        This tool only prepares the agent context and reports the result back to
+        the Director.
+        """
         task = board.get_task(task_id)
         if task is None:
             raise PermanentToolError(f"Task '{task_id}' not found", tool_name=self.name)
@@ -167,9 +221,13 @@ class SpawnAgentTool(ToolPlugin):
                 tool_name=self.name,
             )
 
-        input_text = self._build_input(task, board, agent_type=effective_agent_type)
+        input_text = self._build_input(
+            task, board, agent_type=effective_agent_type, extra_context=extra_context
+        )
         agent_id = f"{effective_agent_type}-{task_id}"
 
+        if verify:
+            board.update_task(task_id, needs_verify=True)
         board.register_agent(agent_id, effective_agent_type)
         board.update_task(task_id, status=TaskStatus.RUNNING)
         board.update_agent(
@@ -185,223 +243,30 @@ class SpawnAgentTool(ToolPlugin):
             message=f"Spawning {effective_agent_type} for {task_id}",
         )
 
-        max_retries = 3
-        retry_delay_base = 2.0
-        result_text = ""
-        last_exc: Exception | None = None
-
-        for attempt in range(max_retries + 1):
-            try:
-                result_text = await runner_delegate(
-                    agent_type=effective_agent_type,
-                    input_text=input_text,
-                    agent_id=agent_id,
-                )
-                break
-            except Exception as exc:
-                last_exc = exc
-                is_transient = self._is_transient_error(exc)
-                board.update_agent(agent_id, status=AgentStatus.FAILED, end_time=time.time())
-
-                if is_transient and attempt < max_retries:
-                    delay = retry_delay_base * (2 ** attempt)
-                    board.log_event(
-                        "agent.retry",
-                        task_id=task_id,
-                        agent_id=agent_id,
-                        message=f"Transient error, retrying in {delay:.0f}s (attempt {attempt + 1}/{max_retries})",
-                    )
-                    await asyncio.sleep(delay)
-                    board.update_agent(agent_id, status=AgentStatus.RUNNING, retry_count=attempt + 1)
-                    continue
-                else:
-                    break
-
-        if last_exc is not None and not result_text:
-            board.update_agent(agent_id, status=AgentStatus.FAILED, end_time=time.time())
-            error_msg = str(last_exc)
-            recommendation = self._classify_error(last_exc)
-
-            agent_state = board.get_agent(agent_id)
-            fallback_attempts = (agent_state.fallback_attempts if agent_state else 0) + 1
-            board.update_agent(agent_id, fallback_attempts=fallback_attempts)
-
-            if fallback_attempts >= 3:
-                recommendation = "ask_human — task failed after 3 fallback attempts"
-
-            enriched_error = f"{error_msg}  [recommendation: {recommendation}]"
-            board.update_task(task_id, status=TaskStatus.FAILED, error=enriched_error)
-            summary = summarize_agent_run(
-                agent_id=agent_id,
-                task_id=task_id,
-                status="failed",
-                error=enriched_error,
-                artifacts=task.actual_artifacts or task.expected_artifacts,
-                retry_count=agent_state.retry_count if agent_state else 0,
-                steps_used=agent_state.steps_used if agent_state else 0,
-                token_used=agent_state.token_used if agent_state else 0,
-            )
-            board.log_event(
-                "agent.run_summary",
-                task_id=task_id,
-                agent_id=agent_id,
-                message=f"failed: {summary['failure_type']}",
-                summary=summary,
-            )
-            board.log_event(
-                "agent.failed",
-                task_id=task_id,
-                agent_id=agent_id,
-                message=enriched_error,
-                recommendation=recommendation,
-            )
-            raise RetryableToolError(
-                f"Agent failed for task '{task_id}': {enriched_error}",
-                tool_name=self.name,
-            ) from last_exc
-
-        # ---- failure guard ----
-        # If the agent already failed (e.g. step budget exhausted), do not mark COMPLETED.
-        agent_state = board.get_agent(agent_id)
-        if agent_state is not None and agent_state.status == AgentStatus.FAILED:
-            error_msg = task.error or f"Agent {agent_id} failed before completing the task"
-            board.update_task(task_id, status=TaskStatus.FAILED, error=error_msg)
-            summary = summarize_agent_run(
-                agent_id=agent_id,
-                task_id=task_id,
-                status="failed",
-                error=error_msg,
-                artifacts=task.actual_artifacts or task.expected_artifacts,
-                retry_count=agent_state.retry_count,
-                steps_used=agent_state.steps_used,
-                token_used=agent_state.token_used,
-            )
-            board.log_event(
-                "agent.run_summary",
-                task_id=task_id,
-                agent_id=agent_id,
-                message=f"failed: {summary['failure_type']}",
-                summary=summary,
-            )
-            board.log_event(
-                "agent.failed",
-                task_id=task_id,
-                agent_id=agent_id,
-                message=error_msg,
-            )
-            raise RetryableToolError(
-                f"Agent failed for task '{task_id}': {error_msg}",
-                tool_name=self.name,
-            )
-
-        # ---- coder hallucination guard ----
-        # If expected artifacts still contain TODO/placeholder/pass, force a retry
-        # regardless of what the coder claimed. The coder may hallucinate that a
-        # file is "already implemented" when it only contains a skeleton.
-        if effective_agent_type == "coder" and result_text:
-            for art_path in (task.expected_artifacts or []):
-                if os.path.exists(art_path):
-                    content = Path(art_path).read_text()
-                    if any(k in content for k in ("TODO", "placeholder", "pass\n", "# TODO")):
-                        board.log_event(
-                            "agent.hallucination_detected",
-                            task_id=task_id,
-                            agent_id=agent_id,
-                            message=f"File {art_path} still contains placeholder, forcing retry",
-                        )
-                        import sys
-                        print(
-                            f"[Orchestrator] Hallucination detected for {agent_id}: "
-                            f"{art_path} still contains placeholder. Forcing retry.",
-                            file=sys.stderr,
-                            flush=True,
-                        )
-                        correction = build_hallucination_correction(art_path, content)
-                        result_text = await runner_delegate(
-                            agent_type=effective_agent_type,
-                            input_text=correction,
-                            agent_id=agent_id,
-                        )
-                        break
-
-        artifacts = self._extract_artifacts(result_text)
-        board.claim_artifact(task_id, artifacts)
-
-        # Verify each artifact against the orchestration work_dir first.
-        verified = []
-        runner = getattr(getattr(context, "deps", None), "runner", None)
-        work_dir = Path(getattr(runner, "_current_work_dir", "") or ".")
-        for art_path in artifacts:
-            resolved = self._resolve_artifact_path(art_path, work_dir)
-            if resolved is None:
-                continue
-            real = resolved.exists() and resolved.stat().st_size > 0
-            board.verify_artifact(art_path, exists=real)
-            if real:
-                verified.append(art_path)
-
-        board.update_agent(agent_id, status=AgentStatus.DONE, end_time=time.time())
-
-        # Only set task to COMPLETED if _spawn_and_run hasn't already done it.
-        # _spawn_and_run marks the task completed on StopReason.COMPLETED, but
-        # this tool post-processes the result with artifact verification, so
-        # update the artifacts even if the status is already terminal.
-        task = board.get_task(task_id)
-        if task is not None and task.status != TaskStatus.COMPLETED:
-            board.update_task(
-                task_id,
-                status=TaskStatus.COMPLETED,
-                result_output=result_text,
-                actual_artifacts=verified,
-            )
-        elif task is not None:
-            # Task already completed — just backfill verified artifacts.  Keep a
-            # richer result_output that runner/team-leader may have written
-            # instead of overwriting it with a generic tool-loop termination.
-            updates = {"actual_artifacts": verified, "_force": True}
-            existing_output = str(getattr(task, "result_output", "") or "").strip()
-            if not existing_output:
-                updates["result_output"] = result_text
-            board.update_task(task_id, **updates)
-        agent_state = board.get_agent(agent_id)
-        summary = summarize_agent_run(
+        outcome = await runner_delegate(
+            agent_type=effective_agent_type,
+            input_text=input_text,
             agent_id=agent_id,
-            task_id=task_id,
-            status="completed",
-            output=result_text,
-            artifacts=verified,
-            retry_count=agent_state.retry_count if agent_state else 0,
-            steps_used=agent_state.steps_used if agent_state else 0,
-            token_used=agent_state.token_used if agent_state else 0,
         )
-        board.log_event(
-            "agent.run_summary",
-            task_id=task_id,
-            agent_id=agent_id,
-            message="completed",
-            summary=summary,
-        )
-        board.log_event(
-            "agent.completed",
-            task_id=task_id,
-            agent_id=agent_id,
-            message=f"Completed with {len(verified)}/{len(artifacts)} verified artifact(s)",
-        )
+
+        output = str(getattr(outcome, "output", "") or "")
+        status_obj = getattr(outcome, "status", None)
+        status_value = status_obj.value if hasattr(status_obj, "value") else str(status_obj)
+        error = getattr(getattr(outcome, "error", None), "message", "") or ""
 
         return {
             "task_id": task_id,
             "agent_id": agent_id,
-            "status": "completed",
-            "output": result_text[:1000],
-            "artifacts": verified,
-            "claimed": len(artifacts),
-            "verified": len(verified),
+            "status": status_value,
+            "output": output[:1000],
+            "error": error,
         }
 
     # -- batch parallel ------------------------------------------------------
 
     async def _spawn_batch(
-        self, task_ids: list[str], board: Any, runner_delegate: Any, context: Any
+        self, task_ids: list[str], board: Any, runner_delegate: Any, context: Any,
+        *, verify: bool = False,
     ) -> dict[str, Any]:
         deps_completed = {
             t.task_id for t in board.tasks.values() if t.status == TaskStatus.COMPLETED
@@ -425,7 +290,7 @@ class SpawnAgentTool(ToolPlugin):
 
         async def _spawn_one(tid: str) -> dict[str, Any]:
             try:
-                return await self._spawn_single(tid, board, runner_delegate, context)
+                return await self._spawn_single(tid, board, runner_delegate, context, verify=verify)
             except Exception as exc:
                 return {"task_id": tid, "status": "failed", "error": str(exc)}
 
@@ -441,80 +306,7 @@ class SpawnAgentTool(ToolPlugin):
         }
 
     @staticmethod
-    def _is_transient_error(exc: Exception) -> bool:
-        """Check if an error is transient (worth retrying)."""
-        msg = str(exc).lower()
-        return any(
-            keyword in msg
-            for keyword in (
-                "server disconnected",
-                "remoteprotocolerror",
-                "connection reset",
-                "connection aborted",
-                "temporarily unavailable",
-                "timeout",
-                "connection",
-                "rate limit",
-                "429",
-                "too many requests",
-                "http 500",
-                "http 502",
-                "http 503",
-                "http 504",
-                "http 520",
-                "http 522",
-                "http 524",
-                "bad gateway",
-                "service unavailable",
-                "gateway timeout",
-                "web server is returning an unknown error",
-            )
-        )
-
-    @staticmethod
-    def _classify_error(exc: Exception) -> str:
-        """Classify an agent failure and recommend a recovery strategy."""
-        msg = str(exc).lower()
-
-        if "spawn resident" in msg or "resident coder" in msg:
-            return "spawn resident — agent is stuck in a loop, use persistent resident"
-        if any(signal in msg for signal in ("server disconnected", "remoteprotocolerror", "connection reset", "connection aborted", "temporarily unavailable")):
-            return "retry — upstream connection dropped, likely transient"
-        if "timeout" in msg:
-            return "retry — timeout, likely transient"
-        if "connection" in msg:
-            return "retry — network error, likely transient"
-        if "rate limit" in msg or "429" in msg or "too many requests" in msg:
-            return "retry — rate limited, wait and retry"
-        if any(
-            signal in msg
-            for signal in (
-                "http 500",
-                "http 502",
-                "http 503",
-                "http 504",
-                "http 520",
-                "http 522",
-                "http 524",
-                "bad gateway",
-                "service unavailable",
-                "gateway timeout",
-                "web server is returning an unknown error",
-            )
-        ):
-            return "retry — upstream API/server error, likely transient"
-        if "no such file" in msg or "file not found" in msg:
-            return "replan — path/file error, task may be mis-specified"
-        if "permission" in msg or "denied" in msg:
-            return "ask_human — permission issue"
-        if "invalid" in msg or "syntax" in msg or "parse" in msg:
-            return "replan — specification error, break into smaller tasks"
-        if "memory" in msg or "oom" in msg or "out of memory" in msg:
-            return "replan — task too large, decompose further"
-        return "replan or ask_human — unknown error type"
-
-    @staticmethod
-    def _build_input(task: Any, board: Any, *, agent_type: str) -> str:
+    def _build_input(task: Any, board: Any, *, agent_type: str, extra_context: str = "") -> str:
         """Compose the full input text for a tactical agent.
 
         Includes: task description + input_context + dependency artifacts +
@@ -568,8 +360,8 @@ class SpawnAgentTool(ToolPlugin):
         # Remind agent to check messages periodically
         parts.append(
             "\n# Communication reminder\n"
-            "You have the check_messages tool. Call it every 3-5 turns to see "
-            "if the director or other agents have sent you messages."
+            "Call `send_message` when you need to talk to another agent, and check "
+            "your mailbox (via available tools) every 3-5 turns for replies."
         )
 
         # Agent-specific hard constraints
@@ -578,46 +370,9 @@ class SpawnAgentTool(ToolPlugin):
         if agent_type == "reviewer":
             parts.append(REVIEWER_CONSTRAINT)
 
+        # Director-provided extra context / instructions
+        if extra_context:
+            parts.append("\n# Additional instructions from the Director\n" + extra_context)
+
         return "\n\n".join(parts)
 
-    @staticmethod
-    def _resolve_artifact_path(artifact_path: str, work_dir: Path) -> Path | None:
-        raw = str(artifact_path or "").strip()
-        if not raw or any(ch in raw for ch in ("\n", "\r")):
-            return None
-        if " " in raw or raw.startswith(("bash:", "pytest:")):
-            return None
-
-        path = Path(raw)
-        if path.is_absolute():
-            return path
-
-        candidates = [work_dir / path]
-        parts = path.parts
-        work_name = work_dir.name
-        if parts and parts[0].lstrip(".") == work_name.lstrip("."):
-            candidates.append(work_dir.joinpath(*parts[1:]))
-        candidates.append(Path.cwd() / path)
-
-        for candidate in candidates:
-            if candidate.exists():
-                return candidate
-        return candidates[0]
-
-    @staticmethod
-    def _extract_artifacts(output: str) -> list[str]:
-        """Parse FILES_CREATED / FILES_MODIFIED markers from agent output."""
-        artifacts: list[str] = []
-        for key in ("FILES_CREATED", "FILES_MODIFIED"):
-            for line in output.splitlines():
-                if line.strip().startswith(key):
-                    rest = line.split(":", 1)[1] if ":" in line else ""
-                    paths = [p.strip() for p in rest.split(",") if p.strip()]
-                    artifacts.extend(paths)
-        # Also look for standalone file paths with extensions
-        file_pattern = re.compile(r"[\w\-/\\]+\.[a-zA-Z0-9_]{1,10}")
-        for match in file_pattern.finditer(output):
-            path = match.group(0)
-            if path not in artifacts and "/" in path:
-                artifacts.append(path)
-        return list(dict.fromkeys(artifacts))  # dedupe preserving order

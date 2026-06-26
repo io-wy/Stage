@@ -41,7 +41,6 @@
     "list_directory",
     "think",
     "bash",
-    "check_messages",
     "ask_human",
     "send_message"
   ]

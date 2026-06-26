@@ -12,14 +12,23 @@ class SendToResidentTool(ToolPlugin):
     """Send a task or message to a resident agent.
 
     The message is enqueued; the resident will process it asynchronously.
-    Use read_resident_state to check the result later.
+    Use show_state to check the result later.
     """
 
     name = "send_to_resident"
     description = (
         "Send a task or message to a persistent resident agent. "
-        "The resident processes it asynchronously. Use read_resident_state "
-        "to check the result."
+        "The resident processes it asynchronously and updates the StateBoard. "
+        "Use show_state to check progress and stop_resident when the resident is no longer needed.\n\n"
+        "Use send_to_resident when:\n"
+        "- You have already spawned a resident and need to give it the next unit of work.\n"
+        "- A resident needs additional context, a correction, or a follow-up task.\n"
+        "- You are driving a producer/checker collaborative loop (e.g. send TASK_REVIEW_READY signals).\n\n"
+        "Do NOT use send_to_resident when:\n"
+        "- The resident_id does not exist — spawn_resident first.\n"
+        "- You need a one-shot task done — use spawn_agent instead.\n"
+        "- You want a synchronous answer — residents process messages on their own schedule.\n\n"
+        "Provide a clear 'task' string. Use 'context' for file paths, error messages, or constraints."
     )
     durable_idempotent = True
 
@@ -83,5 +92,5 @@ class SendToResidentTool(ToolPlugin):
         return {
             "resident_id": resident_id,
             "status": "sent",
-            "message": f"Task sent to {resident_id}. Use read_resident_state to check progress.",
+            "message": f"Task sent to {resident_id}. Use show_state to check progress.",
         }

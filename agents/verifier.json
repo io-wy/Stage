@@ -1,0 +1,20 @@
+{
+  "id": "verifier",
+  "name": "Verifier Agent",
+  "extends": "_base.json",
+  "prompts": [
+    "prompts.roles.verifier:ROLE"
+  ],
+  "tools": [
+    "+grep",
+    "+glob",
+    "-send_message"
+  ],
+  "pattern": {
+    "config": { "max_steps": 8 }
+  },
+  "runtime": {
+    "max_steps": 10,
+    "step_timeout_ms": 300000
+  }
+}

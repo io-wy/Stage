@@ -33,7 +33,11 @@ class _ResultExtractor(HTMLParser):
         # DuckDuckGo result links have class="result__a"
         if tag == "a" and attr_dict.get("class") == "result__a":
             self._in_result = True
-            self._current = {"title": "", "url": attr_dict.get("href", ""), "snippet": ""}
+            self._current = {
+                "title": "",
+                "url": attr_dict.get("href", ""),
+                "snippet": "",
+            }
 
         if self._in_result and tag in ("a", "h2"):
             self._in_title = True
@@ -55,7 +59,11 @@ class _ResultExtractor(HTMLParser):
         if self._in_result:
             if self._in_title:
                 self._current["title"] = self._current.get("title", "") + data
-            elif not self._in_title and self._tag_stack and self._tag_stack[-1] in ("div", "span", "p"):
+            elif (
+                not self._in_title
+                and self._tag_stack
+                and self._tag_stack[-1] in ("div", "span", "p")
+            ):
                 self._current["snippet"] = self._current.get("snippet", "") + data
 
     def get_results(self) -> list[dict[str, str]]:
@@ -139,9 +147,13 @@ class WebSearchTool(ToolPlugin):
             with urllib.request.urlopen(request, timeout=15.0) as response:
                 html = response.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
-            raise ToolError(f"Search failed: HTTP {exc.code}", tool_name=self.name) from exc
+            raise ToolError(
+                f"Search failed: HTTP {exc.code}", tool_name=self.name
+            ) from exc
         except urllib.error.URLError as exc:
-            raise ToolError(f"Search failed: {exc.reason}", tool_name=self.name) from exc
+            raise ToolError(
+                f"Search failed: {exc.reason}", tool_name=self.name
+            ) from exc
         except TimeoutError:
             raise ToolError("Search timed out", tool_name=self.name) from None
 

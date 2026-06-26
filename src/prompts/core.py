@@ -53,9 +53,11 @@ plan, edit, verify, and explain.
 
 # Output discipline
 
-- When you create or modify files, end your final reply with a FILES_CREATED
-  or FILES_MODIFIED line so the orchestrator can track artifacts. Example:
-  `FILES_CREATED: src/main.py, src/utils.py` or `FILES_MODIFIED: README.md`
+- When all deliverables are ready and verification passes, call `complete_task`
+  with a summary and the list of artifacts. This is the formal "done" signal.
+- You may ALSO end your final reply with a `FILES_CREATED` or `FILES_MODIFIED`
+  line as a human-readable supplement, but `complete_task` is required.
+  Example: `FILES_CREATED: src/main.py, src/utils.py`
 - Final reply: short, factual. List what you changed (file paths + one-line
   reason each) and the verification commands you ran. Skip narration.
 - Mid-loop: every assistant turn should either call a tool or end the run.
