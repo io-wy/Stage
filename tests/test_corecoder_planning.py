@@ -162,8 +162,8 @@ async def test_planning_with_clarification_pauses():
 
     result = await pattern.execute()
 
-    assert "[Awaiting human reply]" in result
-    assert "Which module should I focus on?" in result
+    assert "[Awaiting human reply]" in result.output
+    assert "Which module should I focus on?" in result.output
     assert ctx.state["__awaiting_human_reply__"]["question"] == "Which module should I focus on?"
     assert ctx.state["__clarification_question__"] == "Which module should I focus on?"
     assert ctx.state["__ask_human_invoked__"]["question"] == "Which module should I focus on?"
@@ -193,7 +193,7 @@ async def test_planning_with_high_confidence_runs():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     assert "__awaiting_human_reply__" not in ctx.state
     plan = ctx.state.get("__plan__")
     assert plan["confidence"] == 8
@@ -225,7 +225,7 @@ async def test_clarification_disabled_ignores_low_confidence():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     assert "__awaiting_human_reply__" not in ctx.state
 
 
@@ -257,7 +257,7 @@ async def test_clarification_threshold_respected():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     assert "__awaiting_human_reply__" not in ctx.state
 
 

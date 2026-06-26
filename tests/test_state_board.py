@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
+from openagents_orchestration.models.pattern import (
+    PatternError,
+    PatternOutcome,
+    PatternOutcomeStatus,
+)
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 
 
@@ -256,3 +261,56 @@ class TestStateBoard:
         board.register_agent("coder-t1", "coder")
         suggestion = board.suggest_fallback("t1")
         assert suggestion == ""
+
+    def test_apply_outcome_completes_task_and_agent(self):
+        board = StateBoard("obj")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "task 1", "coder")],
+        ))
+        board.register_agent("coder-t1", "coder")
+
+        outcome = PatternOutcome(
+            output="file created",
+            status=PatternOutcomeStatus.COMPLETED,
+        )
+        board.apply_outcome(outcome, task_id="t1", agent_id="coder-t1", agent_type="coder")
+
+        assert board.get_task("t1").status == TaskStatus.COMPLETED
+        assert board.get_task("t1").result_output == "file created"
+        assert board.get_agent("coder-t1").status == AgentStatus.DONE
+
+    def test_apply_outcome_failed_marks_task_failed(self):
+        board = StateBoard("obj")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "task 1", "coder")],
+        ))
+        board.register_agent("coder-t1", "coder")
+
+        outcome = PatternOutcome(
+            status=PatternOutcomeStatus.FAILED,
+            error=PatternError(message="crashed", grade="agent_fatal"),
+        )
+        board.apply_outcome(outcome, task_id="t1", agent_id="coder-t1")
+
+        assert board.get_task("t1").status == TaskStatus.FAILED
+        assert "crashed" in board.get_task("t1").error
+        assert board.get_agent("coder-t1").status == AgentStatus.FAILED
+
+    def test_apply_outcome_awaiting_human(self):
+        board = StateBoard("obj")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "task 1", "coder")],
+        ))
+        board.register_agent("coder-t1", "coder")
+
+        outcome = PatternOutcome(
+            output="need clarification",
+            status=PatternOutcomeStatus.AWAITING_HUMAN,
+        )
+        board.apply_outcome(outcome, task_id="t1", agent_id="coder-t1")
+
+        assert board.get_task("t1").status == TaskStatus.WAITING_FOR_HUMAN
+        assert board.get_agent("coder-t1").status == AgentStatus.WAITING_FOR_HUMAN

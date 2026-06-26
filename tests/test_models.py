@@ -18,6 +18,13 @@ from openagents_orchestration.models.message import (
     MessageType,
     StructuredMessage,
 )
+from openagents_orchestration.models.pattern import (
+    FailureDecision,
+    FailureGrade,
+    PatternError,
+    PatternOutcome,
+    PatternOutcomeStatus,
+)
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 
 
@@ -174,3 +181,53 @@ def test_gap_delivery_status_typo_silently_counts_as_not_completed():
     )
     assert report.success_rate == 0.0  # GAP: silently counted as a non-success
     assert report.all_succeeded is False
+
+
+# ── PatternOutcome contract ───────────────────────────────────────────────────
+
+
+def test_pattern_outcome_defaults_to_completed():
+    outcome = PatternOutcome(output="done")
+    assert outcome.status == PatternOutcomeStatus.COMPLETED
+    assert outcome.is_success is True
+    assert outcome.is_terminal is True
+
+
+def test_pattern_outcome_failed_is_terminal_not_success():
+    err = PatternError(message="boom", grade=FailureGrade.AGENT_FATAL)
+    outcome = PatternOutcome(status=PatternOutcomeStatus.FAILED, error=err)
+    assert outcome.is_terminal is True
+    assert outcome.is_success is False
+    assert outcome.error.grade == FailureGrade.AGENT_FATAL
+
+
+def test_pattern_outcome_awaiting_human_is_not_terminal():
+    outcome = PatternOutcome(status=PatternOutcomeStatus.AWAITING_HUMAN)
+    assert outcome.is_terminal is False
+    assert outcome.is_success is False
+
+
+def test_pattern_outcome_to_dict_roundtrip():
+    err = PatternError(
+        message="bad params",
+        grade=FailureGrade.RECOVERABLE,
+        tool_id="edit_file",
+        details={"path": "x.py"},
+    )
+    outcome = PatternOutcome(
+        output="",
+        status=PatternOutcomeStatus.FAILED,
+        error=err,
+        metadata={"steps_used": 3},
+    )
+    d = outcome.to_dict()
+    assert d["status"] == "failed"
+    assert d["error"]["grade"] == "recoverable"
+    assert d["error"]["tool_id"] == "edit_file"
+    assert d["metadata"]["steps_used"] == 3
+
+
+def test_failure_decision_defaults():
+    decision = FailureDecision(action="retry", reason="transient")
+    assert decision.max_retries == 3
+    assert decision.delay is None

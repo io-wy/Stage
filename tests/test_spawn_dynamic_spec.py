@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from openagents_orchestration.core.agent_loader import AgentSpecError
+from openagents_orchestration.models.pattern import PatternOutcome, PatternOutcomeStatus
 from openagents_orchestration.tools.corecoder.sub_agent import SubAgentTool
 
 
@@ -31,7 +32,10 @@ def fake_runner():
 
         async def run_agent(self, agent_type, input_text, agent_id=None, state=None):
             self._last_spawned = (agent_type, input_text)
-            return f"ran {agent_type}"
+            return PatternOutcome(
+                output=f"ran {agent_type}",
+                status=PatternOutcomeStatus.COMPLETED,
+            )
 
     return FakeRunner()
 

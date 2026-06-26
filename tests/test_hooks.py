@@ -8,10 +8,46 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from openagents_orchestration.hooks import HookManager, load_skills_into_context
+from openagents_orchestration.hooks import (
+    HookEvent,
+    HookManager,
+    load_skills_into_context,
+)
 from openagents_orchestration.skills_registry import SkillRegistry
 
 # -- HookManager core ------------------------------------------------------
+
+def test_hook_event_constants_are_strings():
+    assert HookEvent.PATTERN_BEFORE_LLM == "pattern.before_llm"
+    assert HookEvent.TOOL_AFTER_INVOKE == "tool.after_invoke"
+    assert HookEvent.ARTIFACT_CLAIMED == "artifact.claimed"
+
+
+def test_has_handlers_returns_false_when_empty():
+    hm = HookManager()
+    assert hm.has_handlers("missing") is False
+
+
+def test_has_handlers_returns_true_when_registered():
+    hm = HookManager()
+    hm.register("e", lambda p: p)
+    assert hm.has_handlers("e") is True
+
+
+def test_is_blocked_false_by_default():
+    hm = HookManager()
+    blocked, reason = hm.is_blocked("tool.before_invoke", {"tool_id": "bash"})
+    assert blocked is False
+    assert reason == ""
+
+
+def test_is_blocked_true_when_handler_blocks():
+    hm = HookManager()
+    hm.register("tool.before_invoke", lambda p: {**p, "blocked": True, "reason": "denied"})
+    blocked, reason = hm.is_blocked("tool.before_invoke", {"tool_id": "bash"})
+    assert blocked is True
+    assert reason == "denied"
+
 
 def test_run_with_no_handlers_passes_payload_through():
     hm = HookManager()

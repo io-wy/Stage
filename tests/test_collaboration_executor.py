@@ -22,7 +22,7 @@ from openagents_orchestration.transport.channel_policy import ChannelPolicy
 
 
 # ---------------------------------------------------------------------------
-# Resident stub (mirrors test_collaboration.py and test_runner_collaborative_mode.py)
+# Resident stub (mirrors test_collaboration.py)
 # ---------------------------------------------------------------------------
 
 class _ResidentStub:

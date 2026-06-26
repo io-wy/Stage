@@ -1,5 +1,4 @@
-"""Tests for Director tools: show_state, spawn_agent, send_message, finalize,
-replan, recover_task, correct_task_status, ask_human, check_messages."""
+"""Tests for Director tools: show_state, spawn_agent, finalize, replan, ask_human."""
 
 from __future__ import annotations
 
@@ -7,17 +6,18 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from openagents.errors.exceptions import PermanentToolError
 
-from openagents.errors.exceptions import PermanentToolError, RetryableToolError
-from openagents_orchestration.core.state_board import AgentStatus, Budget, StateBoard
+from openagents_orchestration.core.state_board import StateBoard
+from openagents_orchestration.models.pattern import (
+    PatternError,
+    PatternOutcome,
+    PatternOutcomeStatus,
+)
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.tools.director.ask_human import AskHumanTool
-from openagents_orchestration.tools.director.check_messages import CheckMessagesTool
-from openagents_orchestration.tools.director.correct_task_status import CorrectTaskStatusTool
 from openagents_orchestration.tools.director.finalize import FinalizeTool
-from openagents_orchestration.tools.director.recover_task import RecoverTaskTool
 from openagents_orchestration.tools.director.replan import ReplanTool
-from openagents_orchestration.tools.director.send_message import SendMessageTool
 from openagents_orchestration.tools.director.show_state import ShowStateTool
 from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
@@ -99,14 +99,19 @@ class TestSpawnAgentTool:
         assert "agent_spec" in schema["properties"]
 
     @pytest.mark.asyncio
-    async def test_invoke_success_updates_board(self):
+    async def test_invoke_success_starts_agent_and_returns_outcome(self):
         board = StateBoard("obj")
         board.add_tasks(TaskGraph(
             objective="obj",
             tasks=[TaskNode("t1", "write hello.py", "coder")],
         ))
 
-        mock_delegate = AsyncMock(return_value="Completed.\n\nFILES_CREATED: hello.py")
+        mock_delegate = AsyncMock(
+            return_value=PatternOutcome(
+                output="Completed.",
+                status=PatternOutcomeStatus.COMPLETED,
+            )
+        )
         ctx = MockContext(
             deps=MockContext(state_board=board, runner_delegate=mock_delegate),
             agent_id="director",
@@ -116,30 +121,35 @@ class TestSpawnAgentTool:
         result = await tool.invoke({"task_id": "t1"}, ctx)
 
         assert result["status"] == "completed"
-        assert board.get_task("t1").status == TaskStatus.COMPLETED
+        assert board.get_task("t1").status == TaskStatus.RUNNING
         assert board.agents  # at least one agent registered
         mock_delegate.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_invoke_failure_marks_failed(self):
+    async def test_invoke_failure_returns_failed_outcome(self):
         board = StateBoard("obj")
         board.add_tasks(TaskGraph(
             objective="obj",
             tasks=[TaskNode("t1", "task", "coder")],
         ))
 
-        mock_delegate = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+        mock_delegate = AsyncMock(
+            return_value=PatternOutcome(
+                output="",
+                status=PatternOutcomeStatus.FAILED,
+                error=PatternError(message="LLM timeout"),
+            )
+        )
         ctx = MockContext(
             deps=MockContext(state_board=board, runner_delegate=mock_delegate),
             agent_id="director",
         )
 
         tool = SpawnAgentTool()
-        with pytest.raises(RetryableToolError):
-            await tool.invoke({"task_id": "t1"}, ctx)
+        result = await tool.invoke({"task_id": "t1"}, ctx)
 
-        assert board.get_task("t1").status == TaskStatus.FAILED
-        assert "LLM timeout" in board.get_task("t1").error
+        assert result["status"] == "failed"
+        assert "LLM timeout" in result["error"]
 
     @pytest.mark.asyncio
     async def test_invoke_missing_task_raises(self):
@@ -189,7 +199,12 @@ class TestSpawnAgentTool:
             ],
         ))
 
-        mock_delegate = AsyncMock(return_value="done")
+        mock_delegate = AsyncMock(
+            return_value=PatternOutcome(
+                output="done",
+                status=PatternOutcomeStatus.COMPLETED,
+            )
+        )
         ctx = MockContext(
             deps=MockContext(state_board=board, runner_delegate=mock_delegate),
             agent_id="director",
@@ -259,7 +274,12 @@ class TestSpawnAgentTool:
             tasks=[TaskNode("t1", "audit auth flow", "coder")],
         ))
 
-        mock_delegate = AsyncMock(return_value="done")
+        mock_delegate = AsyncMock(
+            return_value=PatternOutcome(
+                output="done",
+                status=PatternOutcomeStatus.COMPLETED,
+            )
+        )
         fake_runner = MockContext(
             _config_path=Path("agent.json"),
             _agents_by_id={},
@@ -313,62 +333,32 @@ class TestSpawnAgentTool:
                 ctx,
             )
 
-
-# ---------------------------------------------------------------------------
-# SendMessageTool
-# ---------------------------------------------------------------------------
-
-class TestSendMessageTool:
-    def test_schema_has_required_fields(self):
-        tool = SendMessageTool()
-        schema = tool.schema()
-        assert "to_agent" in schema["properties"]
-        assert "message" in schema["properties"]
-        assert schema.get("required") == ["to_agent", "message"]
-
     @pytest.mark.asyncio
-    async def test_invoke_sends_message(self):
+    async def test_invoke_with_context_appends_director_notes(self):
         board = StateBoard("obj")
-        board.register_agent("reviewer-1", "reviewer")
+        board.add_tasks(TaskGraph(
+            objective="obj",
+            tasks=[TaskNode("t1", "write hello.py", "coder")],
+        ))
 
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="coder-1")
-        tool = SendMessageTool()
-        result = await tool.invoke({"to_agent": "reviewer-1", "message": "Please check line 42"}, ctx)
+        mock_delegate = AsyncMock(return_value="Completed.")
+        ctx = MockContext(
+            deps=MockContext(state_board=board, runner_delegate=mock_delegate),
+            agent_id="director",
+        )
 
-        assert "sent" in result.lower() or "delivered" in result.lower()
-        pending = await board.peek_mailbox("reviewer-1")
-        assert len(pending) == 1
+        tool = SpawnAgentTool()
+        await tool.invoke(
+            {"task_id": "t1", "context": "Use single quotes and add a docstring."},
+            ctx,
+        )
 
-    @pytest.mark.asyncio
-    async def test_invoke_broadcast(self):
-        board = StateBoard("obj")
-        board.register_agent("coder-x", "coder")
-        board.register_agent("reviewer-x", "reviewer")
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = SendMessageTool()
-        result = await tool.invoke({"to_agent": "*", "message": "Everyone stop"}, ctx)
-
-        assert "sent" in result.lower() or "delivered" in result.lower()
-
-    @pytest.mark.asyncio
-    async def test_invoke_missing_params_raises(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = SendMessageTool()
-        with pytest.raises(PermanentToolError, match="required"):
-            await tool.invoke({"to_agent": ""}, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_no_board_raises(self):
-        ctx = MockContext(deps=MockContext(), agent_id="director")
-        tool = SendMessageTool()
-        with pytest.raises(PermanentToolError, match="StateBoard"):
-            await tool.invoke({"to_agent": "x", "message": "hi"}, ctx)
+        input_text = mock_delegate.await_args[1]["input_text"]
+        assert "Additional instructions from the Director" in input_text
+        assert "Use single quotes and add a docstring." in input_text
 
 
 # ---------------------------------------------------------------------------
-# FinalizeTool
 # ---------------------------------------------------------------------------
 
 class TestFinalizeTool:
@@ -445,7 +435,10 @@ class TestReplanTool:
             "openagents_orchestration.tools.director.replan.structured_generate",
             new_callable=AsyncMock,
         ) as mock_structured:
-            from openagents_orchestration.tools.director.replan import _ReplanOutputSchema, _ReplanTaskSchema
+            from openagents_orchestration.tools.director.replan import (
+                _ReplanOutputSchema,
+                _ReplanTaskSchema,
+            )
             mock_structured.return_value = (
                 _ReplanOutputSchema(tasks=[
                     _ReplanTaskSchema(task_id="t1a", description="part A", agent_type="coder"),
@@ -504,184 +497,6 @@ class TestReplanTool:
 
 
 # ---------------------------------------------------------------------------
-# RecoverTaskTool
-# ---------------------------------------------------------------------------
-
-class TestRecoverTaskTool:
-    def test_schema_has_required_fields(self):
-        tool = RecoverTaskTool()
-        schema = tool.schema()
-        assert "task_id" in schema["properties"]
-        assert schema.get("required") == ["task_id"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_creates_recovery_task(self):
-        board = StateBoard("obj")
-        board.add_tasks(TaskGraph(
-            objective="obj",
-            tasks=[
-                TaskNode("t1", "big task", "coder", expected_artifacts=["big.py"]),
-                TaskNode("t2", "follow-up", "coder", dependencies=["t1"]),
-            ],
-        ))
-        # Must go through running first due to state machine validation
-        board.update_task("t1", status=TaskStatus.RUNNING)
-        board.update_task("t1", status=TaskStatus.FAILED, error="something went wrong")
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = RecoverTaskTool()
-        result = await tool.invoke({"task_id": "t1", "reason": "try again"}, ctx)
-
-        assert "recovery_task" in result
-        recovery_id = result["recovery_task"]
-        assert recovery_id in board.tasks
-        assert board.get_task("t2").dependencies == [recovery_id]
-        assert result["rewired_dependents"] == ["t2"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_task_not_failed_raises(self):
-        board = StateBoard("obj")
-        board.add_tasks(TaskGraph(
-            objective="obj",
-            tasks=[TaskNode("t1", "task", "coder")],
-        ))
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = RecoverTaskTool()
-        with pytest.raises(PermanentToolError, match="not failed"):
-            await tool.invoke({"task_id": "t1"}, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_task_not_found_raises(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = RecoverTaskTool()
-        with pytest.raises(PermanentToolError, match="not found"):
-            await tool.invoke({"task_id": "missing"}, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_no_board_raises(self):
-        ctx = MockContext(deps=MockContext(), agent_id="director")
-        tool = RecoverTaskTool()
-        with pytest.raises(PermanentToolError, match="StateBoard"):
-            await tool.invoke({"task_id": "t1"}, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_missing_task_id_raises(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = RecoverTaskTool()
-        with pytest.raises(PermanentToolError, match="task_id"):
-            await tool.invoke({"task_id": ""}, ctx)
-
-
-# ---------------------------------------------------------------------------
-# CorrectTaskStatusTool
-# ---------------------------------------------------------------------------
-
-class TestCorrectTaskStatusTool:
-    def test_schema_has_required_fields(self):
-        tool = CorrectTaskStatusTool()
-        schema = tool.schema()
-        assert "task_id" in schema["properties"]
-        assert "status" in schema["properties"]
-        assert "reason" in schema["properties"]
-        assert "artifacts" in schema["properties"]
-        assert schema.get("required") == ["task_id", "status", "reason"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_corrects_status(self):
-        board = StateBoard("obj")
-        board.add_tasks(TaskGraph(
-            objective="obj",
-            tasks=[TaskNode("t1", "task", "coder")],
-        ))
-        # Must go through running first due to state machine validation
-        board.update_task("t1", status=TaskStatus.RUNNING)
-        board.update_task("t1", status=TaskStatus.FAILED, error="oops")
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = CorrectTaskStatusTool()
-        result = await tool.invoke({
-            "task_id": "t1",
-            "status": "completed",
-            "reason": "verified externally",
-        }, ctx)
-
-        assert result["old_status"] == "failed"
-        assert result["new_status"] == "completed"
-        assert board.get_task("t1").status == TaskStatus.COMPLETED
-
-    @pytest.mark.asyncio
-    async def test_invoke_noop_same_status(self):
-        board = StateBoard("obj")
-        board.add_tasks(TaskGraph(
-            objective="obj",
-            tasks=[TaskNode("t1", "task", "coder")],
-        ))
-        # Must go through running first due to state state machine validation
-        board.update_task("t1", status=TaskStatus.RUNNING)
-        board.update_task("t1", status=TaskStatus.COMPLETED)
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = CorrectTaskStatusTool()
-        result = await tool.invoke({
-            "task_id": "t1",
-            "status": "completed",
-            "reason": "already done",
-        }, ctx)
-
-        assert result["note"] == "Status unchanged, artifacts updated"
-
-    @pytest.mark.asyncio
-    async def test_invoke_invalid_status_raises(self):
-        board = StateBoard("obj")
-        board.add_tasks(TaskGraph(
-            objective="obj",
-            tasks=[TaskNode("t1", "task", "coder")],
-        ))
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = CorrectTaskStatusTool()
-        with pytest.raises(PermanentToolError, match="Invalid"):
-            await tool.invoke({
-                "task_id": "t1",
-                "status": "not_a_status",
-                "reason": "test",
-            }, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_task_not_found_raises(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = CorrectTaskStatusTool()
-        with pytest.raises(PermanentToolError, match="not found"):
-            await tool.invoke({
-                "task_id": "missing",
-                "status": "completed",
-                "reason": "test",
-            }, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_no_board_raises(self):
-        ctx = MockContext(deps=MockContext(), agent_id="director")
-        tool = CorrectTaskStatusTool()
-        with pytest.raises(PermanentToolError, match="StateBoard"):
-            await tool.invoke({
-                "task_id": "t1",
-                "status": "completed",
-                "reason": "test",
-            }, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_missing_params_raises(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = CorrectTaskStatusTool()
-        with pytest.raises(PermanentToolError, match="required"):
-            await tool.invoke({"task_id": "", "status": "", "reason": ""}, ctx)
-
-
-# ---------------------------------------------------------------------------
-# AskHumanTool
 # ---------------------------------------------------------------------------
 
 class TestAskHumanTool:
@@ -701,7 +516,7 @@ class TestAskHumanTool:
         result = await tool.invoke({"question": "JWT or session?"}, ctx)
 
         assert "JWT or session?" in result
-        questions = board._human_channel.get_pending_questions(project_id=board.project_id)
+        questions = board.human_channel_service.get_pending_questions(project_id=board.project_id)
         assert len(questions) == 1
         assert questions[0].from_agent == "coder"
 
@@ -732,66 +547,4 @@ class TestAskHumanTool:
 
 
 # ---------------------------------------------------------------------------
-# CheckMessagesTool
 # ---------------------------------------------------------------------------
-
-class TestCheckMessagesTool:
-    def test_schema_has_clear_and_batch_size(self):
-        tool = CheckMessagesTool()
-        schema = tool.schema()
-        assert "clear" in schema["properties"]
-        assert "batch_size" in schema["properties"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_returns_messages(self):
-        board = StateBoard("obj")
-        board.register_agent("reviewer-1", "reviewer")
-
-        # Send a message via the mailbox
-        from openagents_orchestration.models.message import StructuredMessage
-        msg = StructuredMessage.from_text("coder-1", "reviewer-1", "Please check line 42")
-        await board.send_structured(msg)
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="reviewer-1")
-        tool = CheckMessagesTool()
-        result = await tool.invoke({}, ctx)
-
-        assert result["count"] == 1
-        assert "line 42" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_no_messages(self):
-        board = StateBoard("obj")
-        board.register_agent("reviewer-1", "reviewer")
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="reviewer-1")
-        tool = CheckMessagesTool()
-        result = await tool.invoke({}, ctx)
-
-        assert result["count"] == 0
-        assert "No new messages" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_no_board_raises(self):
-        ctx = MockContext(deps=MockContext(), agent_id="reviewer-1")
-        tool = CheckMessagesTool()
-        with pytest.raises(PermanentToolError, match="StateBoard"):
-            await tool.invoke({}, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_with_clear_false(self):
-        board = StateBoard("obj")
-        board.register_agent("reviewer-1", "reviewer")
-
-        from openagents_orchestration.models.message import StructuredMessage
-        msg = StructuredMessage.from_text("coder-1", "reviewer-1", "test message")
-        await board.send_structured(msg)
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="reviewer-1")
-        tool = CheckMessagesTool()
-        result = await tool.invoke({"clear": False}, ctx)
-
-        assert result["count"] == 1
-        # Message should still be in mailbox since clear=False
-        remaining = await board.peek_mailbox("reviewer-1")
-        assert len(remaining) == 1

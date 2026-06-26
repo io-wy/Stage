@@ -1,14 +1,11 @@
-"""Tests for resident tools: spawn_resident, stop_resident, send_to_resident, read_resident_state."""
 
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from openagents.errors.exceptions import PermanentToolError
-from openagents_orchestration.core.state_board import StateBoard
-from openagents_orchestration.tools.resident.read_resident_state import ReadResidentStateTool
+
 from openagents_orchestration.tools.resident.send_to_resident import SendToResidentTool
 from openagents_orchestration.tools.resident.spawn_resident import SpawnResidentTool
 from openagents_orchestration.tools.resident.stop_resident import StopResidentTool
@@ -185,60 +182,8 @@ class TestSendToResidentTool:
             await tool.invoke({"resident_id": "x", "task": "y"}, ctx)
 
 
-# ---------------------------------------------------------------------------
-# ReadResidentStateTool
-# ---------------------------------------------------------------------------
-
-class TestReadResidentStateTool:
     def test_schema_has_resident_id(self):
-        tool = ReadResidentStateTool()
+        tool = SendToResidentTool()
         schema = tool.schema()
         assert "resident_id" in schema["properties"]
-        assert schema.get("required") == ["resident_id"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_returns_resident_state(self):
-        board = StateBoard("obj")
-        # Create a mock resident state with to_dict()
-        mock_resident = MagicMock()
-        mock_resident.agent_type = "coder"
-        mock_resident.to_dict.return_value = {
-            "status": "idle",
-            "latest_output": "hello",
-            "latest_task": "t1",
-            "token_used": 100,
-            "message_count": 5,
-        }
-        board.residents["coder-abc123"] = mock_resident
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = ReadResidentStateTool()
-        result = await tool.invoke({"resident_id": "coder-abc123"}, ctx)
-
-        assert result["resident_id"] == "coder-abc123"
-        assert result["agent_type"] == "coder"
-        assert result["status"] == "idle"
-        assert result["latest_output"] == "hello"
-
-    @pytest.mark.asyncio
-    async def test_invoke_resident_not_found_raises(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = ReadResidentStateTool()
-        with pytest.raises(PermanentToolError, match="not found"):
-            await tool.invoke({"resident_id": "missing"}, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_missing_resident_id_raises(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = ReadResidentStateTool()
-        with pytest.raises(PermanentToolError, match="resident_id"):
-            await tool.invoke({"resident_id": ""}, ctx)
-
-    @pytest.mark.asyncio
-    async def test_invoke_no_board_raises(self):
-        ctx = MockContext(deps=MockContext(), agent_id="director")
-        tool = ReadResidentStateTool()
-        with pytest.raises(PermanentToolError, match="StateBoard"):
-            await tool.invoke({"resident_id": "x"}, ctx)
+        assert schema.get("required") == ["resident_id", "task"]

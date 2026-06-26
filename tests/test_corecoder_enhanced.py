@@ -195,7 +195,7 @@ async def test_planning_phase_generates_plan():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     plan = ctx.state.get("__plan__")
     assert plan is not None
     assert plan["files_to_read"] == ["src/foo.py"]
@@ -322,7 +322,7 @@ async def test_bash_permission_required_blocks_final_text():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     assert "__bash_permission_required__" not in ctx.state
     user_messages = [m for m in ctx.transcript if m.get("role") == "user"]
     permission_msgs = [
@@ -356,7 +356,7 @@ async def test_edit_failure_suggests_fallback():
 
     result = await pattern.execute()
 
-    assert "I see the failure" in result
+    assert "I see the failure" in result.output
     user_messages = [m for m in ctx.transcript if m.get("role") == "user"]
     recoveries = [
         m
@@ -397,7 +397,7 @@ async def test_verification_failure_parsed_and_retries_capped():
 
     result = await pattern.execute()
 
-    assert "Gave up" in result
+    assert "Gave up" in result.output
     # After 3 failed attempts pending verification is dropped.
     assert "__pending_verification__" not in ctx.state
     errors = ctx.state.get("__verification_errors__", [])
@@ -433,7 +433,7 @@ async def test_verification_enforced_after_edit():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     # pending verification should be cleared by the successful bash call
     assert "__pending_verification__" not in ctx.state
     user_messages = [m for m in ctx.transcript if m.get("role") == "user"]
@@ -469,7 +469,7 @@ async def test_accept_edits_mode_skips_verification():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     assert "__pending_verification__" not in ctx.state
 
 
@@ -492,7 +492,7 @@ async def test_plan_mode_generates_plan_file_and_stops(tmp_path: Any, monkeypatc
 
     result = await pattern.execute()
 
-    assert "[Plan mode]" in result
+    assert "[Plan mode]" in result.output
     assert (tmp_path / ".agent_plan.md").exists()
     assert ctx.state.get("__plan_mode_active__") is True
     assert "__plan_approved__" not in ctx.state
@@ -523,7 +523,7 @@ async def test_plan_mode_resumes_after_approval(tmp_path: Any, monkeypatch: Any)
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     assert ctx.state.get("__plan_mode_active__") is True
 
 
@@ -545,7 +545,7 @@ async def test_auto_mode_allows_destructive_bash():
 
     result = await pattern.execute()
 
-    assert result == "Done"
+    assert result.output == "Done"
     assert "__bash_permission_required__" not in ctx.state
 
 
@@ -663,7 +663,7 @@ async def test_replan_after_consecutive_failures():
 
     result = await pattern.execute()
 
-    assert "new plan" in result
+    assert "new plan" in result.output
     assert ctx.state.get("__replan_after_failures__") is True
     plan = ctx.state.get("__plan__")
     assert plan is not None

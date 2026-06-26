@@ -171,7 +171,7 @@ def test_real_agents_compile_and_match_legacy_tools():
     by_id = {s.id: s for s in specs}
     assert set(by_id) == {
         "director", "coder", "reviewer", "researcher",
-        "github_agent", "monitor", "team_leader",
+        "github_agent", "monitor", "team_leader", "verifier",
     }
     # 抽查关键角色工具集（防 base+增量回归）
     assert {t.id for t in by_id["coder"].tools} >= {

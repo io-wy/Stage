@@ -8,11 +8,10 @@ import pytest
 
 from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.models.message import StructuredMessage
+from openagents_orchestration.models.pattern import PatternOutcome, PatternOutcomeStatus
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.tools.director.check_messages import CheckMessagesTool
 from openagents_orchestration.tools.director.finalize import FinalizeTool
 from openagents_orchestration.tools.director.replan import ReplanTool
-from openagents_orchestration.tools.director.send_message import SendMessageTool
 from openagents_orchestration.tools.director.show_state import ShowStateTool
 from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 
@@ -27,14 +26,18 @@ class TestSpawnAgentFullChain:
     """Test spawn_agent -> runner_delegate -> StateBoard update."""
 
     @pytest.mark.asyncio
-    async def test_spawn_success_updates_board(self):
+    async def test_spawn_success_delegates_and_returns_outcome(self):
         board = StateBoard("obj")
         board.add_tasks(TaskGraph(
             objective="obj",
             tasks=[TaskNode("t1", "write hello.py", "coder", input_context="create a hello world script")],
         ))
 
-        mock_delegate = AsyncMock(return_value="Completed.\n\nFILES_CREATED: hello.py")
+        # runner_delegate (run_agent) returns a PatternOutcome; the terminal task
+        # status is applied by the pattern.after_execute hook, not by this tool.
+        mock_delegate = AsyncMock(
+            return_value=PatternOutcome(output="Completed.", status=PatternOutcomeStatus.COMPLETED)
+        )
         ctx = MockContext(
             deps=MockContext(state_board=board, runner_delegate=mock_delegate),
             agent_id="director",
@@ -49,33 +52,10 @@ class TestSpawnAgentFullChain:
         assert "hello.py" in call_args[1]["input_text"]
 
         assert result["status"] == "completed"
-        assert board.get_task("t1").status == TaskStatus.COMPLETED
-        assert "hello.py" in board.artifacts
+        # The tool marks the task RUNNING before delegating; flipping it to
+        # COMPLETED is the hook's job (not exercised in this unit test).
+        assert board.get_task("t1").status == TaskStatus.RUNNING
         assert board.agents  # at least one agent registered
-
-    @pytest.mark.asyncio
-    async def test_spawn_failure_marks_failed(self):
-        board = StateBoard("obj")
-        board.add_tasks(TaskGraph(
-            objective="obj",
-            tasks=[TaskNode("t1", "task", "coder")],
-        ))
-
-        mock_delegate = AsyncMock(side_effect=RuntimeError("LLM timeout"))
-        ctx = MockContext(
-            deps=MockContext(state_board=board, runner_delegate=mock_delegate),
-            agent_id="director",
-        )
-
-        from openagents.errors.exceptions import RetryableToolError
-
-        tool = SpawnAgentTool()
-        with pytest.raises(RetryableToolError):
-            await tool.invoke({"task_id": "t1"}, ctx)
-
-        assert board.get_task("t1").status == TaskStatus.FAILED
-        assert "LLM timeout" in board.get_task("t1").error
-        assert "recommendation" in board.get_task("t1").error
 
     @pytest.mark.asyncio
     async def test_spawn_respects_dependencies(self):
@@ -131,50 +111,7 @@ class TestSpawnAgentFullChain:
 
 
 class TestMessageFlow:
-    """Test send_message -> pending -> check_messages full cycle."""
-
-    @pytest.mark.asyncio
-    async def test_message_roundtrip(self):
-        board = StateBoard("obj")
-        board.register_agent("reviewer-1", "reviewer")
-
-        # Step 1: Agent A sends message to Agent B
-        ctx_a = MockContext(deps=MockContext(state_board=board), agent_id="coder-1")
-        send_tool = SendMessageTool()
-        await send_tool.invoke({"to_agent": "reviewer-1", "message": "Please check line 42"}, ctx_a)
-
-        # Message delivered via Mailbox v2 (no legacy pending list)
-        pending = await board.peek_mailbox("reviewer-1")
-        assert len(pending) == 1
-
-        # Step 2: Agent B checks messages
-        ctx_b = MockContext(deps=MockContext(state_board=board), agent_id="reviewer-1")
-        check_tool = CheckMessagesTool()
-        result = await check_tool.invoke({}, ctx_b)
-
-        assert result["count"] == 1
-        assert "line 42" in result["message"]
-        # Message should be cleared from mailbox
-        remaining = await board.claim_messages("reviewer-1")
-        assert len(remaining) == 0
-
-    @pytest.mark.asyncio
-    async def test_broadcast_message(self):
-        board = StateBoard("obj")
-        board.register_agent("coder-x", "coder")
-        board.register_agent("reviewer-x", "reviewer")
-
-        ctx_sender = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        send_tool = SendMessageTool()
-        await send_tool.invoke({"to_agent": "*", "message": "Everyone stop"}, ctx_sender)
-
-        # Any registered agent should receive the broadcast
-        ctx_any = MockContext(deps=MockContext(state_board=board), agent_id="coder-x")
-        check_tool = CheckMessagesTool()
-        result = await check_tool.invoke({}, ctx_any)
-
-        assert result["count"] == 1
-        assert "Everyone stop" in result["message"]
+    """Test send_message -> mailbox -> peek full cycle."""
 
     @pytest.mark.asyncio
     async def test_message_in_spawn_input(self):
@@ -187,7 +124,7 @@ class TestMessageFlow:
         board.send_mail("reviewer", "coder", "The bug is on line 42")
 
         task = board.get_task("t1")
-        input_text = SpawnAgentTool._build_input(task, board)
+        input_text = SpawnAgentTool._build_input(task, board, agent_type="coder")
 
         assert "Messages from other agents" in input_text
         assert "line 42" in input_text
@@ -272,13 +209,12 @@ class TestDirectorDecisionFlow:
         board = StateBoard("obj")
         ctx = MockContext(deps=MockContext(state_board=board), agent_id="coder")
 
-        tool = CheckMessagesTool()  # noqa: F841 -- used below but linter may complain
         from openagents_orchestration.tools.director.ask_human import AskHumanTool
         ask_tool = AskHumanTool()
         result = await ask_tool.invoke({"question": "JWT or session?"}, ctx)
 
         assert "JWT or session?" in result
-        questions = board._human_channel.get_pending_questions(project_id=board.project_id)
+        questions = board.human_channel_service.get_pending_questions(project_id=board.project_id)
         assert len(questions) == 1
         assert questions[0].from_agent == "coder"
 

@@ -49,7 +49,7 @@ def agents_by_id():
 
 
 def test_agent_roles_match_documentation(agents_by_id):
-    """agent.json 中的 agent id 集合必须等于文档化的 7 个角色。"""
+    """agent.json 中的 agent id 集合必须等于文档化的 8 个角色。"""
     expected = {
         "director",
         "coder",
@@ -58,6 +58,7 @@ def test_agent_roles_match_documentation(agents_by_id):
         "github_agent",
         "monitor",
         "team_leader",
+        "verifier",
     }
     actual = set(agents_by_id.keys())
     assert actual == expected, f"Expected agents {expected}, got {actual}"
