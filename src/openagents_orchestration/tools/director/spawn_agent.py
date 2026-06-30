@@ -254,6 +254,15 @@ class SpawnAgentTool(ToolPlugin):
         status_value = status_obj.value if hasattr(status_obj, "value") else str(status_obj)
         error = getattr(getattr(outcome, "error", None), "message", "") or ""
 
+        # coder max_steps 时 ContinuationHooks 会在 after_execute 内续命，把 task 推进到
+        # COMPLETED/FAILED（或仍 RUNNING）。仅此场景以 board 的 task 状态为准回报 director，
+        # 否则它看到续命前的 max_steps，与 board（单一信源）不一致、误导调度。其他 outcome
+        # 直接透传（保持既有语义，不影响 failed/completed/batch 路径）。
+        if status_value == "max_steps":
+            final_task = board.get_task(task_id)
+            if final_task is not None:
+                status_value = final_task.status.value
+
         return {
             "task_id": task_id,
             "agent_id": agent_id,

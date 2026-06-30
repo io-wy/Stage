@@ -37,6 +37,9 @@ class TaskNode:
     error: str | None = None
     retry_count: int = 0
     needs_verify: bool = False  # director spawn(verify=True) 时置；完成后挂 verify hook 核验
+    # max_steps 续命：耗尽不算失败，护栏内重跑续上（见 hooks/continuation.py）
+    continuation_count: int = 0  # 已续命次数
+    max_continuations: int = 2   # 续命上限（对齐 verify _MAX_FIX=2）；超限标 FAILED 升级 director fallback
 
     # Collaboration pattern support
     collaboration_pattern: str = "default"
@@ -90,6 +93,8 @@ class TaskNode:
             "status": self.status.value,
             "error": self.error,
             "retry_count": self.retry_count,
+            "continuation_count": self.continuation_count,
+            "max_continuations": self.max_continuations,
             "collaboration_pattern": self.collaboration_pattern,
             "collaboration_participants": dict(self.collaboration_participants),
             "input_context": self.input_context,
@@ -117,6 +122,8 @@ class TaskNode:
             status=TaskStatus(data.get("status", "pending")),
             error=data.get("error"),
             retry_count=int(data.get("retry_count", 0)),
+            continuation_count=int(data.get("continuation_count", 0)),
+            max_continuations=int(data.get("max_continuations", 2)),
             collaboration_pattern=data.get("collaboration_pattern", "default"),
             collaboration_participants=dict(data.get("collaboration_participants", {})),
             input_context=data.get("input_context", ""),

@@ -1425,6 +1425,8 @@ class StateBoard:
                 "error": t.error,
                 "priority": getattr(t, "priority", 0),
                 "max_iterations": getattr(t, "max_iterations", 5),
+                "continuation_count": getattr(t, "continuation_count", 0),
+                "max_continuations": getattr(t, "max_continuations", 2),
             }
             deadline = getattr(t, "deadline_s", 0)
             if deadline > 0:
@@ -1544,10 +1546,19 @@ class StateBoard:
             error_message = str(getattr(error, "message", error) or "")
 
         if agent_id and agent_id in self.agents:
-            if status_value in ("failed", "max_steps"):
+            if status_value == "failed":
                 self.update_agent(
                     agent_id,
                     status=AgentStatus.FAILED,
+                    end_time=time.time(),
+                    output_so_far=output[:2000],
+                )
+            elif status_value == "max_steps":
+                # coder 步数耗尽 → 收工（DONE），交 ContinuationHooks 续命；
+                # 非 coder 无续命路径 → 按失败处理（避免下游误判已完成）。
+                self.update_agent(
+                    agent_id,
+                    status=AgentStatus.DONE if agent_type == "coder" else AgentStatus.FAILED,
                     end_time=time.time(),
                     output_so_far=output[:2000],
                 )
@@ -1581,13 +1592,29 @@ class StateBoard:
                     result_output=output[:2000],
                     _force=True,
                 )
-            elif status_value in ("failed", "max_steps") and not task.is_terminal():
+            elif status_value == "failed" and not task.is_terminal():
                 self.update_task(
                     task_id,
                     status=TaskStatus.FAILED,
-                    error=error_message or f"Agent outcome: {status_value}",
+                    error=error_message or "Agent outcome: failed",
                     _force=True,
                 )
+            elif status_value == "max_steps" and not task.is_terminal():
+                if agent_type == "coder":
+                    # coder 步数耗尽 ≠ 失败：task 不标终态（保持 RUNNING），只记 error
+                    # 供 ContinuationHooks 读取。它紧随其后接管续命 / 升级决策。
+                    self.update_task(
+                        task_id,
+                        error=error_message or "step budget exhausted",
+                    )
+                else:
+                    # 非 coder 无续命路径：按原行为标 FAILED，避免 task 卡在 RUNNING。
+                    self.update_task(
+                        task_id,
+                        status=TaskStatus.FAILED,
+                        error=error_message or "Agent outcome: max_steps",
+                        _force=True,
+                    )
 
         self.log_event(
             "pattern.outcome_applied",

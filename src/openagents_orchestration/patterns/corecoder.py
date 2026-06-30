@@ -357,8 +357,13 @@ class CoreCoderPattern(PatternPlugin):
             if normalized is not None:
                 messages.append(normalized)
 
-        # The current user input.
-        if not _last_message_is_user(messages):
+        # The current user input. Append it unless it is *already* the last
+        # message. A resumed session (e.g. a continuation run after max_steps)
+        # loads a transcript that may end with a prior user turn — such as a
+        # verification nudge — so checking "is the last role user" wrongly drops
+        # the NEW input. Compare content instead, so a genuinely new input is
+        # always appended.
+        if not _last_user_message_is(messages, ctx.input_text):
             messages.append({"role": "user", "content": ctx.input_text})
 
         # ---- Lightweight planning phase --------------------------------------
@@ -1499,7 +1504,7 @@ class CoreCoderPattern(PatternPlugin):
             if normalized is not None:
                 messages.append(normalized)
 
-        if not _last_message_is_user(messages):
+        if not _last_user_message_is(messages, ctx.input_text):
             messages.append({"role": "user", "content": ctx.input_text})
 
         if self._enable_planning and not ctx.state.get("__plan__"):
@@ -2436,6 +2441,25 @@ def _last_message_is_user(messages: list[dict[str, Any]]) -> bool:
         if role in ("user", "assistant"):
             return role == "user"
     return False
+
+
+def _last_user_message_is(messages: list[dict[str, Any]], text: str) -> bool:
+    """True if the FINAL message is a user turn whose string content equals ``text``.
+
+    Distinct from ``_last_message_is_user`` (which answers "is the latest turn
+    from the user", skipping tool messages). This answers "is the current input
+    already the last message" — so we avoid duplicating it, yet still append a
+    genuinely new input after a resumed transcript that ends with a prior user
+    turn (e.g. a continuation run resuming a session whose last turn was a
+    verification nudge).
+    """
+    if not messages:
+        return False
+    last = messages[-1]
+    if last.get("role") != "user":
+        return False
+    content = last.get("content")
+    return isinstance(content, str) and content == text
 
 
 def _tool_result_block(

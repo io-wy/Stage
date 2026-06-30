@@ -186,6 +186,7 @@ class HookManager:
         return blocked, reason
 
 
+from openagents_orchestration.hooks.continuation import ContinuationHooks
 from openagents_orchestration.hooks.failure import FailureHooks
 from openagents_orchestration.hooks.state_sync import StateSyncHooks
 from openagents_orchestration.hooks.strategy import StrategyAdvisor, StrategyHooks
@@ -198,6 +199,7 @@ __all__ = [
     "StateSyncHooks",
     "StrategyHooks",
     "StrategyAdvisor",
+    "ContinuationHooks",
     "FailureHooks",
     "VerifyHooks",
     "load_skills_into_context",

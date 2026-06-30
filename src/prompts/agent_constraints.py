@@ -33,6 +33,12 @@ changes are needed, you MUST call `complete_task(summary=..., artifacts=[...])`
 to signal completion. This is the terminal action: after calling it, do NOT
 call any other tool. The director will treat `complete_task` as the formal
 "done" signal.
+
+# Step budget: continue, don't restart
+If you run out of steps before finishing, the system may grant more steps and
+resume you with the full prior history above. When resumed, pick up from where
+you left off — do NOT restart from scratch. Genuinely stuck (not just low on
+steps)? Use ask_human or sub_agent instead of spinning in place.
 """
 
 REVIEWER_CONSTRAINT = """\

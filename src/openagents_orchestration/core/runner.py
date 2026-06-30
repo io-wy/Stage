@@ -39,6 +39,7 @@ from openagents_orchestration.core.resident import ResidentAgent
 from openagents_orchestration.core.state_board import Budget, StateBoard, TaskStatus
 from openagents_orchestration.core.sub_state_board import SubStateBoard
 from openagents_orchestration.hooks import (
+    ContinuationHooks,
     FailureHooks,
     HookEvent,
     HookManager,
@@ -260,6 +261,14 @@ class OrchestratorRunner:
         self._hook_manager.register(
             HookEvent.TOOL_FAILURE,
             self._failure_hooks.tool_failure,
+        )
+        # max_steps 续命:注册在 state_sync 之后、verify 之前。arun 遍历时 apply_outcome
+        # 已把 max_steps 的 task 留在 RUNNING（不当 FAILED），续命在此接管（护栏内重 spawn /
+        # 护栏外标 FAILED 升级 director fallback）；续命跑完最终 COMPLETED 才轮到 verify。
+        self._continuation_hooks = ContinuationHooks(self)
+        self._hook_manager.register(
+            HookEvent.PATTERN_AFTER_EXECUTE,
+            self._continuation_hooks.continuation_after_execute,
         )
         # 完成度核验:注册在 state_sync 之后 → arun 遍历时在 task 标 COMPLETED 之后跑。
         # async handler,由 after_execute 的 await arun 驱动。
@@ -1080,6 +1089,9 @@ class OrchestratorRunner:
             "agent_id": agent_id,
             "steps_used": steps_used,
             "tool_calls_used": tool_calls_used,
+            # 续命死循环护栏（ContinuationHooks）读取的机械空转信号
+            "consecutive_tool_failures": ctx.state.get("__consecutive_tool_failures__", 0),
+            "consecutive_empty_responses": ctx.state.get("__consecutive_empty_responses__", 0),
             "transcript": list(ctx.transcript),
         }
         if awaiting_human:
