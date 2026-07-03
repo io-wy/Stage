@@ -20,7 +20,6 @@ from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.transport.channel_policy import ChannelPolicy
 
-
 # ---------------------------------------------------------------------------
 # Resident stub (mirrors test_collaboration.py)
 # ---------------------------------------------------------------------------

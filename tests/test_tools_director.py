@@ -16,6 +16,7 @@ from openagents_orchestration.models.pattern import (
 )
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.tools.director.ask_human import AskHumanTool
+from openagents_orchestration.tools.director.decompose import DecomposeTool
 from openagents_orchestration.tools.director.finalize import FinalizeTool
 from openagents_orchestration.tools.director.replan import ReplanTool
 from openagents_orchestration.tools.director.show_state import ShowStateTool
@@ -544,6 +545,123 @@ class TestAskHumanTool:
         tool = AskHumanTool()
         with pytest.raises(PermanentToolError, match="StateBoard"):
             await tool.invoke({"question": "test?"}, ctx)
+
+
+# ---------------------------------------------------------------------------
+# DecomposeTool
+# ---------------------------------------------------------------------------
+
+
+class TestDecomposeTool:
+    @pytest.mark.asyncio
+    async def test_invoke_with_subtasks_does_not_crash(self):
+        """Regression for the AttributeError on task.subtasks before TaskNode had the field."""
+        board = StateBoard("obj")
+        mock_llm = MagicMock()
+        ctx = MockContext(
+            deps=MockContext(state_board=board),
+            agent_id="director",
+            llm_client=mock_llm,
+        )
+
+        with patch(
+            "openagents_orchestration.tools.director.decompose.structured_generate",
+            new_callable=AsyncMock,
+        ) as mock_structured:
+            from openagents_orchestration.tools.director.decompose import (
+                _GraphSchema,
+                _SubtaskSchema,
+                _TaskSchema,
+            )
+
+            mock_structured.return_value = (
+                _GraphSchema(
+                    tasks=[
+                        _TaskSchema(
+                            task_id="t1",
+                            description="parent",
+                            agent_type="coder",
+                            subtasks=[
+                                _SubtaskSchema(
+                                    task_id="t1a",
+                                    description="sub A",
+                                    agent_type="coder",
+                                ),
+                                _SubtaskSchema(
+                                    task_id="t1b",
+                                    description="sub B",
+                                    agent_type="coder",
+                                    dependencies=["t1a"],
+                                ),
+                            ],
+                        )
+                    ]
+                ),
+                None,
+            )
+
+            tool = DecomposeTool()
+            result = await tool.invoke({"objective": "build x"}, ctx)
+
+        assert result["tasks_added"] == 1
+        parent = board.get_task("t1")
+        assert parent is not None
+        assert len(parent.subtasks) == 2
+        assert parent.subtasks[0].task_id == "t1a"
+        assert parent.subtasks[1].task_id == "t1b"
+        assert parent.subtasks[1].dependencies == ["t1a"]
+
+    @pytest.mark.asyncio
+    async def test_simple_intent_returns_single_task_without_llm(self):
+        """Simple intents must short-circuit to a single task — no LLM call, no over-split."""
+        board = StateBoard("obj")
+        ctx = MockContext(
+            deps=MockContext(state_board=board),
+            agent_id="director",
+            llm_client=MagicMock(),  # should not be called
+        )
+
+        tool = DecomposeTool()
+        result = await tool.invoke(
+            {
+                "objective": "write a greet function",
+                "intent": {
+                    "task_type": "feature",
+                    "complexity": "simple",
+                    "external": [],
+                    "priority": "normal",
+                    "confidence": 0.9,
+                    "reason": "function implementation",
+                    "source": "L1_rule",
+                },
+            },
+            ctx,
+        )
+
+        assert result["tasks_added"] == 1
+        assert result["task_ids"] == ["t1"]
+        task = board.get_task("t1")
+        assert task is not None
+        assert task.description == "write a greet function"
+        assert task.agent_type == "coder"
+        assert task.dependencies == []
+        assert ctx.llm_client.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_invoke_no_objective_returns_error(self):
+        board = StateBoard("obj")
+        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
+        tool = DecomposeTool()
+        result = await tool.invoke({"objective": ""}, ctx)
+        assert "error" in result
+
+    @pytest.mark.asyncio
+    async def test_invoke_no_board_returns_error(self):
+        ctx = MockContext(deps=MockContext(), agent_id="director")
+        tool = DecomposeTool()
+        result = await tool.invoke({"objective": "build x"}, ctx)
+        assert "error" in result
+        assert "StateBoard" in result["error"]
 
 
 # ---------------------------------------------------------------------------

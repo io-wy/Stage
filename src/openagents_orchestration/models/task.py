@@ -53,6 +53,9 @@ class TaskNode:
     # Team support: nested subgraph for sub-delegation
     subgraph: TaskGraph | None = None
 
+    # Nested subtasks produced by the decompose tool (not yet expanded by the runner).
+    subtasks: list[TaskNode] = field(default_factory=list)
+
     # Iterative execution history (for coder -> review -> fix loops)
     iteration_history: list[dict[str, Any]] = field(default_factory=list)
     assigned_agent: str = ""  # resident_id or agent_id bound to this task
@@ -105,6 +108,8 @@ class TaskNode:
         }
         if self.subgraph is not None:
             result["subgraph"] = self.subgraph.to_dict()
+        if self.subtasks:
+            result["subtasks"] = [st.to_dict() for st in self.subtasks]
         return result
 
     @classmethod
@@ -134,6 +139,8 @@ class TaskNode:
         node.assigned_agent = data.get("assigned_agent", "")
         if "subgraph" in data:
             node.subgraph = TaskGraph.from_dict(data["subgraph"])
+        if "subtasks" in data:
+            node.subtasks = [TaskNode.from_dict(st) for st in data["subtasks"]]
         return node
 
 

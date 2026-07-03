@@ -108,6 +108,26 @@ class DecomposeTool(ToolPlugin):
             source=str(raw_intent.get("source", "tool")),
         )
 
+        # Deterministic fast path: simple objectives are owned by a single agent.
+        # The LLM planner below is also instructed to prefer single tasks, but this
+        # path guarantees it for simple intents and saves a model call.
+        if intent.complexity == "simple" and not intent.external:
+            graph = TaskGraph(
+                objective=objective,
+                tasks=[
+                    TaskNode(
+                        task_id="t1",
+                        description=objective,
+                        agent_type="coder",
+                    )
+                ],
+            )
+            board.add_tasks(graph)
+            return {
+                "tasks_added": 1,
+                "task_ids": ["t1"],
+            }
+
         agents_info = self._build_agents_info(context)
 
         system = (

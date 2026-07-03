@@ -1577,6 +1577,10 @@ class StateBoard:
                     end_time=time.time(),
                     output_so_far=output[:2000],
                 )
+            # Close the agent's trace span when the agent reaches a terminal state.
+            trace = self._traces.get(agent_id)
+            if trace is not None and trace.finished_at is None:
+                trace.finish()
 
         if task_id and task_id in self.tasks:
             task = self.tasks[task_id]
