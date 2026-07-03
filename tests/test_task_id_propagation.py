@@ -102,10 +102,7 @@ async def test_run_agent_syncs_task_for_non_whitelisted_role(tmp_path, monkeypat
     )
 
     config_path = Path(__file__).parent.parent / "agent.json"
-    runner = OrchestratorRunner(
-        config_path,
-        enable_monitor_resident=False,
-    )
+    runner = OrchestratorRunner(config_path)
     runner._current_work_dir = tmp_path
     runner._state_board = board
     runner._state_sync_hooks.board = board  # hook needs the real board reference

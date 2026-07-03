@@ -1,14 +1,14 @@
 """MonitorAgent — proactive heartbeat monitor for enterprise orchestration.
 
 Unlike the passive HealthMonitor (which scans StateBoard periodically),
-MonitorAgent actively sends heartbeat requests to resident agents and
+MonitorAgent actively sends heartbeat requests to agents and
 detects timeouts.  It also watches for DLQ growth and budget exhaustion.
 
 Design:
 - Runs as a background asyncio task inside GlobalOrchestrator
-- Sends heartbeat SIGNAL messages to residents
+- Sends heartbeat SIGNAL messages to agents
 - Expects heartbeat replies within HEARTBEAT_TIMEOUT_S
-- On timeout: logs event, notifies GlobalDirector, optionally stops resident
+- On timeout: logs event, notifies GlobalDirector, optionally stops agent
 """
 
 from __future__ import annotations
@@ -19,14 +19,12 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from openagents_orchestration.core.resident import ResidentAgent
-
 
 @dataclass
 class HeartbeatRecord:
-    """Record of a heartbeat exchange with a resident."""
+    """Record of a heartbeat exchange with an agent."""
 
-    resident_id: str
+    agent_id: str
     sent_at: float
     replied_at: float | None = None
     latency_ms: float = 0.0
@@ -34,7 +32,7 @@ class HeartbeatRecord:
 
 
 class MonitorAgent:
-    """Active heartbeat monitor for all resident agents."""
+    """Active heartbeat monitor for all agents."""
 
     HEARTBEAT_INTERVAL_S = 60.0
     HEARTBEAT_TIMEOUT_S = 30.0
@@ -95,13 +93,13 @@ class MonitorAgent:
             await asyncio.sleep(self.heartbeat_interval_s)
 
     async def _send_heartbeats(self) -> None:
-        """Send heartbeat requests to all active residents."""
-        residents = self._get_residents()
+        """Send heartbeat requests to all active agents."""
+        agents = self._get_agents()
         now = time.time()
 
-        for resident in residents:
-            rid = resident.resident_id
-            self._last_heartbeat[rid] = now
+        for agent in agents:
+            aid = agent.agent_id
+            self._last_heartbeat[aid] = now
 
             # Send heartbeat as a structured message
             hb_msg = {
@@ -111,70 +109,70 @@ class MonitorAgent:
                 "timestamp": now,
             }
             try:
-                await resident.send(hb_msg)
+                await self._send_to_agent(aid, hb_msg)
             except Exception as exc:
                 self._log_event(
                     "agent.heartbeat_timeout",
-                    agent_id=rid,
+                    agent_id=aid,
                     message=f"Failed to send heartbeat: {exc}",
                 )
-                await self._handle_timeout(rid)
+                await self._handle_timeout(aid)
                 continue
 
             # Wait for reply with timeout
-            replied = await self._await_reply(resident, timeout=self.heartbeat_timeout_s)
+            replied = await self._await_reply(agent, timeout=self.heartbeat_timeout_s)
             if not replied:
-                self._missed_counts[rid] = self._missed_counts.get(rid, 0) + 1
-                if self._missed_counts[rid] >= self.max_missed:
-                    await self._handle_timeout(rid)
+                self._missed_counts[aid] = self._missed_counts.get(aid, 0) + 1
+                if self._missed_counts[aid] >= self.max_missed:
+                    await self._handle_timeout(aid)
             else:
-                self._missed_counts[rid] = 0
+                self._missed_counts[aid] = 0
                 latency_ms = (time.time() - now) * 1000
-                self._latency_records.setdefault(rid, []).append(latency_ms)
+                self._latency_records.setdefault(aid, []).append(latency_ms)
                 # Keep only last 10 records
-                self._latency_records[rid] = self._latency_records[rid][-10:]
+                self._latency_records[aid] = self._latency_records[aid][-10:]
                 self._records.append(
                     HeartbeatRecord(
-                        resident_id=rid,
+                        agent_id=aid,
                         sent_at=now,
                         replied_at=time.time(),
                         latency_ms=latency_ms,
                     )
                 )
 
+    async def _send_to_agent(self, agent_id: str, message: dict[str, Any]) -> None:
+        """Send a message to an agent via the orchestrator's state board."""
+        board = self._get_state_board()
+        if board is not None and hasattr(board, "send_mail"):
+            board.send_mail("monitor", agent_id, str(message))
+
     async def _await_reply(
         self,
-        resident: ResidentAgent,
+        agent: Any,
         timeout: float,
     ) -> bool:
-        """Wait for the resident to process the heartbeat.
+        """Wait for the agent to process the heartbeat.
 
-        Since ResidentAgent processes messages in its _loop, we can't directly
-        await a reply.  Instead, we check if the resident's last_active timestamp
-        has been updated after a short sleep.
+        Checks if the agent's last_active timestamp has been updated
+        after a short sleep.
         """
-        before = resident.state.last_active
+        before = getattr(getattr(agent, "state", agent), "last_active", 0)
         await asyncio.sleep(timeout)
-        return resident.state.last_active > before
+        after = getattr(getattr(agent, "state", agent), "last_active", 0)
+        return after > before
 
-    async def _handle_timeout(self, resident_id: str) -> None:
-        """Handle a resident that missed too many heartbeats."""
+    async def _handle_timeout(self, agent_id: str) -> None:
+        """Handle an agent that missed too many heartbeats."""
         self._log_event(
             "agent.heartbeat_timeout",
-            agent_id=resident_id,
-            message=f"Resident {resident_id} missed {self.max_missed} heartbeats",
+            agent_id=agent_id,
+            message=f"Agent {agent_id} missed {self.max_missed} heartbeats",
         )
-
-        # Try to stop the resident gracefully
-        resident = self._find_resident(resident_id)
-        if resident is not None:
-            with contextlib.suppress(Exception):
-                await resident.stop()
 
         # Notify orchestrator
         if self._orchestrator is not None:
             with contextlib.suppress(Exception):
-                await self._orchestrator.on_agent_timeout(resident_id)
+                await self._orchestrator.on_agent_timeout(agent_id)
 
     # -- DLQ monitoring --------------------------------------------------------
 
@@ -188,9 +186,9 @@ class MonitorAgent:
 
     # -- metrics ---------------------------------------------------------------
 
-    def get_latency_stats(self, resident_id: str) -> dict[str, float]:
-        """Return latency statistics for a resident."""
-        records = self._latency_records.get(resident_id, [])
+    def get_latency_stats(self, agent_id: str) -> dict[str, float]:
+        """Return latency statistics for an agent."""
+        records = self._latency_records.get(agent_id, [])
         if not records:
             return {"avg_ms": 0.0, "max_ms": 0.0, "min_ms": 0.0, "count": 0.0}
         return {
@@ -201,31 +199,29 @@ class MonitorAgent:
         }
 
     def get_health_summary(self) -> dict[str, Any]:
-        """Return summary of all monitored residents."""
-        residents = self._get_residents()
+        """Return summary of all monitored agents."""
+        agents = self._get_agents()
         summary: dict[str, Any] = {}
-        for r in residents:
-            rid = r.resident_id
-            summary[rid] = {
-                "status": r.state.status,
-                "missed_heartbeats": self._missed_counts.get(rid, 0),
-                "latency_stats": self.get_latency_stats(rid),
-                "last_active_s": round(time.time() - r.state.last_active, 1),
+        for a in agents:
+            aid = a.agent_id
+            summary[aid] = {
+                "status": getattr(getattr(a, "state", a), "status", "unknown"),
+                "missed_heartbeats": self._missed_counts.get(aid, 0),
+                "latency_stats": self.get_latency_stats(aid),
+                "last_active_s": round(time.time() - getattr(getattr(a, "state", a), "last_active", 0), 1),
             }
         return summary
 
     # -- internal helpers ------------------------------------------------------
 
-    def _get_residents(self) -> list[ResidentAgent]:
-        """Get all resident agents from the orchestrator."""
+    def _get_agents(self) -> list[Any]:
+        """Get all agents from the orchestrator's state board."""
         if self._orchestrator is None:
             return []
-        return list(getattr(self._orchestrator, "_residents", {}).values())
-
-    def _find_resident(self, resident_id: str) -> ResidentAgent | None:
-        if self._orchestrator is None:
-            return None
-        return getattr(self._orchestrator, "_residents", {}).get(resident_id)
+        board = self._get_state_board()
+        if board is None:
+            return []
+        return list(getattr(board, "agents", {}).values())
 
     def _get_state_board(self) -> Any:
         if self._orchestrator is None:

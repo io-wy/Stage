@@ -38,7 +38,7 @@ class TestDecisionHistory:
         dh = DecisionHistory()
         dh.record(DecisionRecord(decision_type="spawn_agent", task_id="t1", outcome="completed"))
         dh.record(DecisionRecord(decision_type="spawn_agent", task_id="t2", outcome="failed", error="timeout"))
-        dh.record(DecisionRecord(decision_type="spawn_resident", task_id="t3", outcome="completed"))
+        dh.record(DecisionRecord(decision_type="replan", task_id="t3", outcome="completed"))
 
         s = dh.summary()
         assert s["total_decisions"] == 3
@@ -46,7 +46,7 @@ class TestDecisionHistory:
         assert s["failed"] == 1
         assert s["success_rate"] == round(2 / 3, 2)
         assert s["by_type"]["spawn_agent"]["total"] == 2
-        assert s["by_type"]["spawn_resident"]["total"] == 1
+        assert s["by_type"]["replan"]["total"] == 1
 
     def test_capacity(self):
         dh = DecisionHistory(max_decisions=3)

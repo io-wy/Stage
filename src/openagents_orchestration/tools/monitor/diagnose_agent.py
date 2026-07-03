@@ -186,7 +186,7 @@ class DiagnoseAgentTool(ToolPlugin):
         if "只读不写" in rc:
             recs.append("建议调整prompt明确产出要求，或更换Agent类型")
         if "效率低下" in rc:
-            recs.append("建议spawn_resident让Agent持续工作，减少重复初始化开销")
+            recs.append("建议spawn_agent重新执行，或调整任务粒度")
         if "工具反复失败" in rc:
             recs.append("建议检查工具参数，或给Agent更多上下文")
 

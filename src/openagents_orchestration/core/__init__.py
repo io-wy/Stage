@@ -8,11 +8,6 @@ from openagents_orchestration.core.decision_history import (
     DecisionHistory,
     DecisionRecord,
 )
-from openagents_orchestration.core.resident import (
-    AgentLifecycle,
-    ResidentAgent,
-    ResidentState,
-)
 from openagents_orchestration.core.state_board import (
     AgentState,
     AgentStatus,
@@ -43,9 +38,6 @@ __all__ = [
     "DecisionHistory",
     "DecisionRecord",
     "parse_collaboration_message",
-    "AgentLifecycle",
-    "ResidentAgent",
-    "ResidentState",
     "OrchestratorRunner",
     "RunnerDeps",
     "AgentState",

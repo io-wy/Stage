@@ -60,10 +60,6 @@ TOOL_REGISTRY: dict[str, str] = {
     "send_message": "openagents_orchestration.tools.director.send_message.SendMessageTool",
     "classify_intent": "openagents_orchestration.tools.director.classify_intent.ClassifyIntentTool",
     "decompose": "openagents_orchestration.tools.director.decompose.DecomposeTool",
-    # resident 工具
-    "spawn_resident": "openagents_orchestration.tools.resident.spawn_resident.SpawnResidentTool",
-    "send_to_resident": "openagents_orchestration.tools.resident.send_to_resident.SendToResidentTool",
-    "stop_resident": "openagents_orchestration.tools.resident.stop_resident.StopResidentTool",
     # github 工具
     "github_pr": "openagents_orchestration.tools.github.pr.GitHubPRTool",
     "github_issue": "openagents_orchestration.tools.github.issue.GitHubIssueTool",

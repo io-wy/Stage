@@ -71,15 +71,6 @@ class EventReplayer:
             if fields:
                 board.update_agent(agent_id, **fields)
 
-        # -- resident events ---------------------------------------------------
-        elif event_type == "resident.registered":
-            # Cannot fully replay without ResidentState — but snapshot has it
-            pass
-
-        elif event_type.startswith("resident."):
-            if fields:
-                board.update_resident(agent_id, **fields)
-
         # -- artifact events ---------------------------------------------------
         elif event_type == "artifact.claimed":
             # Parse paths from message: "N artifact(s) by {task_id}: [paths]"

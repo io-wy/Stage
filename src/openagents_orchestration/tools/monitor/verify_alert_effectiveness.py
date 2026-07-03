@@ -171,8 +171,8 @@ class VerifyAlertEffectivenessTool(ToolPlugin):
         if any("human.asked" in e.event_type for e in events_after):
             improved = True
 
-        # Was a resident spawned for the problematic agent?
-        if any("resident.registered" in e.event_type for e in events_after):
+        # Was a new agent spawned for the problematic task?
+        if any("agent.registered" in e.event_type for e in events_after):
             improved = True
 
         return {

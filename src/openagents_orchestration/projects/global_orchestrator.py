@@ -321,21 +321,17 @@ class GlobalOrchestrator:
 
     # -- event handling --------------------------------------------------------
 
-    async def on_agent_timeout(self, resident_id: str) -> None:
-        """Callback from MonitorAgent when a resident times out."""
-        # Find which project owns this resident
+    async def on_agent_timeout(self, agent_id: str) -> None:
+        """Callback from MonitorAgent when an agent times out."""
+        # Find which project owns this agent
         for project in self._projects.values():
             if project.state_board is None:
                 continue
-            if resident_id in project.state_board.residents:
+            if agent_id in project.state_board.agents:
                 project.state_board.log_event(
                     "agent.heartbeat_timeout",
-                    agent_id=resident_id,
-                    message=f"Monitor detected timeout for {resident_id}",
-                )
-                # Update resident status
-                project.state_board.update_resident(
-                    resident_id, status="stopped"
+                    agent_id=agent_id,
+                    message=f"Monitor detected timeout for {agent_id}",
                 )
                 break
 

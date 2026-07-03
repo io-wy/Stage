@@ -1,12 +1,11 @@
 """Collaboration message parsing + TaskNode serialization coverage.
 
 The producer/checker orchestration loop (``_process_collaborative_messages`` /
-``_run_collaborative`` / ``_spawn_resident_for_task``) was extracted out of
-``OrchestratorRunner`` into ``CollaborationStateMachine`` /
-``CollaborationDecisionExecutor``; that logic is covered by
-``test_collaboration_state_machine.py`` and ``test_collaboration_executor.py``.
-This file keeps only the pure-function and serialization tests that do not
-depend on the (now removed) runner methods.
+``_run_collaborative``) was extracted out of ``OrchestratorRunner`` into
+``CollaborationStateMachine`` / ``CollaborationDecisionExecutor``; that logic
+is covered by ``test_collaboration_state_machine.py`` and
+``test_collaboration_executor.py``.  This file keeps only the pure-function and
+serialization tests that do not depend on the runner methods.
 """
 
 from __future__ import annotations

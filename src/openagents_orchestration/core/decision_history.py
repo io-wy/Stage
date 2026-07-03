@@ -20,7 +20,7 @@ from typing import Any
 class DecisionRecord:
     """One Director decision and its known outcome."""
 
-    decision_type: str  # spawn_agent | spawn_resident | replan | ask_human | skip
+    decision_type: str  # spawn_agent | replan | ask_human | skip
     task_id: str = ""
     agent_id: str = ""
     agent_type: str = ""

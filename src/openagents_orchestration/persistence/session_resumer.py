@@ -4,7 +4,6 @@ MVP scope:
 - Load the latest StateBoard snapshot
 - Replay events after the snapshot to reconstruct current state
 - Detect interruption type from the last event
-- Provide resident transcript paths for restoration
 
 Full auto-resume (reconstruct running agents, rebuild conversation context)
 is intentionally out of MVP scope — it requires re-running the Director
@@ -31,14 +30,12 @@ class ResumeResult:
         snapshot: dict[str, Any] | None,
         snapshot_seq: int,
         events_after: list[dict[str, Any]],
-        resident_paths: list[Path],
         interruption: str | None = None,
     ):
         self.session_id = session_id
         self.snapshot = snapshot
         self.snapshot_seq = snapshot_seq
         self.events_after = events_after
-        self.resident_paths = resident_paths
         self.interruption = interruption  # "mid_tool" | "interrupted_prompt" | "completed" | None
 
 
@@ -86,10 +83,6 @@ class SessionResumer:
         recorder = EventRecorder(session_dir, session_id)
         events_after = recorder.events_after(snapshot_seq)
 
-        # 3. Find resident transcript files
-        residents_dir = session_dir / "residents"
-        resident_paths = list(residents_dir.glob("*.json")) if residents_dir.exists() else []
-
         # 4. Detect interruption from last event
         interruption = self._detect_interruption(events_after)
 
@@ -98,7 +91,6 @@ class SessionResumer:
             snapshot=snapshot,
             snapshot_seq=snapshot_seq,
             events_after=events_after,
-            resident_paths=resident_paths,
             interruption=interruption,
         )
 

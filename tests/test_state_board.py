@@ -107,20 +107,20 @@ class TestStateBoard:
         assert board.has_actionable()
         assert not board.all_terminal()
 
-    def test_roundtrip_preserves_budget_context_and_residents(self):
+    def test_roundtrip_preserves_budget_context_and_agents(self):
         board = StateBoard("obj", budget=Budget(token_limit=1000, time_limit_s=1800, max_steps=99))
         board.budget.start_time = 123.0
         board.add_error_log("t1", "needs fix")
 
-        from openagents_orchestration.core.resident import ResidentState
-        board.register_resident(ResidentState(resident_id="coder-api-auth", agent_type="coder", latest_output="done"))
+        board.register_agent("coder-api-auth", "coder")
+        board.update_agent("coder-api-auth", output_so_far="done")
 
         restored = StateBoard.from_dict(board.to_dict(), reset_budget_clock=False)
 
         assert restored.budget.time_limit_s == 1800
         assert restored.budget.start_time == 123.0
         assert restored.get_project_context()["recent_errors"][0]["error"] == "needs fix"
-        assert restored.get_resident("coder-api-auth").latest_output == "done"
+        assert restored.get_agent("coder-api-auth").output_so_far == "done"
 
     def test_budget(self):
         budget = Budget(token_limit=1000, max_steps=5)
@@ -216,7 +216,7 @@ class TestStateBoard:
         board.update_agent("coder-t1", steps_used=30)
         suggestion = board.suggest_fallback("t1")
         assert "几乎没有产出" in suggestion
-        assert "spawn resident" in suggestion
+        assert "spawn_agent" in suggestion
 
     def test_suggest_fallback_high_token(self):
         board = StateBoard("obj")

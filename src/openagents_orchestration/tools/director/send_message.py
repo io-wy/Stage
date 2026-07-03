@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 from openagents.errors.exceptions import PermanentToolError
@@ -32,7 +31,7 @@ class SendMessageTool(ToolPlugin):
         "- You are a producer in collaborative mode signaling TASK_REVIEW_READY to your checker.\n"
         "- You are a checker signaling TASK_APPROVED or TASK_FIX_NEEDED to your producer.\n\n"
         "Do NOT use send_message when:\n"
-        "- The message is a task assignment — use spawn_agent or send_to_resident instead.\n"
+        "- The message is a task assignment — use spawn_agent instead.\n"
         "- You need an immediate synchronous answer — the recipient processes mail on their own schedule.\n"
         "- You are the Director assigning work — use spawn_agent with task_ids.\n\n"
         "Target formats:\n"
@@ -76,7 +75,6 @@ class SendMessageTool(ToolPlugin):
 
         deps = getattr(context, "deps", None)
         board = getattr(deps, "state_board", None) if deps else None
-        runner = getattr(deps, "runner", None) if deps else None
         if board is None:
             raise PermanentToolError("StateBoard not available", tool_name=self.name)
 
@@ -105,45 +103,12 @@ class SendMessageTool(ToolPlugin):
                 msg_type=MessageType.NOTIFICATION,
             )
 
-        # Deliver via structured mailbox (v2) FIRST — if channel policy or
-        # back-pressure blocks it, don't deliver to resident either.  This
-        # prevents inconsistent state where the resident thinks it has a
-        # message but the system blocked it.
         delivered = await board.send_structured(msg)
         if not delivered:
             return (
                 f"Message to {to_agent} was blocked by channel policy "
                 f"or mailbox is full."
             )
-
-        # Collaboration signals are processed by the orchestrator's
-        # collaboration loop (state machine), not by the target resident
-        # directly.  Direct-inbox delivery would bypass the state machine and
-        # cause the signal to be consumed as ordinary chat.  Only non-signal
-        # messages are delivered directly to an active, awake resident.
-        is_signal = collab is not None
-        resident_delivered = False
-        if runner is not None and hasattr(runner, "_residents") and not is_signal:
-            resident = runner._residents.get(to_agent)
-            if (
-                resident is not None
-                and getattr(resident, "_active", False)
-                and not getattr(resident, "_sleeping", False)
-            ):
-                with contextlib.suppress(Exception):
-                    resident.send_nowait({
-                        "task": "",
-                        "content": message,
-                        "from": from_agent,
-                        "msg_id": msg.msg_id,
-                    })
-                    resident_delivered = True
-
-        # Ack the mailbox copy when delivered directly so a later peek/claim
-        # won't deliver a duplicate.  Match by msg_id.
-        if resident_delivered:
-            with contextlib.suppress(Exception):
-                await board.ack_message(to_agent, msg.msg_id)
 
         board.log_event(
             "message.sent",
@@ -153,10 +118,7 @@ class SendMessageTool(ToolPlugin):
                 "from": from_agent,
                 "to": to_agent,
                 "content": message,
-                "resident_delivered": resident_delivered,
             },
         )
 
-        if resident_delivered:
-            return f"Message delivered directly to resident {to_agent} and stored in mailbox."
         return f"Message sent to {to_agent}."

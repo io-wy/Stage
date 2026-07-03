@@ -90,10 +90,7 @@ async def test_director_react_loop_classify_decompose_spawn_finalize(tmp_path, m
     objective = "Create a hello.py file that prints hello"
 
     config_path = Path(__file__).parent.parent / "agent.json"
-    runner = OrchestratorRunner(
-        config_path,
-        enable_monitor_resident=False,
-    )
+    runner = OrchestratorRunner(config_path)
 
     # -- Mock classify_intent tool: always return a complex intent ---------------
     async def fake_classify(self, params, context):

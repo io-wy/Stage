@@ -1,6 +1,6 @@
 """Team — project-scoped sub-execution unit with TeamLeader + Workers.
 
-A Team owns a SubStateBoard scoped to its subgraph, manages resident
+A Team owns a SubStateBoard scoped to its subgraph, manages
 workers, enforces channel policy for intra-team communication, and
 reports progress upward to the Project / GlobalDirector.
 """
@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from openagents_orchestration.core.resident import ResidentAgent
 from openagents_orchestration.core.sub_state_board import SubStateBoard
 from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.transport.channel_policy import (
@@ -72,7 +71,7 @@ class Team:
     name: str
     sub_state_board: SubStateBoard
     leader_id: str | None = None
-    workers: dict[str, ResidentAgent] = field(default_factory=dict, repr=False)
+    workers: dict[str, Any] = field(default_factory=dict, repr=False)
     channel_policy: ChannelPolicy = field(default_factory=lambda: DEFAULT_TEAM_POLICY)
     status: TeamStatus = TeamStatus.IDLE
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -106,8 +105,6 @@ class Team:
 
     async def stop(self) -> None:
         """Stop all workers and transition to STOPPED."""
-        for worker in list(self.workers.values()):
-            await worker.stop()
         self.workers.clear()
         self.status = TeamStatus.STOPPED
         self.sub_state_board.log_event(
@@ -117,28 +114,25 @@ class Team:
 
     # -- worker management -----------------------------------------------------
 
-    def add_worker(self, worker: ResidentAgent) -> None:
-        """Register a worker resident."""
+    def add_worker(self, worker: Any) -> None:
+        """Register a worker."""
         if len(self.workers) >= 10:
             raise RuntimeError(f"Team {self.team_id} worker limit reached")
-        self.workers[worker.resident_id] = worker
-        self.sub_state_board.register_resident(worker.state)
+        worker_id = getattr(worker, "agent_id", getattr(worker, "resident_id", str(id(worker))))
+        self.workers[worker_id] = worker
 
-    def remove_worker(self, worker_id: str) -> ResidentAgent | None:
+    def remove_worker(self, worker_id: str) -> Any | None:
         """Remove and return a worker, or None if not found."""
-        worker = self.workers.pop(worker_id, None)
-        if worker is not None:
-            self.sub_state_board.update_resident(worker_id, status="stopped")
-        return worker
+        return self.workers.pop(worker_id, None)
 
-    def get_worker(self, worker_id: str) -> ResidentAgent | None:
+    def get_worker(self, worker_id: str) -> Any | None:
         return self.workers.get(worker_id)
 
-    def list_workers(self, status: str | None = None) -> list[ResidentAgent]:
+    def list_workers(self, status: str | None = None) -> list[Any]:
         """List workers, optionally filtered by status."""
         result = list(self.workers.values())
         if status is not None:
-            result = [w for w in result if w.state.status == status]
+            result = [w for w in result if getattr(getattr(w, "state", w), "status", "") == status]
         return result
 
     # -- messaging -------------------------------------------------------------
@@ -161,16 +155,6 @@ class Team:
                 message=f"Blocked {sender} -> {recipient}",
             )
             return False
-
-        # Deliver to resident inbox if target is a local worker
-        worker = self.workers.get(recipient)
-        if worker is not None and getattr(worker, "_active", False):
-            await worker.send({
-                "task": "",
-                "content": msg.text,
-                "from": sender,
-                "payload": msg.payload,
-            })
 
         # Also store in SubStateBoard mailbox for pull-based retrieval
         await self.sub_state_board.send_structured(msg)

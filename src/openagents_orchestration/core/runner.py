@@ -35,7 +35,6 @@ from openagents_orchestration.core.agent_loader import (
     AgentSpecError,
     load_agent_specs,
 )
-from openagents_orchestration.core.resident import ResidentAgent
 from openagents_orchestration.core.state_board import Budget, StateBoard, TaskStatus
 from openagents_orchestration.core.sub_state_board import SubStateBoard
 from openagents_orchestration.hooks import (
@@ -142,7 +141,7 @@ class RunnerDeps:
 
     state_board: StateBoard
     runner_delegate: Any  # callable: (agent_type, input_text, agent_id=None) -> str
-    runner: Any  # OrchestratorRunner reference for resident management
+    runner: Any  # OrchestratorRunner reference for tool context access
     hooks: Any | None = None  # HookManager for lifecycle hooks (session.start, tool.*, pattern.before_llm)
 
 
@@ -159,14 +158,9 @@ class OrchestratorRunner:
         config_path: str | Path,
         *,
         persist_dir: str | None = None,
-        enable_monitor_resident: bool = True,
         max_concurrent_spawns: int = 3,
-        max_concurrent_residents: int = 4,
-        resident_stuck_threshold_s: float = 120.0,
     ):
         self._max_concurrent_spawns = max_concurrent_spawns
-        self._max_concurrent_residents = max_concurrent_residents
-        self._resident_stuck_threshold_s = resident_stuck_threshold_s
         self._config_path = Path(config_path)
         # agent.json 现在是纯 runtime/events 配置；角色定义由 agents/ 编译层加载。
         self._config = self._load_app_config(self._config_path)
@@ -175,7 +169,6 @@ class OrchestratorRunner:
         self._mcp_manager: McpClientManager | None = None
         self._mcp_tools: dict[str, Any] = {}
         self._bundles: dict[str, _AgentBundle] = {}
-        self._residents: dict[str, ResidentAgent] = {}
         self._sessions = _SessionStore()
         events_config = self._config.get("events")
         if events_config and isinstance(events_config, dict):
@@ -186,8 +179,6 @@ class OrchestratorRunner:
         self._project: Project | None = None
         self._deps: RunnerDeps | None = None
         self._spawn_sem = asyncio.Semaphore(max_concurrent_spawns)
-        self._monitor_resident_id: str | None = None
-        self._enable_monitor_resident = enable_monitor_resident
         # Persistence layer
         self._persist_dir = Path(persist_dir) if persist_dir else None
         self._session_id: str | None = None
@@ -382,9 +373,6 @@ class OrchestratorRunner:
                 else:
                     await self._start_run(objective, budget=budget)
 
-                # Spawn monitor resident for health observations.
-                await self._spawn_monitor_resident()
-
                 # Wire runtime dependencies for tools.
                 await self._wire_run_deps()
 
@@ -520,33 +508,6 @@ class OrchestratorRunner:
             work_dir=self._current_work_dir,
         )
         return report
-
-    async def _spawn_monitor_resident(self) -> None:
-        """Spawn the monitor resident agent for continuous monitoring."""
-        if self._state_board is None:
-            return
-        if not self._enable_monitor_resident:
-            return
-        try:
-            if "monitor" not in self._agents_by_id:
-                print("[Orchestrator] Monitor agent not configured, skipping.", file=sys.stderr, flush=True)
-                return
-
-            resident_id = f"monitor-{uuid.uuid4().hex[:6]}"
-
-            resident = ResidentAgent(
-                resident_id=resident_id,
-                agent_type="monitor",
-                runner=self,
-                board=self._state_board,
-            )
-            await resident.start()
-            self._residents[resident_id] = resident
-            self._monitor_resident_id = resident_id
-            self._state_board.register_resident(resident.state)
-            print(f"[Orchestrator] Monitor resident spawned: {resident_id}", file=sys.stderr, flush=True)
-        except Exception as exc:
-            print(f"[Orchestrator] Failed to spawn monitor: {exc}", file=sys.stderr, flush=True)
 
     async def run_agent(
         self,
@@ -730,90 +691,6 @@ class OrchestratorRunner:
                 artifacts.append(str(path))
 
         return "\n".join(lines), artifacts
-
-    # -- resident agents -----------------------------------------------------
-
-    async def start_resident(self, agent_type: str) -> str:
-        """Start a persistent resident agent.
-
-        Returns the resident_id.
-        Raises RuntimeError if max concurrent residents reached.
-        """
-        if self._state_board is None:
-            raise RuntimeError("StateBoard not initialized")
-        # Limit concurrent residents to prevent token explosion
-        active_residents = sum(
-            1 for r in self._residents.values()
-            if r.state.status in ("idle", "busy")
-        )
-        if active_residents >= self._max_concurrent_residents:
-            raise RuntimeError(
-                f"Max concurrent residents ({self._max_concurrent_residents}) reached. "
-                f"Stop an existing resident before starting a new one."
-            )
-        resident_id = f"{agent_type}-resident-{uuid.uuid4().hex[:6]}"
-
-        # Start a trace for this resident
-        self._state_board.start_trace(resident_id)
-
-        persist_dir = self._session_dir if self._session_dir is not None else None
-        resident = ResidentAgent(
-            resident_id=resident_id,
-            agent_type=agent_type,
-            runner=self,
-            board=self._state_board,
-            persist_dir=persist_dir,
-        )
-        self._residents[resident_id] = resident
-        await resident.start()
-        return resident_id
-
-    async def send_to_resident(
-        self,
-        resident_id: str,
-        *,
-        task: str = "",
-        content: str = "",
-        context: str = "",
-        from_id: str = "director",
-    ) -> None:
-        """Send a message to a resident agent."""
-        resident = self._residents.get(resident_id)
-        if resident is None:
-            raise RuntimeError(f"Resident '{resident_id}' not found")
-        await resident.send({
-            "from": from_id,
-            "task": task,
-            "content": content,
-            "context": context,
-        })
-
-    def get_resident(self, resident_id: str) -> ResidentAgent | None:
-        return self._residents.get(resident_id)
-
-    async def stop_resident(self, resident_id: str) -> None:
-        """Stop a resident agent."""
-        resident = self._residents.pop(resident_id, None)
-        if resident is not None:
-            await resident.stop()
-
-    async def _run_resident_single(
-        self,
-        *,
-        resident_id: str,
-        agent_type: str,
-        input_text: str,
-        transcript: list[dict[str, Any]],
-        budget: Any | None = None,
-    ) -> RunResult[str]:
-        """Run one shot for a resident agent with persistent transcript."""
-        return await self._run_single(
-            agent_id=resident_id,
-            agent_type=agent_type,
-            input_text=input_text,
-            transcript_override=transcript,
-            budget=budget,
-        )
 
     # -- internals -----------------------------------------------------------
 
@@ -1213,12 +1090,8 @@ class OrchestratorRunner:
         # Flush remaining events
         if self._recorder is not None:
             self._recorder.close()
-        # Stop all residents
-        for resident in list(self._residents.values()):
-            await resident.stop()
-        self._residents.clear()
         for bundle in self._bundles.values():
-            memory = getattr(bundle.plugins, "memory", None)
+            memory = getattr(bundle.plugins,"memory", None)
             if memory is not None and hasattr(memory, "close"):
                 await memory.close()
         # Close composed services in StateBoard (Redis connections, etc.)

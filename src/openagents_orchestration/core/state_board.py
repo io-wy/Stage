@@ -71,6 +71,7 @@ class AgentState:
             "agent_type": self.agent_type,
             "status": self.status.value,
             "current_task": self.current_task,
+            "output_so_far": self.output_so_far,
             "files_claimed": self.files_claimed,
             "files_verified": self.files_verified,
             "elapsed_s": round(time.time() - self.start_time, 1) if self.start_time else 0,
@@ -195,7 +196,6 @@ class StateBoard:
         self.team_id = team_id
         self.tasks: dict[str, TaskNode] = {}
         self.agents: dict[str, AgentState] = {}
-        self.residents: dict[str, Any] = {}
         self.artifacts: dict[str, ArtifactRecord] = {}
         self.budget = budget or Budget()
         self.events: list[Event] = []
@@ -624,50 +624,6 @@ class StateBoard:
     def get_agent(self, agent_id: str) -> AgentState | None:
         return self.agents.get(agent_id)
 
-    # -- resident management -------------------------------------------------
-
-    def register_resident(self, state: Any) -> None:
-        self.residents[state.resident_id] = state
-        self.log_event(
-            "resident.registered",
-            agent_id=state.resident_id,
-            message=f"Registered {state.agent_type} resident",
-        )
-
-    def update_resident(self, resident_id: str, **fields: Any) -> None:
-        if resident_id not in self.residents:
-            return
-        resident = self.residents[resident_id]
-        changed: list[str] = []
-        for key, value in fields.items():
-            if hasattr(resident, key):
-                old = getattr(resident, key)
-                if old != value:
-                    changed.append(f"{key}={value}")
-                setattr(resident, key, value)
-        if changed:
-            status = fields.get("status", resident.status)
-            serializable_fields = {}
-            for k, v in fields.items():
-                if hasattr(v, "value"):
-                    serializable_fields[k] = v.value
-                else:
-                    serializable_fields[k] = v
-            self.log_event(
-                f"resident.{status}",
-                agent_id=resident_id,
-                message=", ".join(changed),
-                fields=serializable_fields,
-            )
-
-    def get_resident(self, resident_id: str) -> Any | None:
-        return self.residents.get(resident_id)
-
-    def list_residents(self, agent_type: str | None = None) -> list[Any]:
-        if agent_type is None:
-            return list(self.residents.values())
-        return [r for r in self.residents.values() if r.agent_type == agent_type]
-
     # -- artifact management -------------------------------------------------
 
     def claim_artifact(self, task_id: str, paths: list[str]) -> None:
@@ -849,7 +805,7 @@ class StateBoard:
             else:
                 parts.append(
                     f"Agent 用了 {agent.steps_used} 步但几乎没有产出，"
-                    f"可能在原地打转，建议尝试 spawn resident。"
+                    f"可能在原地打转，建议尝试 spawn_agent 重新执行。"
                 )
 
         # 观察 3: token 爆表
@@ -875,10 +831,6 @@ class StateBoard:
             elif "recommendation: retry" in task.error:
                 parts.append(
                     "spawn_agent 建议 retry：可能是瞬时错误，但已重试 3 次仍未成功。"
-                )
-            elif "recommendation: spawn resident" in task.error:
-                parts.append(
-                    "spawn_agent 建议 spawn resident：agent 可能陷入循环。"
                 )
             elif "recommendation: ask_human" in task.error:
                 parts.append(
@@ -1021,7 +973,7 @@ class StateBoard:
             and t.status not in {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED}
         ]
         if overdue:
-            suggestions.extend(["spawn_resident", "ask_human"])
+            suggestions.extend(["spawn_agent", "ask_human"])
 
         # 高优先级：pending messages
         pending_count = self._mailbox_manager.aggregate_mailbox_metrics()["total_enqueued"]
@@ -1031,7 +983,7 @@ class StateBoard:
         # 有 failed 任务 → 先看原因再决定
         failed = [t for t in self.tasks.values() if t.status == TaskStatus.FAILED]
         if failed:
-            suggestions.extend(["read_file", "replan", "spawn_resident"])
+            suggestions.extend(["read_file", "replan", "spawn_agent"])
 
         # 有 ready 的 pending 任务 → 调度（按优先级排序）
         ready = self.tasks_ready()
@@ -1056,7 +1008,7 @@ class StateBoard:
         return suggestions
 
     def bind_agent_to_task(self, agent_id: str, task_id: str) -> None:
-        """Bind a resident agent to a task for iterative work."""
+        """Bind an agent to a task for iterative work."""
         task = self.tasks.get(task_id)
         if task is not None:
             task.assigned_agent = agent_id
@@ -1213,7 +1165,6 @@ class StateBoard:
             "budget": self.budget.to_dict(),
             "tasks": [t.to_dict() for t in self.tasks.values()],
             "agents": {aid: a.to_dict() for aid, a in self.agents.items()},
-            "residents": {rid: r.to_dict() for rid, r in self.residents.items()},
             "artifacts": {path: a.to_dict() for path, a in self.artifacts.items()},
             "events": [
                 {
@@ -1314,29 +1265,6 @@ class StateBoard:
                 error_types=list(adata.get("error_types", [])),
             )
             board.agents[aid] = agent
-
-        # Restore residents
-        try:
-            from openagents_orchestration.core.resident import ResidentState
-            for rid, rdata in data.get("residents", {}).items():
-                board.residents[rid] = ResidentState(
-                    resident_id=rdata.get("resident_id", rid),
-                    agent_type=rdata.get("agent_type", "coder"),
-                    status=rdata.get("status", "idle"),
-                    latest_output=rdata.get("latest_output", ""),
-                    latest_task=rdata.get("latest_task", ""),
-                    token_used=rdata.get("token_used", 0),
-                    message_count=rdata.get("message_count", 0),
-                    error_count=rdata.get("error_count", 0),
-                    start_time=rdata.get("start_time", time.time()),
-                    last_active=rdata.get("last_active", time.time()),
-                )
-        except (ImportError, TypeError, ValueError, AttributeError) as exc:
-            import logging
-            logging.getLogger(__name__).warning(
-                "Failed to restore residents from snapshot (%s: %s), skipping",
-                type(exc).__name__, exc,
-            )
 
         # Restore artifacts
         for path, adata in data.get("artifacts", {}).items():
@@ -1445,9 +1373,6 @@ class StateBoard:
             for a in self.artifacts.values()
         ]
 
-        # Resident summary
-        resident_lines = [r.to_dict() for r in self.residents.values()]
-
         # Recent events (last 20)
         recent_events = [
             {"type": e.event_type, "msg": e.message}
@@ -1486,7 +1411,6 @@ class StateBoard:
             "progress": self.progress_summary(),
             "tasks": task_lines,
             "agents": agent_lines,
-            "residents": resident_lines,
             "artifacts": artifact_lines,
             "signals": {
                 "ready_to_run": [t.task_id for t in ready_sorted],
@@ -1677,6 +1601,5 @@ class StateBoard:
                 "budget": self.budget.to_dict(),
                 "progress": self.progress_summary(),
                 "agents": {aid: a.to_dict() for aid, a in self.agents.items()},
-                "residents": {rid: r.to_dict() for rid, r in self.residents.items()},
             },
         )
