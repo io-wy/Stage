@@ -62,6 +62,7 @@ from __future__ import annotations
 
 # ruff: noqa: E402 — 末尾的子模块 import 故意放 HookManager/HookEvent 定义之后，避免循环依赖
 import inspect
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -72,6 +73,8 @@ from openagents_orchestration.hooks.skill_loader import (
 )
 
 HookHandler = Callable[[dict[str, Any]], dict[str, Any] | None]
+
+_logger = logging.getLogger(__name__)
 
 
 class HookEvent:
@@ -148,12 +151,22 @@ class HookManager:
 
         Handlers may mutate the payload dict or return a new dict. The final
         dict is returned.
+
+        A failing handler is logged and skipped so one bad handler cannot break
+        the rest of the chain.
         """
         current = payload
         for handler in self.handlers.get(event, []):
-            result = handler(current)
-            if isinstance(result, dict):
-                current = result
+            try:
+                result = handler(current)
+                if isinstance(result, dict):
+                    current = result
+            except Exception as exc:
+                _logger.warning(
+                    "Hook handler for %s failed (%s); continuing with next handler.",
+                    event,
+                    exc,
+                )
         return current
 
     async def arun(self, event: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -161,14 +174,24 @@ class HookManager:
 
         Lets async handlers (e.g. verify, which spawns a verifier agent) register on
         the same events; existing sync handlers keep working unchanged.
+
+        A failing handler is logged and skipped so one bad handler cannot break
+        the rest of the chain.
         """
         current = payload
         for handler in self.handlers.get(event, []):
-            result = handler(current)
-            if inspect.isawaitable(result):
-                result = await result
-            if isinstance(result, dict):
-                current = result
+            try:
+                result = handler(current)
+                if inspect.isawaitable(result):
+                    result = await result
+                if isinstance(result, dict):
+                    current = result
+            except Exception as exc:
+                _logger.warning(
+                    "Async hook handler for %s failed (%s); continuing with next handler.",
+                    event,
+                    exc,
+                )
         return current
 
     def is_blocked(self, event: str, payload: dict[str, Any]) -> tuple[bool, str]:

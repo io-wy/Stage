@@ -3,20 +3,26 @@ analyze_event_pattern, predict_budget, verify_alert_effectiveness."""
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
 import pytest
-
 from openagents.errors.exceptions import PermanentToolError
-from openagents_orchestration.core.state_board import AgentState, AgentStatus, Budget, StateBoard
+
+from openagents_orchestration.core.state_board import (
+    AgentStatus,
+    Budget,
+    StateBoard,
+)
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
-from openagents_orchestration.tools.monitor.analyze_event_pattern import AnalyzeEventPatternTool
+from openagents_orchestration.tools.monitor.analyze_event_pattern import (
+    AnalyzeEventPatternTool,
+)
 from openagents_orchestration.tools.monitor.check_dlq import CheckDLQTool
 from openagents_orchestration.tools.monitor.diagnose_agent import DiagnoseAgentTool
 from openagents_orchestration.tools.monitor.inspect_state import InspectStateTool
 from openagents_orchestration.tools.monitor.predict_budget import PredictBudgetTool
 from openagents_orchestration.tools.monitor.send_alert import SendAlertTool
-from openagents_orchestration.tools.monitor.verify_alert_effectiveness import VerifyAlertEffectivenessTool
+from openagents_orchestration.tools.monitor.verify_alert_effectiveness import (
+    VerifyAlertEffectivenessTool,
+)
 
 
 class MockContext:
@@ -69,6 +75,7 @@ class TestSendAlertTool:
             "message": "Agent is stuck in a loop",
             "data": {"agent_id": "coder-1"},
         }, ctx)
+        assert "告警已发送" in result1 or "sent" in result1.lower()
         # Same alert within dedup window should be suppressed
         result2 = await tool.invoke({
             "severity": "warning",

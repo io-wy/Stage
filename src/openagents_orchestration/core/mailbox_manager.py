@@ -82,9 +82,17 @@ class MailboxManager:
                 "Redis unreachable (%s: %s), falling back to in-memory mailbox",
                 type(exc).__name__, exc,
             )
+            await self.close()
             self._mailbox_backend = "memory"
             self._redis_client = None
             return False
+
+    async def close(self) -> None:
+        """Close any open Redis connection held by this manager."""
+        if self._redis_client is not None:
+            with contextlib.suppress(Exception):
+                await self._redis_client.close()
+            self._redis_client = None
 
     def _get_or_create_mailbox(self, agent_id: str) -> Mailbox:
         """Return the mailbox for an agent, creating it if necessary."""

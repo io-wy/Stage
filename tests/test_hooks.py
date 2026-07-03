@@ -6,13 +6,21 @@ block) and the session.start wiring that loads the skill catalog.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
+from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.hooks import (
     HookEvent,
     HookManager,
+    StateSyncHooks,
     load_skills_into_context,
 )
+from openagents_orchestration.models.pattern import (
+    PatternOutcome,
+    PatternOutcomeStatus,
+)
+from openagents_orchestration.models.task import TaskGraph, TaskNode
 from openagents_orchestration.skills_registry import SkillRegistry
 
 # -- HookManager core ------------------------------------------------------
@@ -128,3 +136,113 @@ def test_runner_deps_exposes_hooks_field():
 
     fields = RunnerDeps.__dataclass_fields__
     assert "hooks" in fields
+
+
+# -- StateSyncHooks artifact verification ------------------------------------
+
+
+def test_state_sync_verifies_existing_artifacts_on_completed_coder():
+    board = StateBoard("obj")
+    board.add_tasks(
+        TaskGraph(
+            objective="obj",
+            tasks=[
+                TaskNode(
+                    task_id="t1",
+                    description="write hello.py",
+                    agent_type="coder",
+                    expected_artifacts=["hello.py"],
+                )
+            ],
+        )
+    )
+    hooks = StateSyncHooks(board)
+
+    payload = {
+        "outcome": PatternOutcome(
+            output="done", status=PatternOutcomeStatus.COMPLETED
+        ),
+        "agent_id": "coder-t1",
+        "agent_type": "coder",
+        "task_id": "t1",
+        "result": SimpleNamespace(artifacts=[]),
+        "work_dir": str(Path(__file__).parent),
+    }
+    # Create the expected artifact relative to work_dir
+    artifact_path = Path(__file__).parent / "hello.py"
+    artifact_path.write_text("print('hello')", encoding="utf-8")
+    try:
+        hooks.pattern_after_execute(payload)
+
+        record = board.artifacts["hello.py"]
+        assert record.status == "verified"
+        assert record.claimed_by == "t1"
+        assert "hello.py" in board.decision_history.recent(1)[0]["artifacts"]
+    finally:
+        artifact_path.unlink(missing_ok=True)
+
+
+def test_state_sync_marks_missing_artifacts_on_completed_coder():
+    board = StateBoard("obj")
+    board.add_tasks(
+        TaskGraph(
+            objective="obj",
+            tasks=[
+                TaskNode(
+                    task_id="t1",
+                    description="write missing.py",
+                    agent_type="coder",
+                    expected_artifacts=["missing.py"],
+                )
+            ],
+        )
+    )
+    hooks = StateSyncHooks(board)
+
+    payload = {
+        "outcome": PatternOutcome(
+            output="done", status=PatternOutcomeStatus.COMPLETED
+        ),
+        "agent_id": "coder-t1",
+        "agent_type": "coder",
+        "task_id": "t1",
+        "result": SimpleNamespace(artifacts=[]),
+        "work_dir": str(Path(__file__).parent),
+    }
+    hooks.pattern_after_execute(payload)
+
+    record = board.artifacts["missing.py"]
+    assert record.status == "missing"
+    assert record.claimed_by == "t1"
+
+
+def test_state_sync_skips_artifact_check_for_non_coder():
+    board = StateBoard("obj")
+    board.add_tasks(
+        TaskGraph(
+            objective="obj",
+            tasks=[
+                TaskNode(
+                    task_id="t1",
+                    description="plan",
+                    agent_type="director",
+                    expected_artifacts=["plan.md"],
+                )
+            ],
+        )
+    )
+    hooks = StateSyncHooks(board)
+
+    payload = {
+        "outcome": PatternOutcome(
+            output="done", status=PatternOutcomeStatus.COMPLETED
+        ),
+        "agent_id": "director-t1",
+        "agent_type": "director",
+        "task_id": "t1",
+        "result": SimpleNamespace(artifacts=[]),
+        "work_dir": str(Path(__file__).parent),
+    }
+    hooks.pattern_after_execute(payload)
+
+    assert "plan.md" not in board.artifacts
