@@ -28,10 +28,7 @@ from openagents_orchestration.core.runner import OrchestratorRunner, RunnerDeps
 from openagents_orchestration.core.state_board import Budget, StateBoard, TaskStatus
 from openagents_orchestration.models.pattern import PatternOutcomeStatus
 from openagents_orchestration.models.task import TaskGraph, TaskNode
-from openagents_orchestration.store.artifact_store import (
-    LocalArtifactStore,
-    infer_task_id,
-)
+from openagents_orchestration.utils.agent_id import infer_task_id
 
 
 @dataclass
@@ -116,7 +113,6 @@ async def test_run_agent_syncs_task_for_non_whitelisted_role(tmp_path, monkeypat
         state_board=board,
         runner_delegate=runner.run_agent,
         runner=runner,
-        artifact_store=LocalArtifactStore(tmp_path / ".artifacts"),
         matrix_transport=None,
     )
     # Register the dynamic role by reusing the coder definition under a new name.

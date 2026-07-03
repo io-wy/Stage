@@ -6,13 +6,14 @@ All writes are sandboxed inside a tmp_path created by pytest.
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
 
+import pytest
 from openagents.errors.exceptions import ModelRetryError, ToolError
-from openagents_orchestration.tools.corecoder.write_file import WriteFileTool
-from openagents_orchestration.tools.corecoder.edit_file import EditFileTool
+
 from openagents_orchestration.tools.corecoder.bash_tool import BashTool
+from openagents_orchestration.tools.corecoder.edit_file import EditFileTool
+from openagents_orchestration.tools.corecoder.write_file import WriteFileTool
 
 
 def _make_context(tmp_path, agent_id="test-agent"):
@@ -21,7 +22,6 @@ def _make_context(tmp_path, agent_id="test-agent"):
     runner._current_work_dir = str(tmp_path)
     deps = MagicMock()
     deps.runner = runner
-    deps.artifact_store = None
     ctx = MagicMock()
     ctx.agent_id = agent_id
     ctx.deps = deps

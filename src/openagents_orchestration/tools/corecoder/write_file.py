@@ -8,14 +8,12 @@ or run a verification pass over only the touched files.
 
 from __future__ import annotations
 
-import contextlib
 from typing import Any
 
 from openagents.errors.exceptions import ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-from openagents_orchestration.store.artifact_store import infer_task_id
 from openagents_orchestration.tools.corecoder._paths import (
     resolve_agent_path as _resolve_path,
 )
@@ -31,8 +29,7 @@ class WriteFileTool(ToolPlugin):
         "# Effects\n"
         "- Replaces the whole file with `content` (no merge); missing parent "
         "directories are created automatically.\n"
-        "- Records the path as dirty for the run's verification pass and shares it "
-        "with other agents via the ArtifactStore.\n"
+        "- Records the path as dirty for the run's verification pass.\n"
         "- Returns lines_written, bytes_written, and the resolved absolute file_path.\n\n"
         "# When to use\n"
         "- Creating a brand-new file.\n"
@@ -99,14 +96,6 @@ class WriteFileTool(ToolPlugin):
             dirty = context.scratch.setdefault("dirty_files", set())
             if isinstance(dirty, set):
                 dirty.add(str(path.resolve(strict=False)))
-
-            # Push to ArtifactStore for inter-agent sharing (best-effort)
-            store = getattr(getattr(context, "deps", None), "artifact_store", None)
-            if store is not None:
-                agent_id = getattr(context, "agent_id", "")
-                task_id = infer_task_id(agent_id)
-                with contextlib.suppress(Exception):
-                    await store.put(task_id, str(path), content)
 
         return {
             "file_path": str(path),

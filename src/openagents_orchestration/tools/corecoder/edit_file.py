@@ -9,7 +9,6 @@ both the user and the LLM can see what changed.
 
 from __future__ import annotations
 
-import contextlib
 import difflib
 from typing import Any
 
@@ -17,7 +16,6 @@ from openagents.errors.exceptions import ModelRetryError, ToolError
 from openagents.interfaces.run_context import RunContext
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-from openagents_orchestration.store.artifact_store import infer_task_id
 from openagents_orchestration.tools.corecoder._paths import (
     resolve_agent_path as _resolve_path,
 )
@@ -35,7 +33,7 @@ class EditFileTool(ToolPlugin):
         "# Effects\n"
         "- Replaces the single occurrence of `old_string` with `new_string` and "
         "returns a unified diff.\n"
-        "- Records the path as dirty and shares the new content via the ArtifactStore.\n\n"
+        "- Records the path as dirty.\n\n"
         "# When to use\n"
         "- Any targeted change to an existing file: fix a line, rename a local symbol, "
         "tweak a value.\n\n"
@@ -135,14 +133,6 @@ class EditFileTool(ToolPlugin):
             dirty = context.scratch.setdefault("dirty_files", set())
             if isinstance(dirty, set):
                 dirty.add(str(path.resolve(strict=False)))
-
-            # Push to ArtifactStore for inter-agent sharing (best-effort)
-            store = getattr(getattr(context, "deps", None), "artifact_store", None)
-            if store is not None:
-                agent_id = getattr(context, "agent_id", "")
-                task_id = infer_task_id(agent_id)
-                with contextlib.suppress(Exception):
-                    await store.put(task_id, str(path), new_content)
 
         diff = _unified_diff(content, new_content, str(path))
         return {

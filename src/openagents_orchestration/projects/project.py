@@ -1,6 +1,6 @@
 """Project — isolated execution unit for enterprise orchestration.
 
-A Project owns its own StateBoard, Budget, TaskGraph, ArtifactStore, and Teams.
+A Project owns its own StateBoard, Budget, TaskGraph, and Teams.
 It is the bridge between the enterprise-level GlobalOrchestrator and the
 existing single-project StateBoard architecture.
 """
@@ -17,10 +17,6 @@ from typing import Any
 from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.models.delivery import DeliveryReport
 from openagents_orchestration.models.task import TaskGraph
-from openagents_orchestration.store.artifact_store import (
-    ArtifactStore,
-    LocalArtifactStore,
-)
 
 
 class ProjectStatus(StrEnum):
@@ -41,7 +37,6 @@ class Project:
     budget: Budget | None = None
     work_dir: Path | None = None
     state_board: StateBoard | None = field(default=None, repr=False)
-    artifact_store: ArtifactStore | None = field(default=None, repr=False)
     status: ProjectStatus = ProjectStatus.PENDING
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -51,9 +46,6 @@ class Project:
             self.work_dir = Path(f".projects/{self.project_id}")
         self.work_dir = Path(self.work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
-
-        if self.artifact_store is None:
-            self.artifact_store = LocalArtifactStore(self.work_dir / ".artifacts")
 
         if self.state_board is None:
             self.state_board = StateBoard(

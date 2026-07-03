@@ -33,7 +33,6 @@ class _MinimalDeps:
     state_board: Any = None
     runner_delegate: Any = None
     runner: Any = None
-    artifact_store: Any = None
     matrix_transport: Any = None
 
 

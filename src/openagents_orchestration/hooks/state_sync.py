@@ -15,7 +15,7 @@ from typing import Any
 from openagents_orchestration.core.decision_history import DecisionRecord
 from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.models.pattern import PatternOutcomeStatus
-from openagents_orchestration.store.artifact_store import infer_task_id
+from openagents_orchestration.utils.agent_id import infer_task_id
 from openagents_orchestration.utils.runtime_compat import extract_result_error_message
 
 
@@ -60,42 +60,38 @@ class StateSyncHooks:
         # Apply outcome to task + agent state
         board.apply_outcome(outcome, task_id=task_id, agent_id=agent_id, agent_type=agent_type)
 
-        # ── artifact 辅助层：暂时从主链路剥离（io-wy 决定先聚焦 task 主状态流转）──
-        # 产物 collect/verify/claim 是「附加核验层」：task 能否标 COMPLETED 只取决于
-        # 上面 apply_outcome 的 outcome.status，与 artifact 无关。保留空列表占位，让
-        # 下面 decision_history 的 artifacts_produced 引用不报错。恢复时整段取消注释，
-        # 并恢复开头的 ctx_artifacts = list(payload.get("ctx_artifacts") or [])。
+        # Cache outcome status for artifact + decision logic below.
+        status = getattr(outcome, "status", None)
+
+        # ── artifact 核验层：claimed ≠ verified ──
+        # 对完成型 coder 任务，把 director 声明的 expected_artifacts 落地核验。
+        # task 是否标 COMPLETED 仍由 apply_outcome 决定；此处只记录真相到 StateBoard，
+        # 供 Director snapshot 判断，不阻塞完成（VerifyHooks 负责更严格的二值核验）。
         all_artifact_paths: list[str] = []
-        # ctx_artifacts = list(payload.get("ctx_artifacts") or [])
-        # for a in ctx_artifacts:
-        #     path = getattr(a, "path", str(a))
-        #     if path and path not in all_artifact_paths:
-        #         all_artifact_paths.append(path)
-        #
-        # # Legacy fallback: agents often report created files in their text output.
-        # output = str(getattr(outcome, "output", "") or "")
-        # for parsed_path in self._extract_files_created(output):
-        #     if parsed_path and parsed_path not in all_artifact_paths:
-        #         all_artifact_paths.append(parsed_path)
-        #
-        # if agent_type == "team_leader" and sub_board is not None:
-        #     sub_artifacts = getattr(sub_board, "artifacts", {})
-        #     for artifact in sub_artifacts.values():
-        #         path = getattr(artifact, "path", None)
-        #         if path and path not in all_artifact_paths:
-        #             all_artifact_paths.append(path)
-        #
-        # # Verify artifacts produced by this run
-        # work_dir = payload.get("work_dir")
-        # for art_path in all_artifact_paths:
-        #     if not art_path:
-        #         continue
-        #     resolved = self._resolve_artifact_path(str(art_path), work_dir)
-        #     if resolved is not None:
-        #         exists = resolved.exists() and resolved.stat().st_size > 0
-        #         board.verify_artifact(str(art_path), exists=exists)
-        #         if task_id:
-        #             board.claim_artifact(task_id, [str(art_path)])
+        if (
+            agent_type == "coder"
+            and task_id
+            and status == PatternOutcomeStatus.COMPLETED
+        ):
+            task = board.get_task(task_id)
+            if task is not None:
+                work_dir = payload.get("work_dir")
+                expected = list(getattr(task, "expected_artifacts", []) or [])
+                if expected:
+                    board.claim_artifact(task_id, expected)
+                for art_path in expected:
+                    if not art_path:
+                        continue
+                    path_str = str(art_path)
+                    if path_str not in all_artifact_paths:
+                        all_artifact_paths.append(path_str)
+                    resolved = self._resolve_artifact_path(path_str, work_dir)
+                    exists = (
+                        resolved is not None
+                        and resolved.exists()
+                        and resolved.stat().st_size > 0
+                    )
+                    board.verify_artifact(path_str, exists=exists)
 
         # Team leader sub-board budget merge
         if agent_type == "team_leader" and sub_board is not None and hasattr(sub_board, "budget"):
@@ -109,7 +105,6 @@ class StateSyncHooks:
             )
 
         # Decision history
-        status = getattr(outcome, "status", None)
         if status == PatternOutcomeStatus.COMPLETED:
             board.decision_history.record(
                 DecisionRecord(

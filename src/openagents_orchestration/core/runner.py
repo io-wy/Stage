@@ -66,10 +66,6 @@ from openagents_orchestration.reporting import (
     summarize_board,
 )
 from openagents_orchestration.skills_registry import SkillRegistry
-from openagents_orchestration.store.artifact_store import (
-    ArtifactStore,
-    LocalArtifactStore,
-)
 from openagents_orchestration.tools.mcp.adapter import build_mcp_tools
 from openagents_orchestration.tools.mcp.client import McpClientManager
 from openagents_orchestration.transport.matrix_transport import (
@@ -152,7 +148,6 @@ class RunnerDeps:
     state_board: StateBoard
     runner_delegate: Any  # callable: (agent_type, input_text, agent_id=None) -> str
     runner: Any  # OrchestratorRunner reference for resident management
-    artifact_store: ArtifactStore | None = None  # shared artifact storage for inter-agent exchange
     matrix_transport: Any | None = None  # optional Matrix transport backend
     hooks: Any | None = None  # HookManager for lifecycle hooks (session.start, tool.*, pattern.before_llm)
 
@@ -508,16 +503,11 @@ class OrchestratorRunner:
 
     async def _wire_run_deps(self) -> None:
         """Build the RunnerDeps passed to agent tools."""
-        artifact_store: ArtifactStore | None = None
-        if self._current_work_dir is not None:
-            store_dir = self._current_work_dir / ".artifacts"
-            artifact_store = LocalArtifactStore(store_dir)
         matrix_transport = await self._init_matrix_transport()
         self._deps = RunnerDeps(
             state_board=self._state_board,
             runner_delegate=self.run_agent,
             runner=self,
-            artifact_store=artifact_store,
             matrix_transport=matrix_transport,
             hooks=self._hook_manager,
         )
@@ -648,7 +638,6 @@ class OrchestratorRunner:
                     state_board=sub_board,
                     runner_delegate=self.run_agent,
                     runner=self,
-                    artifact_store=getattr(self._deps, "artifact_store", None) if self._deps else None,
                     matrix_transport=getattr(self._deps, "matrix_transport", None) if self._deps else None,
                     hooks=self._hook_manager,
                 )
@@ -1283,4 +1272,7 @@ class OrchestratorRunner:
             memory = getattr(bundle.plugins, "memory", None)
             if memory is not None and hasattr(memory, "close"):
                 await memory.close()
+        # Close composed services in StateBoard (Redis connections, etc.)
+        if self._state_board is not None:
+            await self._state_board.close()
         await self._event_bus.close()

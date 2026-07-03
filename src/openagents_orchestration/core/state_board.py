@@ -206,7 +206,6 @@ class StateBoard:
         self._snapshotter = snapshotter
         self._last_snapshot_ts: float = 0.0
         self._snapshot_interval_s = snapshot_interval_s
-        self._observers: list[Any] = []  # event bus subscribers
         self._hooks = hooks
 
         # Messaging and human-channel are now composed services.
@@ -224,6 +223,9 @@ class StateBoard:
 
         # Change tracking for incremental snapshot diff
         self._previous_task_status: dict[str, str] = {}
+
+        # External observers for event streaming / reactive updates
+        self._observers: list[Any] = []
 
         self.decision_history = DecisionHistory()
         self.project_context: dict[str, Any] = {
@@ -289,6 +291,10 @@ class StateBoard:
     async def validate_redis(self) -> bool:
         """Delegated to ``MailboxManager``."""
         return await self._mailbox_manager.validate_redis()
+
+    async def close(self) -> None:
+        """Close composed services (mailbox, human-channel)."""
+        await self._mailbox_manager.close()
 
     def subscribe_topic(self, agent_id: str, topic: str) -> None:
         """Delegated to ``MailboxManager``; also logs the event."""
@@ -717,10 +723,6 @@ class StateBoard:
         # Truncate oldest events to prevent unbounded memory growth
         if len(self.events) > self._max_events:
             self.events = self.events[-self._max_events:]
-        # Notify observers (fire-and-forget, errors must not propagate)
-        for obs in self._observers:
-            with contextlib.suppress(Exception):
-                obs(evt)
         # Persist to JSONL if recorder is attached
         if self._recorder is not None:
             recorder_payload = dict(payload)
@@ -1633,12 +1635,20 @@ class StateBoard:
         """Build a DeliveryReport from the current board state."""
         task_results = []
         for t in self.tasks.values():
+            # Try to attribute token usage to the task via its assigned agent
+            # (which is usually f"{agent_type}-{task_id}" for spawned agents).
+            token_used = 0
+            agent_id = t.assigned_agent or f"{t.agent_type}-{t.task_id}"
+            agent = self.agents.get(agent_id)
+            if agent is not None:
+                token_used = agent.token_used
             task_results.append(TaskResult(
                 task_id=t.task_id,
                 status=t.status.value,
                 output=t.result_output,
                 artifacts=t.actual_artifacts or t.expected_artifacts,
                 error=t.error,
+                token_used=token_used,
             ))
 
         total = len(self.tasks)

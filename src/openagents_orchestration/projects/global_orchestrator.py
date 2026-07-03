@@ -1,7 +1,7 @@
 """GlobalOrchestrator — enterprise multi-project orchestration entry point.
 
-Manages multiple Projects, each with their own StateBoard, Budget, Teams,
-and ArtifactStore.  Maintains a global budget, MonitorAgent, and HumanChannel.
+Manages multiple Projects, each with their own StateBoard, Budget, and Teams.
+Maintains a global budget, MonitorAgent, and HumanChannel.
 
 Compatibility:
 - OrchestratorRunner is preserved as a single-project alias
