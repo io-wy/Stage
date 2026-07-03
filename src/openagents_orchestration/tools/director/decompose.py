@@ -43,10 +43,18 @@ class DecomposeTool(ToolPlugin):
 
     name = "decompose"
     description = (
-        "Break a complex objective into a small DAG of concrete, verifiable tasks. "
-        "Each task gets a unique ID, description, agent type, dependencies, and expected artifacts. "
-        "Call this after classify_intent when the intent complexity is 'complex' or when the task "
-        "clearly needs multiple agents."
+        "Turn an objective into the SMALLEST task graph that works. decompose is how tasks enter "
+        "the board, so `spawn_agent` can only run after it. A coder / reviewer / researcher can each "
+        "own a complete task end-to-end — most objectives need just ONE task and ONE agent.\n\n"
+        "# Emit MULTIPLE tasks ONLY when at least one holds\n"
+        "- The work needs several DISTINCT roles (e.g. research -> code -> review) one agent cannot cover.\n"
+        "- There are genuinely INDEPENDENT subtasks that can run in parallel.\n"
+        "- The objective is too large to fit one agent's context window.\n\n"
+        "# Otherwise emit a SINGLE task\n"
+        "- When one agent could plausibly complete the objective, return a one-task graph — that is "
+        "the correct, common output, not a failure. Do not manufacture extra tasks to look thorough; "
+        "over-splitting adds coordination + token cost and enlarges the failure surface.\n\n"
+        "Each task gets a unique ID, description, agent_type, dependencies, and expected artifacts."
     )
 
     def execution_spec(self) -> ToolExecutionSpec:
@@ -103,11 +111,19 @@ class DecomposeTool(ToolPlugin):
         agents_info = self._build_agents_info(context)
 
         system = (
-            "You are an expert task decomposer. Given an objective, break it into "
-            "a small DAG of concrete, verifiable tasks. Each task must have a unique "
-            "task_id, a clear description, an agent_type from the available roster, "
-            "and explicit dependencies on earlier task_ids. Keep the graph small enough "
-            "to fit in the orchestration budget."
+            "You are an expert task planner. Your FIRST job is to decide whether the "
+            "objective needs splitting at all. A single capable agent (coder, reviewer, "
+            "researcher, ...) can own a complete task end-to-end in its own context window. "
+            "If one agent could plausibly finish this objective, return a SINGLE task — that "
+            "is a valid and preferred output, not a failure.\n\n"
+            "Split into multiple tasks ONLY when the objective genuinely requires several "
+            "DISTINCT roles, has INDEPENDENT subtasks that can run in parallel, or is too "
+            "large for one agent's context window. Prefer the smallest graph that works; do "
+            "not split for the sake of splitting — over-decomposition adds coordination and "
+            "token cost and enlarges the failure surface.\n\n"
+            "Each task must have a unique task_id, a clear description, an agent_type from "
+            "the available roster, and explicit dependencies on earlier task_ids. Keep the "
+            "graph small enough to fit in the orchestration budget."
         )
         intent_section = (
             f"\nIntent: {intent.task_type}/{intent.complexity}, "

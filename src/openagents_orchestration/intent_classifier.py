@@ -145,7 +145,7 @@ class IntentClassifier:
                 "keywords": ["api", "service", "endpoint", "server", "backend"],
                 "intent": {
                     "task_type": "feature",
-                    "complexity": "complex",
+                    "complexity": "medium",
                     "external": [],
                     "priority": "normal",
                 },

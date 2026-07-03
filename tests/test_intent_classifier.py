@@ -87,6 +87,10 @@ async def test_l1_keyword_rules():
         assert result.source == "L1_rule"
         assert result.confidence > 0
 
+    # L1 complexity expectations (prevent hard-coded "complex" for broad keywords)
+    assert (await classifier.classify("create a new API endpoint")).complexity == "medium"
+    assert (await classifier.classify("implement a function to hash passwords")).complexity == "simple"
+
     # No LLM calls for keyword matches
     mock_llm.generate.assert_not_awaited()
 
