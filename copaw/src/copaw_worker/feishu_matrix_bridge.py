@@ -305,7 +305,23 @@ class FeishuMatrixBridge:
         pass
 
     async def _send_matrix_text(self, room_id: str, text: str) -> None:
-        content = {"msgtype": "m.text", "body": text}
+        manager = self._cfg.manager_matrix_user_id
+        if manager:
+            # Mention the manager so channel-mode routing treats the message
+            # as addressed to them and starts an agent run.
+            body = f"{manager} {text}"
+            content: Dict[str, Any] = {
+                "msgtype": "m.text",
+                "body": body,
+                "format": "org.matrix.custom.html",
+                "formatted_body": (
+                    f'<a href="https://matrix.to/#/{manager}">{manager}</a> '
+                    f"{text}"
+                ),
+                "m.mentions": {"user_ids": [manager]},
+            }
+        else:
+            content = {"msgtype": "m.text", "body": text}
         await self._matrix.room_send(room_id, "m.room.message", content)
 
     # ------------------------------------------------------------------
