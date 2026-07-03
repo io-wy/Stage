@@ -18,7 +18,6 @@ dependencies = [
     "httpx>=0.26",
     "pyyaml>=6.0.3",
     "datasets>=4.8.5",
-    "matrix-nio>=0.25.2",
     "mcp>=1.4.0",
 ]
 
@@ -26,9 +25,6 @@ dependencies = [
 dev = [
     "ruff",
 ]
-
-[project.optional-dependencies]
-redis = ["redis>=5.0"]
 
 [tool.ruff]
 line-length = 88
