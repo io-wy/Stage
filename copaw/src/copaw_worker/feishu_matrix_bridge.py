@@ -120,6 +120,10 @@ class FeishuMatrixBridge:
         self._matrix: Optional[AsyncClient] = None
         self._rooms: Dict[str, str] = {}  # feishu chat_id -> matrix room_id
         self._shutdown_event = asyncio.Event()
+        # Decouple lark-channel-sdk callbacks from matrix-nio I/O. The SDK
+        # invokes handlers in a context that aiohttp does not recognise as a
+        # Task, so we enqueue messages and process them from a loop-owned Task.
+        self._inbound_queue: asyncio.Queue[Any] = asyncio.Queue()
 
     # ------------------------------------------------------------------
     # State persistence
@@ -156,6 +160,7 @@ class FeishuMatrixBridge:
         self._load_state()
         await self._start_matrix()
         await self._start_feishu()
+        asyncio.create_task(self._process_inbound_loop())
         logger.info("Feishu-Matrix bridge started")
         await self._shutdown_event.wait()
 
@@ -306,21 +311,38 @@ class FeishuMatrixBridge:
             app_secret=self._cfg.feishu_app_secret,
             domain=self._cfg.feishu_domain,
         )
-        # lark-channel-sdk invokes callbacks without a proper asyncio Task
-        # context; wrap the handlers so matrix-nio/aiohttp calls run inside a
-        # real task.
+        # The SDK invokes handlers in a non-Task context; enqueue and process
+        # from our own loop-owned Task.
         self._feishu.on("message", self._on_feishu_message_sync)
         self._feishu.on("error", self._on_feishu_error_sync)
         asyncio.create_task(self._feishu.connect())
         logger.info("Feishu channel connecting via WebSocket")
 
     def _on_feishu_message_sync(self, msg: Any) -> None:
-        asyncio.create_task(self._on_feishu_message(msg))
+        try:
+            self._inbound_queue.put_nowait(msg)
+        except asyncio.QueueFull:
+            logger.warning("Inbound Feishu message queue is full; dropping message")
 
     def _on_feishu_error_sync(self, err: Any) -> None:
         asyncio.create_task(self._on_feishu_error(err))
 
-    async def _on_feishu_message(self, msg: Any) -> None:
+    async def _process_inbound_loop(self) -> None:
+        while not self._shutdown_event.is_set():
+            try:
+                msg = await asyncio.wait_for(
+                    self._inbound_queue.get(), timeout=1.0
+                )
+            except asyncio.TimeoutError:
+                continue
+            try:
+                await self._handle_feishu_message(msg)
+            except Exception as exc:
+                logger.exception("Failed to handle Feishu message: %s", exc)
+            finally:
+                self._inbound_queue.task_done()
+
+    async def _handle_feishu_message(self, msg: Any) -> None:
         chat_id = getattr(msg, "chat_id", None)
         if not chat_id:
             logger.warning("Feishu message without chat_id: %s", msg)
