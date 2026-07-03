@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.core.agent_loader import AgentSpecError
 from openagents_orchestration.models.pattern import PatternOutcome, PatternOutcomeStatus
 from openagents_orchestration.tools.corecoder.sub_agent import SubAgentTool
 

@@ -15,10 +15,10 @@ from __future__ import annotations
 import pytest
 
 from openagents_orchestration.core.state_board import Budget
+from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
 from openagents_orchestration.projects.global_orchestrator import GlobalOrchestrator
 from openagents_orchestration.projects.project import Project, ProjectStatus
 from openagents_orchestration.projects.team import TeamSpec
-from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
 
 
 class _FakeRunner:

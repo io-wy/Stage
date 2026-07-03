@@ -107,6 +107,18 @@ def test_tasknode_roundtrip_with_subgraph():
     assert r.subgraph.get_task("x") is not None
 
 
+def test_tasknode_roundtrip_with_subtasks():
+    parent = _node("p")
+    parent.subtasks = [_node("s1"), _node("s2", ["s1"])]
+    d = parent.to_dict()
+    assert "subtasks" in d
+    assert len(d["subtasks"]) == 2
+    r = TaskNode.from_dict(d)
+    assert len(r.subtasks) == 2
+    assert r.subtasks[0].task_id == "s1"
+    assert r.subtasks[1].dependencies == ["s1"]
+
+
 def test_gap_tasknode_from_dict_keyerror_on_missing_required_field():
     """``from_dict`` reads ``data['task_id']`` / ``['description']`` /
     ``['agent_type']`` directly while every other field uses ``.get`` with a

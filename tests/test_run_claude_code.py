@@ -7,12 +7,12 @@ import subprocess
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from openagents.errors.exceptions import PermanentToolError, ToolError
+
 from openagents_orchestration.tools.corecoder.run_claude_code import (
-    RunClaudeCodeTool,
     _DEFAULT_ALLOWED_TOOLS,
     _DEFAULT_TIMEOUT_S,
+    RunClaudeCodeTool,
 )
 
 
@@ -50,22 +50,24 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "Hello from Claude Code\n"
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({"instruction": "say hello"}, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({"instruction": "say hello"}, ctx)
 
-                assert result["exit_code"] == 0
-                assert "Hello from Claude Code" in result["output"]
-                assert "claude -p" in result["command"]
-                assert "say hello" in result["command"]
+            assert result["exit_code"] == 0
+            assert "Hello from Claude Code" in result["output"]
+            assert "claude -p" in result["command"]
+            assert "say hello" in result["command"]
 
-                # Verify subprocess.run was called with correct args
-                call_args = mock_run.call_args
-                assert call_args[1]["capture_output"] is True
-                assert call_args[1]["text"] is True
-                assert call_args[1]["timeout"] == _DEFAULT_TIMEOUT_S
+            # Verify subprocess.run was called with correct args
+            call_args = mock_run.call_args
+            assert call_args[1]["capture_output"] is True
+            assert call_args[1]["text"] is True
+            assert call_args[1]["timeout"] == _DEFAULT_TIMEOUT_S
 
     @pytest.mark.asyncio
     async def test_invoke_exit_code_1(self):
@@ -75,16 +77,18 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "Some output\n"
         mock_result.stderr = "Error: something went wrong\n"
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result):
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({"instruction": "do something"}, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result),
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({"instruction": "do something"}, ctx)
 
-                assert result["exit_code"] == 1
-                assert "Some output" in result["output"]
-                assert "Error: something went wrong" in result["output"]
-                assert "[stderr]" in result["output"]
+            assert result["exit_code"] == 1
+            assert "Some output" in result["output"]
+            assert "Error: something went wrong" in result["output"]
+            assert "[stderr]" in result["output"]
 
     @pytest.mark.asyncio
     async def test_invoke_timeout_parameter(self):
@@ -94,15 +98,17 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "ok"
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({"instruction": "test", "timeout": 60}, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({"instruction": "test", "timeout": 60}, ctx)
 
-                assert result["exit_code"] == 0
-                call_args = mock_run.call_args
-                assert call_args[1]["timeout"] == 60
+            assert result["exit_code"] == 0
+            call_args = mock_run.call_args
+            assert call_args[1]["timeout"] == 60
 
     @pytest.mark.asyncio
     async def test_invoke_allowed_tools_parameter(self):
@@ -112,19 +118,21 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "ok"
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                custom_tools = ["Read", "Bash"]
-                result = await tool.invoke({
-                    "instruction": "test",
-                    "allowed_tools": custom_tools,
-                }, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            custom_tools = ["Read", "Bash"]
+            result = await tool.invoke({
+                "instruction": "test",
+                "allowed_tools": custom_tools,
+            }, ctx)
 
-                assert result["exit_code"] == 0
-                cmd = mock_run.call_args[0][0]
-                assert any("--allowedTools=Read,Bash" in str(arg) for arg in cmd)
+            assert result["exit_code"] == 0
+            cmd = mock_run.call_args[0][0]
+            assert any("--allowedTools=Read,Bash" in str(arg) for arg in cmd)
 
     @pytest.mark.asyncio
     async def test_invoke_default_allowed_tools(self):
@@ -134,16 +142,18 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "ok"
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({"instruction": "test"}, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({"instruction": "test"}, ctx)
 
-                assert result["exit_code"] == 0
-                cmd = mock_run.call_args[0][0]
-                expected = f"--allowedTools={','.join(_DEFAULT_ALLOWED_TOOLS)}"
-                assert any(expected in str(arg) for arg in cmd)
+            assert result["exit_code"] == 0
+            cmd = mock_run.call_args[0][0]
+            expected = f"--allowedTools={','.join(_DEFAULT_ALLOWED_TOOLS)}"
+            assert any(expected in str(arg) for arg in cmd)
 
     @pytest.mark.asyncio
     async def test_invoke_skip_permissions(self):
@@ -153,18 +163,20 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "ok"
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({
-                    "instruction": "test",
-                    "skip_permissions": True,
-                }, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({
+                "instruction": "test",
+                "skip_permissions": True,
+            }, ctx)
 
-                assert result["exit_code"] == 0
-                cmd = mock_run.call_args[0][0]
-                assert "--dangerously-skip-permissions" in cmd
+            assert result["exit_code"] == 0
+            cmd = mock_run.call_args[0][0]
+            assert "--dangerously-skip-permissions" in cmd
 
     @pytest.mark.asyncio
     async def test_invoke_skip_permissions_false(self):
@@ -174,18 +186,20 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "ok"
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({
-                    "instruction": "test",
-                    "skip_permissions": False,
-                }, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({
+                "instruction": "test",
+                "skip_permissions": False,
+            }, ctx)
 
-                assert result["exit_code"] == 0
-                cmd = mock_run.call_args[0][0]
-                assert "--dangerously-skip-permissions" not in cmd
+            assert result["exit_code"] == 0
+            cmd = mock_run.call_args[0][0]
+            assert "--dangerously-skip-permissions" not in cmd
 
     @pytest.mark.asyncio
     async def test_invoke_with_files(self):
@@ -195,22 +209,24 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "ok"
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result) as mock_run:
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({
-                    "instruction": "review these files",
-                    "files": ["/tmp/file1.py", "/tmp/file2.py"],
-                }, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result) as mock_run,
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({
+                "instruction": "review these files",
+                "files": ["/tmp/file1.py", "/tmp/file2.py"],
+            }, ctx)
 
-                assert result["exit_code"] == 0
-                cmd = mock_run.call_args[0][0]
-                # Files should be appended after the instruction
-                assert "review these files" in cmd
-                # Files that don't exist are silently skipped
-                assert "/tmp/file1.py" not in cmd
-                assert "/tmp/file2.py" not in cmd
+            assert result["exit_code"] == 0
+            cmd = mock_run.call_args[0][0]
+            # Files should be appended after the instruction
+            assert "review these files" in cmd
+            # Files that don't exist are silently skipped
+            assert "/tmp/file1.py" not in cmd
+            assert "/tmp/file2.py" not in cmd
 
     @pytest.mark.asyncio
     async def test_invoke_missing_instruction_raises(self):
@@ -231,12 +247,14 @@ class TestRunClaudeCodeTool:
         exc.stdout = b"partial output"
         exc.stderr = b"partial error"
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", side_effect=exc):
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                with pytest.raises(ToolError, match="timed out"):
-                    await tool.invoke({"instruction": "test", "timeout": 10}, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", side_effect=exc),
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            with pytest.raises(ToolError, match="timed out"):
+                await tool.invoke({"instruction": "test", "timeout": 10}, ctx)
 
     @pytest.mark.asyncio
     async def test_invoke_output_truncation(self):
@@ -246,11 +264,13 @@ class TestRunClaudeCodeTool:
         mock_result.stdout = "x" * 10_000
         mock_result.stderr = ""
 
-        with patch.object(shutil, "which", return_value="/usr/local/bin/claude"):
-            with patch("subprocess.run", return_value=mock_result):
-                tool = RunClaudeCodeTool()
-                ctx = MockContext()
-                result = await tool.invoke({"instruction": "test"}, ctx)
+        with (
+            patch.object(shutil, "which", return_value="/usr/local/bin/claude"),
+            patch("subprocess.run", return_value=mock_result),
+        ):
+            tool = RunClaudeCodeTool()
+            ctx = MockContext()
+            result = await tool.invoke({"instruction": "test"}, ctx)
 
-                assert result["exit_code"] == 0
-                assert "truncated" in result["output"]
+            assert result["exit_code"] == 0
+            assert "truncated" in result["output"]

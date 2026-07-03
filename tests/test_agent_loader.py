@@ -151,18 +151,6 @@ def test_resolve_hook_unknown_raises():
         resolve_hook("no_such_hook")
 
 
-# -- resolve_hook ----------------------------------------------------------
-
-def test_resolve_hook_known():
-    fn = resolve_hook("load_skills_into_context")
-    assert callable(fn)
-
-
-def test_resolve_hook_unknown_raises():
-    with pytest.raises(AgentSpecError, match="未知 hook"):
-        resolve_hook("no_such_hook")
-
-
 # -- 真实 agents/ 目录：编译产物 == 旧 agent.json 等价（迁移保险）---------
 
 def test_real_agents_compile_and_match_legacy_tools():

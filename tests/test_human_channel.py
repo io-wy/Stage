@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
-import pytest
+from datetime import UTC, datetime
 
 from openagents_orchestration.projects.human_channel import (
     HumanChannel,
     HumanMessage,
     HumanQuestion,
 )
-
 
 # ── ask / answer basics ───────────────────────────────────────────────────────
 
