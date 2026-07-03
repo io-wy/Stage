@@ -16,10 +16,6 @@ from prompts.corrections import (
     build_hallucination_correction,
     build_replan_prompt,
 )
-from prompts.decompose import (
-    build_agents_info,
-    build_decompose_prompt,
-)
 from prompts.director import DIRECTOR_PRINCIPLES
 from prompts.dynamic import (
     build_runtime_fragment,
@@ -36,6 +32,4 @@ __all__ = [
     "build_replan_prompt",
     "build_runtime_fragment",
     "gather_runtime_context",
-    "build_decompose_prompt",
-    "build_agents_info",
 ]
