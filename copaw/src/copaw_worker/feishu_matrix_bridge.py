@@ -1,19 +1,15 @@
 """
-Feishu-Matrix Bridge Bot
+Feishu-Matrix Bridge Bot (admin-proxy mode)
 
-A lightweight bridge that exposes the HiClaw Manager over Feishu (Lark) DMs.
-Each Feishu user gets a dedicated Matrix DM room with the bridge bot; the
-bridge bot invites the Manager into that room. Messages are forwarded both
-ways:
+This bridge lets a Feishu user talk to the HiClaw Manager through Matrix by
+proxying via the admin's Matrix account.
 
-  Feishu user -> bridge bot -> Matrix room (with Manager) -> Manager
-  Manager reply in Matrix room -> bridge bot -> Feishu user
+  Feishu user -> Feishu bot -> bridge bot -> admin's Matrix account
+                                              -> Manager (in admin-Manager DM)
+  Manager reply in admin-Manager DM -> bridge bot -> Feishu user
 
-This keeps the existing Matrix-centric architecture unchanged; workers do not
-need to know about Feishu.
-
-The Feishu side uses the official ``lark-channel-sdk`` (WebSocket transport),
-so no public inbound webhook URL is required.
+The bridge logs in as the admin Matrix user, finds (or creates) the direct
+chat room between admin and Manager, and forwards messages both ways.
 """
 from __future__ import annotations
 
@@ -43,7 +39,10 @@ except ImportError:  # pragma: no cover
 try:
     from nio import (
         AsyncClient,
+        JoinedMembersResponse,
+        JoinedRoomsResponse,
         LoginResponse,
+        RoomCreateResponse,
         RoomInviteResponse,
         RoomMemberEvent,
         RoomMessageText,
@@ -62,21 +61,21 @@ class FeishuMatrixBridgeConfig:
     """Runtime configuration for the bridge."""
 
     # Feishu app credentials
-    feishu_app_id: str
-    feishu_app_secret: str
+    feishu_app_id: str = ""
+    feishu_app_secret: str = ""
     feishu_domain: str = "https://open.feishu.cn"
 
-    # Matrix bridge-bot credentials
+    # Admin Matrix credentials (the bridge proxies as this user)
     matrix_homeserver: str = ""
     matrix_user_id: str = ""
     matrix_access_token: str = ""
     matrix_password: str = ""
     matrix_device_name: str = "feishu-matrix-bridge"
 
-    # Manager Matrix user that will be invited into every bridged room
+    # Manager Matrix user that admin talks to
     manager_matrix_user_id: str = ""
 
-    # Where to persist the feishu_chat_id -> matrix_room_id mapping
+    # Where to persist the feishu_chat_id for the current conversation
     state_file: Path = Path("/tmp/feishu_matrix_bridge_state.json")
 
     @classmethod
@@ -103,7 +102,7 @@ class FeishuMatrixBridgeConfig:
 
 
 class FeishuMatrixBridge:
-    """Bidirectional bridge between Feishu private chats and Matrix DMs."""
+    """Bidirectional bridge: Feishu user <-> admin-Manager Matrix DM."""
 
     def __init__(self, config: FeishuMatrixBridgeConfig) -> None:
         if not _FEISHU_SDK_AVAILABLE:
@@ -118,11 +117,10 @@ class FeishuMatrixBridge:
         self._cfg = config
         self._feishu: Optional[FeishuChannel] = None
         self._matrix: Optional[AsyncClient] = None
-        self._rooms: Dict[str, str] = {}  # feishu chat_id -> matrix room_id
+        self._dm_room_id: Optional[str] = None
+        self._current_feishu_chat_id: Optional[str] = None
         self._shutdown_event = asyncio.Event()
-        # Decouple lark-channel-sdk callbacks from matrix-nio I/O. The SDK
-        # invokes handlers in a context that aiohttp does not recognise as a
-        # Task, so we enqueue messages and process them from a loop-owned Task.
+        # Decouple lark-channel-sdk callbacks from matrix-nio I/O.
         self._inbound_queue: asyncio.Queue[Any] = asyncio.Queue()
 
     # ------------------------------------------------------------------
@@ -134,11 +132,12 @@ class FeishuMatrixBridge:
             return
         try:
             data = json.loads(self._cfg.state_file.read_text())
-            self._rooms = data.get("rooms", {})
+            self._current_feishu_chat_id = data.get("feishu_chat_id")
+            self._dm_room_id = data.get("dm_room_id")
             logger.info(
-                "Loaded %d bridged rooms from %s",
-                len(self._rooms),
-                self._cfg.state_file,
+                "Loaded bridge state: feishu_chat_id=%s dm_room_id=%s",
+                self._current_feishu_chat_id,
+                self._dm_room_id,
             )
         except Exception as exc:
             logger.warning("Failed to load bridge state: %s", exc)
@@ -147,7 +146,13 @@ class FeishuMatrixBridge:
         try:
             self._cfg.state_file.parent.mkdir(parents=True, exist_ok=True)
             self._cfg.state_file.write_text(
-                json.dumps({"rooms": self._rooms}, indent=2)
+                json.dumps(
+                    {
+                        "feishu_chat_id": self._current_feishu_chat_id,
+                        "dm_room_id": self._dm_room_id,
+                    },
+                    indent=2,
+                )
             )
         except Exception as exc:
             logger.warning("Failed to save bridge state: %s", exc)
@@ -176,7 +181,7 @@ class FeishuMatrixBridge:
             await self._matrix.close()
 
     # ------------------------------------------------------------------
-    # Matrix side
+    # Matrix side: log in as admin, find/create admin-Manager DM
     # ------------------------------------------------------------------
 
     async def _start_matrix(self) -> None:
@@ -206,35 +211,51 @@ class FeishuMatrixBridge:
         else:
             raise RuntimeError("Matrix credentials not configured")
 
+        self._dm_room_id = await self._find_or_create_dm_room()
+        if not self._dm_room_id:
+            raise RuntimeError("Could not find or create admin-Manager DM room")
+
         self._matrix.add_event_callback(self._on_matrix_message, (RoomMessageText,))
         self._matrix.add_event_callback(self._on_matrix_member, (RoomMemberEvent,))
         self._matrix.add_event_callback(self._on_to_device, (ToDeviceError,))
 
-        # Ensure the manager is invited into every room the bridge bot has
-        # already joined (e.g. after a restart or manager credential reset).
-        await self._ensure_manager_in_joined_rooms()
-
         asyncio.create_task(self._matrix_sync_loop())
 
-    async def _ensure_manager_in_joined_rooms(self) -> None:
+    async def _find_or_create_dm_room(self) -> Optional[str]:
         manager = self._cfg.manager_matrix_user_id
-        if not manager or not self._matrix:
-            return
+        if not manager:
+            logger.error("Manager Matrix user ID not configured")
+            return None
 
-        try:
-            joined_resp = await self._matrix.joined_rooms()
-            if not hasattr(joined_resp, "rooms"):
-                logger.warning("joined_rooms response unexpected: %s", joined_resp)
-                return
+        # If state has a DM room, try to use it.
+        if self._dm_room_id:
+            logger.info("Using DM room from state: %s", self._dm_room_id)
+            return self._dm_room_id
 
+        # Search joined rooms for an existing admin-Manager DM.
+        joined_resp = await self._matrix.joined_rooms()
+        if isinstance(joined_resp, JoinedRoomsResponse):
             for room_id in joined_resp.rooms:
-                invite_resp = await self._matrix.room_invite(room_id, manager)
-                if isinstance(invite_resp, RoomInviteResponse):
-                    logger.info("Invited manager to existing room %s", room_id)
-                else:
-                    logger.debug("Manager invite for %s: %s", room_id, invite_resp)
-        except Exception as exc:
-            logger.warning("Failed to ensure manager in joined rooms: %s", exc)
+                members_resp = await self._matrix.joined_members(room_id)
+                if isinstance(members_resp, JoinedMembersResponse):
+                    members = {m.user_id for m in members_resp.members}
+                    if members == {self._matrix.user_id, manager}:
+                        logger.info("Found existing admin-Manager DM: %s", room_id)
+                        return room_id
+
+        # Create a new direct chat room and invite the manager.
+        create_resp = await self._matrix.room_create(
+            visibility=RoomVisibility.private,
+            invite=[manager],
+            is_direct=True,
+        )
+        if isinstance(create_resp, RoomCreateResponse):
+            room_id = create_resp.room_id
+            logger.info("Created admin-Manager DM room: %s", room_id)
+            return room_id
+
+        logger.error("Failed to create admin-Manager DM room: %s", create_resp)
+        return None
 
     async def _matrix_sync_loop(self) -> None:
         while not self._shutdown_event.is_set():
@@ -246,62 +267,29 @@ class FeishuMatrixBridge:
                 logger.exception("Matrix sync error: %s", exc)
                 await asyncio.sleep(5)
 
-    async def _get_or_create_room(self, feishu_chat_id: str) -> Optional[str]:
-        if feishu_chat_id in self._rooms:
-            return self._rooms[feishu_chat_id]
-
-        manager = self._cfg.manager_matrix_user_id
-        if not manager:
-            logger.error("Manager Matrix user ID not configured")
-            return None
-
-        create_resp = await self._matrix.room_create(
-            visibility=RoomVisibility.private,
-            name=f"Feishu {feishu_chat_id}",
-            invite=[manager],
-            is_direct=True,
-        )
-        if not hasattr(create_resp, "room_id"):
-            logger.error("Failed to create Matrix room: %s", create_resp)
-            return None
-
-        room_id = create_resp.room_id
-        logger.info(
-            "Created Matrix room %s for Feishu chat %s",
-            room_id,
-            feishu_chat_id,
-        )
-
-        invite_resp = await self._matrix.room_invite(room_id, manager)
-        if not isinstance(invite_resp, RoomInviteResponse):
-            logger.warning("Invite response for manager: %s", invite_resp)
-
-        self._rooms[feishu_chat_id] = room_id
-        self._save_state()
-        return room_id
-
     async def _on_matrix_message(self, room: Any, event: RoomMessageText) -> None:
         if not self._matrix:
             return
 
         sender = getattr(event, "sender", "")
         if sender == self._matrix.user_id:
-            return  # ignore echo from the bridge bot itself
+            return  # ignore echo from admin account
 
         room_id = getattr(room, "room_id", "")
-        feishu_chat_id = self._find_feishu_chat_by_room(room_id)
-        if not feishu_chat_id:
-            return  # message in a room we are not bridging
+        if room_id != self._dm_room_id:
+            return  # ignore messages from other rooms
 
-        # Only forward messages from the configured manager.
+        # Only forward messages from the manager.
         if sender != self._cfg.manager_matrix_user_id:
-            logger.debug(
-                "Ignoring message from non-manager %s in bridged room", sender
-            )
+            logger.debug("Ignoring message from non-manager %s in DM room", sender)
+            return
+
+        if not self._current_feishu_chat_id:
+            logger.warning("Received Manager reply but no Feishu chat_id is known")
             return
 
         text = getattr(event, "body", "") or ""
-        await self._send_feishu_text(feishu_chat_id, text)
+        await self._send_feishu_text(self._current_feishu_chat_id, text)
 
     async def _on_matrix_member(self, room: Any, event: Any) -> None:
         if (
@@ -315,12 +303,6 @@ class FeishuMatrixBridge:
 
     async def _on_to_device(self, event: Any) -> None:
         pass
-
-    def _find_feishu_chat_by_room(self, room_id: str) -> Optional[str]:
-        for chat_id, bridged_room in self._rooms.items():
-            if bridged_room == room_id:
-                return chat_id
-        return None
 
     async def _send_matrix_text(self, room_id: str, text: str) -> None:
         content = {"msgtype": "m.text", "body": text}
@@ -336,8 +318,6 @@ class FeishuMatrixBridge:
             app_secret=self._cfg.feishu_app_secret,
             domain=self._cfg.feishu_domain,
         )
-        # The SDK invokes handlers in a non-Task context; enqueue and process
-        # from our own loop-owned Task.
         self._feishu.on("message", self._on_feishu_message_sync)
         self._feishu.on("error", self._on_feishu_error_sync)
         asyncio.create_task(self._feishu.connect())
@@ -373,21 +353,22 @@ class FeishuMatrixBridge:
             logger.warning("Feishu message without chat_id: %s", msg)
             return
 
-        # Only handle p2p (single) chats. Group chats are ignored in this
-        # minimal bridge.
+        # Only handle p2p (single) chats.
         chat_type = getattr(msg, "chat_type", "p2p")
         if chat_type != "p2p":
             logger.debug("Ignoring non-p2p Feishu message (chat_type=%s)", chat_type)
             return
 
+        self._current_feishu_chat_id = chat_id
+        self._save_state()
+
         text = getattr(msg, "content_text", "") or ""
-        room_id = await self._get_or_create_room(chat_id)
-        if not room_id:
-            logger.error("No Matrix room available for Feishu chat %s", chat_id)
+        if not self._dm_room_id:
+            logger.error("No admin-Manager DM room available")
             return
 
-        prefix = f"[Feishu {chat_id}]\n"
-        await self._send_matrix_text(room_id, prefix + text)
+        await self._send_matrix_text(self._dm_room_id, text)
+        logger.info("Forwarded Feishu message to admin-Manager DM")
 
     async def _on_feishu_error(self, err: Any) -> None:
         logger.error("Feishu channel error: %s", err)
