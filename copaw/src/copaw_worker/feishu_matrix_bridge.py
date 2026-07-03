@@ -47,6 +47,7 @@ try:
         RoomInviteResponse,
         RoomMemberEvent,
         RoomMessageText,
+        RoomVisibility,
         ToDeviceError,
     )
 
@@ -226,7 +227,7 @@ class FeishuMatrixBridge:
             return None
 
         create_resp = await self._matrix.room_create(
-            visibility="private",
+            visibility=RoomVisibility.private,
             name=f"Feishu {feishu_chat_id}",
             invite=[manager],
         )
