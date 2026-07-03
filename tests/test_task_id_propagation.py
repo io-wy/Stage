@@ -113,7 +113,6 @@ async def test_run_agent_syncs_task_for_non_whitelisted_role(tmp_path, monkeypat
         state_board=board,
         runner_delegate=runner.run_agent,
         runner=runner,
-        matrix_transport=None,
     )
     # Register the dynamic role by reusing the coder definition under a new name.
     assert "coder" in runner._agents_by_id, "coder role must exist to clone from"

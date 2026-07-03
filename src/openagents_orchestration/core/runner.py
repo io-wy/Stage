@@ -68,11 +68,6 @@ from openagents_orchestration.reporting import (
 from openagents_orchestration.skills_registry import SkillRegistry
 from openagents_orchestration.tools.mcp.adapter import build_mcp_tools
 from openagents_orchestration.tools.mcp.client import McpClientManager
-from openagents_orchestration.transport.matrix_transport import (
-    MatrixClient,
-    MatrixConfig,
-    MatrixTransport,
-)
 from openagents_orchestration.utils.runtime_compat import (
     apply_sdk_patches,
     extract_result_error_message,
@@ -148,7 +143,6 @@ class RunnerDeps:
     state_board: StateBoard
     runner_delegate: Any  # callable: (agent_type, input_text, agent_id=None) -> str
     runner: Any  # OrchestratorRunner reference for resident management
-    matrix_transport: Any | None = None  # optional Matrix transport backend
     hooks: Any | None = None  # HookManager for lifecycle hooks (session.start, tool.*, pattern.before_llm)
 
 
@@ -338,39 +332,6 @@ class OrchestratorRunner:
             self._strategy_hooks.board = self._state_board
         return project
 
-    async def _init_matrix_transport(self) -> MatrixTransport | None:
-        """Initialize Matrix transport from environment if configured."""
-        homeserver = os.environ.get("MATRIX_HOMESERVER", "").strip()
-        user_id = os.environ.get("MATRIX_USER_ID", "").strip()
-        access_token = os.environ.get("MATRIX_ACCESS_TOKEN", "").strip()
-        if not homeserver or not user_id or not access_token:
-            return None
-        config = MatrixConfig(
-            homeserver=homeserver,
-            user_id=user_id,
-            access_token=access_token,
-        )
-        client = MatrixClient(config)
-        try:
-            # Verify connection with a quick sync
-            await client.sync(timeout_ms=1000)
-            print(
-                f"[Orchestrator] Matrix transport enabled: {user_id} @ {homeserver}",
-                file=sys.stderr,
-                flush=True,
-            )
-            return MatrixTransport(client)
-        except Exception as exc:
-            # Degrade gracefully: log and close partial connection
-            print(
-                f"[Orchestrator] Matrix transport init failed: {exc}; continuing without Matrix.",
-                file=sys.stderr,
-                flush=True,
-            )
-            with contextlib.suppress(Exception):
-                await client.close()
-            return None
-
     # -- public API ----------------------------------------------------------
 
     async def run(
@@ -390,8 +351,6 @@ class OrchestratorRunner:
 
         Returns DeliveryReport.
         """
-        import contextlib
-
         # work_dir 落地为绝对路径：相对路径在 chdir 后会被下游(_wire_run_deps 的
         # store、注入给 agent 的 cwd 等)二次解析 → 目录套娃。库边界统一绝对化，
         # 保证编排内部全程是绝对路径(任何入口传相对都在此被规整)。
@@ -503,12 +462,10 @@ class OrchestratorRunner:
 
     async def _wire_run_deps(self) -> None:
         """Build the RunnerDeps passed to agent tools."""
-        matrix_transport = await self._init_matrix_transport()
         self._deps = RunnerDeps(
             state_board=self._state_board,
             runner_delegate=self.run_agent,
             runner=self,
-            matrix_transport=matrix_transport,
             hooks=self._hook_manager,
         )
 
@@ -638,16 +595,8 @@ class OrchestratorRunner:
                     state_board=sub_board,
                     runner_delegate=self.run_agent,
                     runner=self,
-                    matrix_transport=getattr(self._deps, "matrix_transport", None) if self._deps else None,
                     hooks=self._hook_manager,
                 )
-                mx = getattr(deps_override, "matrix_transport", None)
-                if mx is not None and mx.enabled:
-                    with contextlib.suppress(Exception):
-                        await mx.create_room(
-                            name=f"leader-{task_id}",
-                            invite=[],
-                        )
 
         async with self._spawn_sem:
             result = await self._run_single(
