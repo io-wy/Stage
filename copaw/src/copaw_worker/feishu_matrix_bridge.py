@@ -210,7 +210,31 @@ class FeishuMatrixBridge:
         self._matrix.add_event_callback(self._on_matrix_member, (RoomMemberEvent,))
         self._matrix.add_event_callback(self._on_to_device, (ToDeviceError,))
 
+        # Ensure the manager is invited into every room the bridge bot has
+        # already joined (e.g. after a restart or manager credential reset).
+        await self._ensure_manager_in_joined_rooms()
+
         asyncio.create_task(self._matrix_sync_loop())
+
+    async def _ensure_manager_in_joined_rooms(self) -> None:
+        manager = self._cfg.manager_matrix_user_id
+        if not manager or not self._matrix:
+            return
+
+        try:
+            joined_resp = await self._matrix.joined_rooms()
+            if not hasattr(joined_resp, "rooms"):
+                logger.warning("joined_rooms response unexpected: %s", joined_resp)
+                return
+
+            for room_id in joined_resp.rooms:
+                invite_resp = await self._matrix.room_invite(room_id, manager)
+                if isinstance(invite_resp, RoomInviteResponse):
+                    logger.info("Invited manager to existing room %s", room_id)
+                else:
+                    logger.debug("Manager invite for %s: %s", room_id, invite_resp)
+        except Exception as exc:
+            logger.warning("Failed to ensure manager in joined rooms: %s", exc)
 
     async def _matrix_sync_loop(self) -> None:
         while not self._shutdown_event.is_set():
