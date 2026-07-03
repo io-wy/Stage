@@ -66,14 +66,14 @@ class FeishuMatrixBridgeConfig:
     feishu_domain: str = "https://open.feishu.cn"
 
     # Matrix bridge-bot credentials
-    matrix_homeserver: str
+    matrix_homeserver: str = ""
     matrix_user_id: str = ""
     matrix_access_token: str = ""
     matrix_password: str = ""
     matrix_device_name: str = "feishu-matrix-bridge"
 
     # Manager Matrix user that will be invited into every bridged room
-    manager_matrix_user_id: str
+    manager_matrix_user_id: str = ""
 
     # Where to persist the feishu_chat_id -> matrix_room_id mapping
     state_file: Path = Path("/tmp/feishu_matrix_bridge_state.json")
