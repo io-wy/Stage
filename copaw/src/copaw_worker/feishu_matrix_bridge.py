@@ -259,6 +259,7 @@ class FeishuMatrixBridge:
             visibility=RoomVisibility.private,
             name=f"Feishu {feishu_chat_id}",
             invite=[manager],
+            is_direct=True,
         )
         if not hasattr(create_resp, "room_id"):
             logger.error("Failed to create Matrix room: %s", create_resp)
