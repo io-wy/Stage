@@ -306,10 +306,19 @@ class FeishuMatrixBridge:
             app_secret=self._cfg.feishu_app_secret,
             domain=self._cfg.feishu_domain,
         )
-        self._feishu.on("message", self._on_feishu_message)
-        self._feishu.on("error", self._on_feishu_error)
+        # lark-channel-sdk invokes callbacks without a proper asyncio Task
+        # context; wrap the handlers so matrix-nio/aiohttp calls run inside a
+        # real task.
+        self._feishu.on("message", self._on_feishu_message_sync)
+        self._feishu.on("error", self._on_feishu_error_sync)
         asyncio.create_task(self._feishu.connect())
         logger.info("Feishu channel connecting via WebSocket")
+
+    def _on_feishu_message_sync(self, msg: Any) -> None:
+        asyncio.create_task(self._on_feishu_message(msg))
+
+    def _on_feishu_error_sync(self, err: Any) -> None:
+        asyncio.create_task(self._on_feishu_error(err))
 
     async def _on_feishu_message(self, msg: Any) -> None:
         chat_id = getattr(msg, "chat_id", None)
