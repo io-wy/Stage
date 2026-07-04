@@ -119,7 +119,6 @@ class GlobalOrchestrator:
             self._runner = OrchestratorRunner(
                 self._config_path,
                 persist_dir=str(self._persist_dir) if self._persist_dir else None,
-                enable_monitor_resident=False,  # GlobalOrchestrator uses its own MonitorAgent
             )
             # Wire human channel into project state board
             if project.state_board is not None:
