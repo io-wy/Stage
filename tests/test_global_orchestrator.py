@@ -143,7 +143,7 @@ async def test_gap_run_marks_completed_even_on_failed_delivery(tmp_path, patched
     go = GlobalOrchestrator(tmp_path / "agent.json")
     report = await go.run("do x", work_dir=str(tmp_path / "run1"))
 
-    assert report.all_succeeded is False  # the delivery clearly failed
+    assert report.task_results[0].status == "failed"  # the delivery clearly failed
     proj = go.list_projects()[0]
     assert proj.status == ProjectStatus.COMPLETED  # GAP: marked completed anyway
     assert len(go.get_audit_log().query(event_type="project.completed")) == 1

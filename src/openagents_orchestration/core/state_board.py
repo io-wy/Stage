@@ -1579,27 +1579,8 @@ class StateBoard:
                 token_used=token_used,
             ))
 
-        total = len(self.tasks)
-        completed = sum(1 for t in self.tasks.values() if t.status == TaskStatus.COMPLETED)
-        failed = sum(1 for t in self.tasks.values() if t.status == TaskStatus.FAILED)
-        skipped = sum(1 for t in self.tasks.values() if t.status == TaskStatus.SKIPPED)
-
-        summary = (
-            f"Tasks: {total} total, {completed} completed, "
-            f"{failed} failed, {skipped} skipped. "
-            f"Token used: {self.budget.token_used}/{self.budget.token_limit}."
-        )
-        if self.needs_human():
-            summary += f" Needs human: {', '.join(self.needs_human())}."
-
         return DeliveryReport(
             objective=self.objective,
             task_results=task_results,
-            summary=summary,
             final_output=self._final_summary,
-            metadata={
-                "budget": self.budget.to_dict(),
-                "progress": self.progress_summary(),
-                "agents": {aid: a.to_dict() for aid, a in self.agents.items()},
-            },
         )

@@ -181,16 +181,13 @@ Examples:
     print("ORCHESTRATION REPORT")
     print("=" * 60)
     print(f"Objective: {report.objective}")
-    print(f"Summary:   {report.summary}")
-    print(f"Success:   {report.success_rate:.0%}")
-    print(f"\nTasks ({len(report.task_results)}):")
+    print(f"Tasks:     {len(report.task_results)}")
     for tr in report.task_results:
-        icon = "[OK]" if tr.status == "completed" else "[FAIL]"
-        print(f"  {icon} {tr.task_id}: {tr.status}")
+        print(f"  - {tr.task_id}: {tr.status}")
         if tr.artifacts:
-            print(f"       artifacts: {', '.join(tr.artifacts)}")
+            print(f"    artifacts: {', '.join(tr.artifacts)}")
         if tr.error:
-            print(f"       error: {tr.error[:100]}")
+            print(f"    error: {tr.error[:100]}")
 
     if report.final_output:
         print(f"\nFinal output:\n{report.final_output}")

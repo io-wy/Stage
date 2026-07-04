@@ -195,6 +195,6 @@ async def test_director_react_loop_classify_decompose_spawn_finalize(tmp_path, m
     history_summary = board.decision_history.summary()
     assert history_summary["total_decisions"] >= 1
 
-    # Report should reflect success
+    # Report should reflect completion
     assert report is not None
-    assert "verification_report" in report.metadata
+    assert any(r.status == "completed" for r in report.task_results)

@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
 from openagents_orchestration.models.message import (
     MessageType,
     StructuredMessage,
@@ -158,41 +157,8 @@ def test_gap_message_from_dict_valueerror_on_invalid_enum():
         StructuredMessage.from_dict({**base, "priority": 99})
 
 
-# ── DeliveryReport success accounting GAPs ────────────────────────────────────
-
-
-def test_delivery_success_rate_mixed():
-    report = DeliveryReport(
-        objective="x",
-        task_results=[
-            TaskResult(task_id="a", status="completed"),
-            TaskResult(task_id="b", status="failed"),
-        ],
-    )
-    assert report.success_rate == 0.5
-    assert report.all_succeeded is False
-
-
-def test_gap_empty_delivery_report_claims_all_succeeded():
-    """``all_succeeded`` is ``all(...)`` over an empty list → True, while
-    ``success_rate`` is 0.0. A run that produced zero task results simultaneously
-    reports 'everything succeeded' and '0% success' — and the vacuous True masks
-    a planning failure that emitted no tasks at all."""
-    report = DeliveryReport(objective="produced no tasks")
-    assert report.all_succeeded is True  # GAP: vacuously true
-    assert report.success_rate == 0.0
-
-
-def test_gap_delivery_status_typo_silently_counts_as_not_completed():
-    """``status`` is a free-form string; a typo like 'complete' (missing 'd') is
-    silently treated as not-completed. Nothing validates the status vocabulary,
-    so a stringly-typed mistake degrades the success rate with no error."""
-    report = DeliveryReport(
-        objective="x",
-        task_results=[TaskResult(task_id="a", status="complete")],  # typo
-    )
-    assert report.success_rate == 0.0  # GAP: silently counted as a non-success
-    assert report.all_succeeded is False
+# ── DeliveryReport success accounting removed ─────────────────────────────────
+# success_rate / all_succeeded were deleted as meaningless for open-ended tasks.
 
 
 # ── PatternOutcome contract ───────────────────────────────────────────────────

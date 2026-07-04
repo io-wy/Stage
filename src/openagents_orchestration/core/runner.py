@@ -59,9 +59,6 @@ from openagents_orchestration.persistence import (
     StateSnapshotter,
 )
 from openagents_orchestration.projects.project import Project
-from openagents_orchestration.reporting import (
-    build_verification_report,
-)
 from openagents_orchestration.skills_registry import SkillRegistry
 from openagents_orchestration.tools.mcp.adapter import build_mcp_tools
 from openagents_orchestration.tools.mcp.client import McpClientManager
@@ -500,10 +497,6 @@ class OrchestratorRunner:
             flush=True,
         )
         report = self._state_board.to_report()
-        report.metadata["verification_report"] = build_verification_report(
-            self._state_board,
-            work_dir=self._current_work_dir,
-        )
         return report
 
     async def run_agent(

@@ -175,8 +175,8 @@ class TestStateBoard:
         board.update_task("t1", status=TaskStatus.COMPLETED, result_output="done")
         report = board.to_report()
         assert report.objective == "obj"
-        assert report.success_rate == 1.0
-        assert "completed" in report.summary
+        assert len(report.task_results) == 1
+        assert report.task_results[0].status == "completed"
 
     def test_suggest_fallback_task_not_found(self):
         board = StateBoard("obj")
