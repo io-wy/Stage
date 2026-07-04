@@ -61,8 +61,6 @@ from openagents_orchestration.persistence import (
 from openagents_orchestration.projects.project import Project
 from openagents_orchestration.reporting import (
     build_verification_report,
-    summarize_agent_run,
-    summarize_board,
 )
 from openagents_orchestration.skills_registry import SkillRegistry
 from openagents_orchestration.tools.mcp.adapter import build_mcp_tools
@@ -502,7 +500,6 @@ class OrchestratorRunner:
             flush=True,
         )
         report = self._state_board.to_report()
-        report.metadata.update(summarize_board(self._state_board))
         report.metadata["verification_report"] = build_verification_report(
             self._state_board,
             work_dir=self._current_work_dir,
@@ -805,16 +802,14 @@ class OrchestratorRunner:
                     file=sys.stderr,
                     flush=True,
                 )
-                summary = summarize_agent_run(
-                    agent_id=agent_id,
-                    task_id=self._task_id_from_agent_id(agent_type, agent_id),
-                    status="failed",
-                    error=str(exc),
-                    transcript=list(ctx.transcript),
-                    artifacts=list(ctx.artifacts),
-                    steps_used=ctx.state.get("__steps_used__", 0),
-                    token_used=usage.total_tokens,
-                )
+                summary = {
+                    "agent_id": agent_id,
+                    "task_id": self._task_id_from_agent_id(agent_type, agent_id),
+                    "status": "failed",
+                    "message": str(exc),
+                    "steps_used": ctx.state.get("__steps_used__", 0),
+                    "token_used": usage.total_tokens,
+                }
                 self._state_board.log_event(
                     "agent.run_summary",
                     task_id=summary["task_id"],
@@ -882,16 +877,14 @@ class OrchestratorRunner:
                 flush=True,
             )
             status = "waiting_for_human" if awaiting_human else "completed"
-            summary = summarize_agent_run(
-                agent_id=agent_id,
-                task_id=self._task_id_from_agent_id(agent_type, agent_id),
-                status=status,
-                output=str(final_output or ""),
-                transcript=list(ctx.transcript),
-                artifacts=list(ctx.artifacts),
-                steps_used=steps_used,
-                token_used=usage.total_tokens,
-            )
+            summary = {
+                "agent_id": agent_id,
+                "task_id": self._task_id_from_agent_id(agent_type, agent_id),
+                "status": status,
+                "message": str(final_output or ""),
+                "steps_used": steps_used,
+                "token_used": usage.total_tokens,
+            }
             self._state_board.log_event(
                 "agent.run_summary",
                 task_id=summary["task_id"],
