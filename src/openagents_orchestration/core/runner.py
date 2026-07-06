@@ -807,7 +807,7 @@ class OrchestratorRunner:
                     "agent.run_summary",
                     task_id=summary["task_id"],
                     agent_id=agent_id,
-                    message=f"failed: {summary['failure_type']}",
+                    message=f"failed: {summary.get('message', 'unknown')}",
                     summary=summary,
                 )
             return RunResult(

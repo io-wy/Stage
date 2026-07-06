@@ -7,8 +7,9 @@ Usage:
     export MATRIX_WORK_DIR=./matrix_work
     uv run python scripts/run_matrix_bot.py
 
-Each Matrix room gets its own project. The bot responds to text messages and
-forwards `ask_human` questions back to the room.
+Each Matrix room gets its own GlobalOrchestrator (independent project, no
+lock contention across rooms). Messages are run as objectives and results
+posted back. ``ask_human`` questions are polled and forwarded.
 """
 
 from __future__ import annotations
@@ -27,11 +28,10 @@ from openagents_orchestration.projects.global_orchestrator import (
 
 
 class MatrixAdapter:
-    """Bridge Matrix rooms to the orchestrator.
+    """Bridge Matrix rooms to isolated orchestrator instances.
 
-    Each room is treated as an isolated project. Messages from room members are
-    passed as objectives to ``GlobalOrchestrator.run``. Replies and human
-    questions are posted back to the room.
+    Each room gets its own ``GlobalOrchestrator`` so concurrent messages
+    do not block each other.
     """
 
     def __init__(
@@ -49,11 +49,7 @@ class MatrixAdapter:
         self._client = AsyncClient(homeserver, user_id)
         self._client.access_token = access_token
 
-        self._orchestrator = GlobalOrchestrator(
-            Path(config_path),
-            persist_dir=None,
-            enable_monitor=False,
-        )
+        self._config_path = Path(config_path)
         self._work_root = Path(work_dir)
         self._budget = Budget(
             token_limit=token_limit,
@@ -61,7 +57,7 @@ class MatrixAdapter:
             max_steps=max_steps,
         )
         self._question_poll_interval_s = question_poll_interval_s
-        self._lock = asyncio.Lock()
+        self._orchestrators: dict[str, GlobalOrchestrator] = {}
 
     async def start(self) -> None:
         """Start listening to Matrix events and polling for human questions."""
@@ -70,9 +66,25 @@ class MatrixAdapter:
         await self._client.sync_forever(timeout=30000, full_state=False)
 
     async def stop(self) -> None:
-        """Close the Matrix client and shut down the orchestrator."""
+        """Shut down all room orchestrators and close the Matrix client."""
+        for orch in self._orchestrators.values():
+            await orch.shutdown()
+        self._orchestrators.clear()
         await self._client.close()
-        await self._orchestrator.shutdown()
+
+    # -- per-room orchestrator management -----------------------------------
+
+    def _get_orchestrator(self, room_id: str) -> GlobalOrchestrator:
+        """Return (or create and cache) an orchestrator for a room."""
+        if room_id not in self._orchestrators:
+            self._orchestrators[room_id] = GlobalOrchestrator(
+                self._config_path,
+                persist_dir=None,
+                enable_monitor=False,
+            )
+        return self._orchestrators[room_id]
+
+    # -- message handling ---------------------------------------------------
 
     async def _on_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
         """Handle an incoming text message in a Matrix room."""
@@ -84,19 +96,19 @@ class MatrixAdapter:
         if not body:
             return
 
-        async with self._lock:
-            pending = self._orchestrator.human_channel.get_pending_questions(
-                project_id=room_id
-            )
-            if pending:
-                hq = pending[-1]
-                if self._orchestrator.human_channel.answer(hq.qid, body):
-                    await self._send_text(room_id, "Answer recorded.")
-                    return
+        orch = self._get_orchestrator(room_id)
+
+        # Check for pending human question
+        pending = orch.human_channel.get_pending_questions(project_id=room_id)
+        if pending:
+            hq = pending[-1]
+            if orch.human_channel.answer(hq.qid, body):
+                await self._send_text(room_id, "Answer recorded.")
+                return
 
         await self._send_text(room_id, f"Running: {body[:200]}...")
         try:
-            report = await self._orchestrator.run(
+            report = await orch.run(
                 objective=body,
                 budget=self._budget,
                 work_dir=str(self._room_work_dir(room_id)),
@@ -107,18 +119,24 @@ class MatrixAdapter:
         except Exception as exc:  # noqa: BLE001
             await self._send_text(room_id, f"Error: {exc}")
 
+    # -- human question polling ---------------------------------------------
+
     async def _poll_human_questions(self) -> None:
-        """Periodically check for unanswered human questions and post them."""
+        """Periodically check for unanswered human questions across all rooms."""
         while True:
             await asyncio.sleep(self._question_poll_interval_s)
-            try:
-                questions = self._orchestrator.human_channel.get_pending_questions()
-                for hq in questions:
-                    text = f"Question from {hq.from_agent}:\n{hq.question}"
-                    await self._send_text(hq.project_id, text[:4000])
-            except Exception:  # noqa: BLE001
-                # Polling must not crash the bot.
-                pass
+            for room_id, orch in list(self._orchestrators.items()):
+                try:
+                    questions = orch.human_channel.get_pending_questions(
+                        project_id=room_id,
+                    )
+                    for hq in questions:
+                        text = f"Question from {hq.from_agent}:\n{hq.question}"
+                        await self._send_text(room_id, text[:4000])
+                except Exception:  # noqa: BLE001
+                    pass
+
+    # -- helpers ------------------------------------------------------------
 
     async def _send_text(self, room_id: str, text: str) -> None:
         """Send a plain-text message to a Matrix room."""
