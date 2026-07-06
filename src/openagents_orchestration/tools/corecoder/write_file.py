@@ -24,14 +24,13 @@ class WriteFileTool(ToolPlugin):
 
     name = "write_file"
     description = (
-        "Write a complete file, overwriting any existing content. "
-        "Use for new files or full rewrites of small files only.\n\n"
-        "Parameters:\n"
-        "- file_path (required): absolute or relative to cwd.\n"
-        "- content (required): complete file content.\n\n"
-        "Rules:\n"
-        "- For small edits use edit_file; for multi-file changes use apply_patch.\n"
-        "- Partial content truncates the file to only what you pass."
+        "写入完整文件，覆盖已有内容。仅用于新文件或小文件的完全重写。\n\n"
+        "参数：\n"
+        "- file_path（必填）：绝对路径或相对于工作目录\n"
+        "- content（必填）：完整的文件内容\n\n"
+        "规则：\n"
+        "- 小改动用 edit_file；多文件修改用 apply_patch\n"
+        "- 只传部分内容会截断文件"
     )
     durable_idempotent = False  # writes are not safe to replay blindly
 

@@ -29,14 +29,14 @@ class ListDirectoryTool(ToolPlugin):
 
     name = "list_directory"
     description = (
-        "List files and directories under a path as an indented tree. "
-        "Use to learn project layout or confirm a file exists.\n\n"
-        "Parameters:\n"
-        "- path (default '.'): absolute or relative to cwd.\n"
-        "- depth (default 1, max 3): recursion levels.\n\n"
-        "Rules:\n"
-        "- Skips noise dirs (.git, node_modules, __pycache__, .venv, dist, build).\n"
-        "- For finding files by name use glob; for searching contents use grep."
+        "以缩进树形式列出路径下的文件和目录。"
+        "用于了解项目布局或确认文件存在。\n\n"
+        "参数：\n"
+        "- path（默认 '.'）：绝对路径或相对于工作目录\n"
+        "- depth（默认 1，最大 3）：递归层级\n\n"
+        "规则：\n"
+        "- 跳过噪音目录（.git, node_modules, __pycache__, .venv, dist, build）\n"
+        "- 按文件名查找用 glob；搜索内容用 grep"
     )
     durable_idempotent = True
 

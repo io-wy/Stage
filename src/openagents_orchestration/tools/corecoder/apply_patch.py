@@ -53,19 +53,19 @@ class ApplyPatchTool(ToolPlugin):
 
     name = "apply_patch"
     description = (
-        "Apply a unified-diff patch to one or more files. "
-        "Best for multi-line or multi-file changes.\n\n"
-        "Format:\n"
+        "对一或多个文件应用 unified-diff 补丁。"
+        "适合多行或多文件修改。\n\n"
+        "格式：\n"
         "    --- a/src/main.py\n"
         "    +++ b/src/main.py\n"
         "    @@ -10,3 +10,3 @@\n"
-        "     unchanged context line\n"
-        "    -removed line\n"
-        "    +added line\n\n"
-        "Rules:\n"
-        "- One file per '--- / +++' header.\n"
-        "- a/ and b/ prefixes are stripped automatically.\n"
-        "- For a single small edit use edit_file; for a full rewrite use write_file."
+        "     不变的上下文行\n"
+        "    -删除的行\n"
+        "    +添加的行\n\n"
+        "规则：\n"
+        "- 每个 '--- / +++' 头对应一个文件\n"
+        "- a/ 和 b/ 前缀自动去除\n"
+        "- 单处小修改用 edit_file；完整重写用 write_file"
     )
     durable_idempotent = False
 

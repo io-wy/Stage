@@ -27,15 +27,15 @@ class ReadFileTool(ToolPlugin):
 
     name = "read_file"
     description = (
-        "Read a UTF-8 text file with 1-indexed line numbers. "
-        "Use before editing to copy exact text, or to verify claimed artifacts.\n\n"
-        "Parameters:\n"
-        "- file_path (required): absolute or relative to cwd.\n"
-        "- offset (default 1): 1-based start line.\n"
-        "- limit (default 2000, max 5000): lines to return.\n\n"
-        "Rules:\n"
-        "- Drop the leading line-number prefix from read_file output when using it in edit_file old_string.\n"
-        "- For finding symbols across files, use grep_tool. For listing files, use list_directory."
+        "读取 UTF-8 文本文件，每行带行号。"
+        "编辑前复制精确文本，或验证声称的产物。\n\n"
+        "参数：\n"
+        "- file_path（必填）：绝对路径或相对于工作目录\n"
+        "- offset（默认 1）：起始行号\n"
+        "- limit（默认 2000，最大 5000）：返回行数\n\n"
+        "规则：\n"
+        "- 复制 read_file 输出用于 edit_file 的 old_string 时，去掉行号前缀\n"
+        "- 跨文件查找符号用 grep_tool；列出文件用 list_directory"
     )
 
     def execution_spec(self) -> ToolExecutionSpec:

@@ -60,11 +60,10 @@ class BashTool(ToolPlugin):
 
     name = "bash"
     description = (
-        "Execute a shell command. Returns stdout, stderr, and exit code. "
-        "Use for tests, builds, git operations, package installs. "
-        "For creating or modifying files, prefer write_file or edit_file over bash "
-        "redirections (e.g., cat > file, heredocs). "
-        "Dangerous patterns (rm -rf /, fork bombs, curl|bash, etc.) are blocked."
+        "执行 shell 命令。返回 stdout、stderr 和退出码。"
+        "用于测试、构建、git 操作、包安装。"
+        "创建或修改文件时优先用 write_file/edit_file，不要用 bash 重定向（如 cat > file、heredoc）。"
+        "危险模式（rm -rf /、fork bomb、curl|bash 等）会被阻止。"
     )
     durable_idempotent = False
 

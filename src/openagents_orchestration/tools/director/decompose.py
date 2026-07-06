@@ -43,18 +43,16 @@ class DecomposeTool(ToolPlugin):
 
     name = "decompose"
     description = (
-        "Turn an objective into the SMALLEST task graph that works. decompose is how tasks enter "
-        "the board, so `spawn_agent` can only run after it. A coder / reviewer / researcher can each "
-        "own a complete task end-to-end — most objectives need just ONE task and ONE agent.\n\n"
-        "# Emit MULTIPLE tasks ONLY when at least one holds\n"
-        "- The work needs several DISTINCT roles (e.g. research -> code -> review) one agent cannot cover.\n"
-        "- There are genuinely INDEPENDENT subtasks that can run in parallel.\n"
-        "- The objective is too large to fit one agent's context window.\n\n"
-        "# Otherwise emit a SINGLE task\n"
-        "- When one agent could plausibly complete the objective, return a one-task graph — that is "
-        "the correct, common output, not a failure. Do not manufacture extra tasks to look thorough; "
-        "over-splitting adds coordination + token cost and enlarges the failure surface.\n\n"
-        "Each task gets a unique ID, description, agent_type, dependencies, and expected artifacts."
+        "把一个目标转成**最小的**任务图。decompose 是任务进入 board 的唯一入口，spawn_agent 只能在其后运行。"
+        "一个 coder / reviewer / researcher 可以独立完成一个完整任务——大多数目标只需要**一个**任务和**一个** agent。\n\n"
+        "# 仅当以下至少一项成立时才产生**多个**任务\n"
+        "- 工作需要多个不同的角色（如 research → code → review），一个 agent 无法覆盖\n"
+        "- 有真正独立的子任务可以并行运行\n"
+        "- 目标太大，一个 agent 的上下文窗口装不下\n\n"
+        "# 否则只产生**一个**任务\n"
+        "- 当一个 agent 可以完成目标时，返回单任务图——这是正确的常见输出，不是失败。"
+        "不要为了显得全面而编造多余的任务；过度拆分增加协调成本和 token 消耗，并扩大失败面。\n\n"
+        "每个任务有唯一 ID、描述、agent_type、依赖和期望产物。"
     )
 
     def execution_spec(self) -> ToolExecutionSpec:
@@ -131,19 +129,14 @@ class DecomposeTool(ToolPlugin):
         agents_info = self._build_agents_info(context)
 
         system = (
-            "You are an expert task planner. Your FIRST job is to decide whether the "
-            "objective needs splitting at all. A single capable agent (coder, reviewer, "
-            "researcher, ...) can own a complete task end-to-end in its own context window. "
-            "If one agent could plausibly finish this objective, return a SINGLE task — that "
-            "is a valid and preferred output, not a failure.\n\n"
-            "Split into multiple tasks ONLY when the objective genuinely requires several "
-            "DISTINCT roles, has INDEPENDENT subtasks that can run in parallel, or is too "
-            "large for one agent's context window. Prefer the smallest graph that works; do "
-            "not split for the sake of splitting — over-decomposition adds coordination and "
-            "token cost and enlarges the failure surface.\n\n"
-            "Each task must have a unique task_id, a clear description, an agent_type from "
-            "the available roster, and explicit dependencies on earlier task_ids. Keep the "
-            "graph small enough to fit in the orchestration budget."
+            "你是专家级任务规划者。你的第一任务是判断这个目标是否需要拆分。"
+            "一个能干的 agent（coder、reviewer、researcher...）可以在自己的上下文窗口中端到端完成一个完整任务。"
+            "如果一个 agent 可以完成这个目标，就返回**一个**任务——这是有效且更优的输出，不是失败。\n\n"
+            "仅当目标确实需要多个**不同角色**、有**独立的并行**子任务、或太大超出单个 agent 上下文窗口时，"
+            "才拆成多个任务。选择能工作的最小图；不要为了拆分而拆分——"
+            "过度拆分增加协调成本、token 开销，并扩大失败面。\n\n"
+            "每个任务必须有唯一 task_id、清晰描述、来自可用角色列表的 agent_type、"
+            "以及对前序任务的显式依赖。保持图足够小以适应编排预算。"
         )
         intent_section = (
             f"\nIntent: {intent.task_type}/{intent.complexity}, "

@@ -28,16 +28,15 @@ class EditFileTool(ToolPlugin):
 
     name = "edit_file"
     description = (
-        "Replace one exact, unique substring in a file. "
-        "Preferred for targeted changes.\n\n"
-        "Parameters:\n"
-        "- file_path (required): absolute or relative to cwd.\n"
-        "- old_string (required): exact text to replace, copied verbatim from read_file.\n"
-        "- new_string (required): replacement text.\n\n"
-        "Rules:\n"
-        "- old_string must appear EXACTLY ONCE; retry with more context if not.\n"
-        "- Drop the leading line-number prefix from read_file output.\n"
-        "- For multi-file or multi-hunk changes use apply_patch."
+        "替换文件中一个精确的唯一子串。首选的手术式修改。\n\n"
+        "参数：\n"
+        "- file_path（必填）：绝对路径或相对于工作目录\n"
+        "- old_string（必填）：要替换的确切文本，从 read_file 输出中逐字复制\n"
+        "- new_string（必填）：替换文本\n\n"
+        "规则：\n"
+        "- old_string 必须**唯一出现一次**；否则加更多上下文重试\n"
+        "- 去掉 read_file 输出的行号前缀\n"
+        "- 多文件或多 hunk 的修改用 apply_patch"
     )
     durable_idempotent = False
 
