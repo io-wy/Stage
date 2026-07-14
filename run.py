@@ -100,10 +100,6 @@ Examples:
         help="Enable active heartbeat monitor (default: on)",
     )
     parser.add_argument(
-        "--persist", action="store_true",
-        help="Enable disk persistence (default: off)",
-    )
-    parser.add_argument(
         "--work-dir", default=".",
         help="Working directory for the orchestration (default: current dir)",
     )
@@ -141,11 +137,8 @@ Examples:
             for t in _parse_teams(args.teams)
         ]
 
-    persist_dir = str(Path(__file__).parent / ".claude" / "persist") if args.persist else None
-
     orchestrator = GlobalOrchestrator(
         Path(__file__).parent / "agent.json",
-        persist_dir=persist_dir,
         enable_monitor=(args.monitor == "on"),
     )
 

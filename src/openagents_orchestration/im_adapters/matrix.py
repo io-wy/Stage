@@ -79,7 +79,6 @@ class MatrixAdapter:
         if room_id not in self._orchestrators:
             self._orchestrators[room_id] = GlobalOrchestrator(
                 self._config_path,
-                persist_dir=None,
                 enable_monitor=False,
             )
         return self._orchestrators[room_id]

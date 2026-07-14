@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import os
 import sys
 import uuid
 from dataclasses import dataclass
@@ -52,11 +51,6 @@ from openagents_orchestration.models.pattern import (
     PatternError,
     PatternOutcome,
     PatternOutcomeStatus,
-)
-from openagents_orchestration.persistence import (
-    EventRecorder,
-    SessionResumer,
-    StateSnapshotter,
 )
 from openagents_orchestration.projects.project import Project
 from openagents_orchestration.skills_registry import SkillRegistry
@@ -152,7 +146,6 @@ class OrchestratorRunner:
         self,
         config_path: str | Path,
         *,
-        persist_dir: str | None = None,
         max_concurrent_spawns: int = 3,
     ):
         self._max_concurrent_spawns = max_concurrent_spawns
@@ -174,13 +167,7 @@ class OrchestratorRunner:
         self._project: Project | None = None
         self._deps: RunnerDeps | None = None
         self._spawn_sem = asyncio.Semaphore(max_concurrent_spawns)
-        # Persistence layer
-        self._persist_dir = Path(persist_dir) if persist_dir else None
         self._session_id: str | None = None
-        self._recorder: EventRecorder | None = None
-        self._snapshotter: StateSnapshotter | None = None
-        self._resumer: SessionResumer | None = None
-        self._session_dir: Path | None = None
         self._current_work_dir: Path | None = None
         # Skill catalog for L1 progressive disclosure (injected at session start).
         self._skill_registry = SkillRegistry()
@@ -324,8 +311,6 @@ class OrchestratorRunner:
         self,
         objective: str,
         *,
-        session_id: str | None = None,
-        resume: bool = False,
         budget: Budget | None = None,
         work_dir: str | Path | None = None,
     ) -> Any:
@@ -341,7 +326,7 @@ class OrchestratorRunner:
         # store、注入给 agent 的 cwd 等)二次解析 → 目录套娃。库边界统一绝对化，
         # 保证编排内部全程是绝对路径(任何入口传相对都在此被规整)。
         self._current_work_dir = Path(work_dir).resolve() if work_dir else Path.cwd()
-        self._session_id = session_id or f"session-{uuid.uuid4().hex[:8]}"
+        self._session_id = f"session-{uuid.uuid4().hex[:8]}"
         print(f"\n[Orchestrator] Starting: {objective}", file=sys.stderr, flush=True)
         print(f"[Orchestrator] Session: {self._session_id}", file=sys.stderr, flush=True)
         if work_dir:
@@ -351,22 +336,7 @@ class OrchestratorRunner:
         with cm:
             await self._ensure_mcp_connected()
             try:
-                if self._persist_dir is not None:
-                    self._session_dir = self._persist_dir / self._session_id
-                    self._session_dir.mkdir(parents=True, exist_ok=True)
-                    self._recorder = EventRecorder(self._session_dir, self._session_id)
-                    self._snapshotter = StateSnapshotter(self._session_dir / "snapshots")
-                    self._resumer = SessionResumer(self._persist_dir)
-                    print(
-                        f"[Orchestrator] Persistence: {self._session_dir}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-
-                if resume and self._resumer is not None:
-                    await self._resume_run(objective)
-                else:
-                    await self._start_run(objective, budget=budget)
+                await self._start_run(objective, budget=budget)
 
                 # Wire runtime dependencies for tools.
                 await self._wire_run_deps()
@@ -383,49 +353,6 @@ class OrchestratorRunner:
             finally:
                 await self._close_mcp()
 
-    async def _resume_run(self, objective: str) -> None:
-        """Resume from a persisted snapshot."""
-
-        loaded = self._resumer.load(self._session_id)
-        if loaded.snapshot is None:
-            return
-
-        print("[Orchestrator] Resuming from snapshot...", file=sys.stderr, flush=True)
-        if "state_board" in loaded.snapshot:
-            project = Project.from_dict(loaded.snapshot)
-        else:
-            state_board = StateBoard.from_dict(
-                loaded.snapshot,
-                recorder=self._recorder,
-                snapshotter=self._snapshotter,
-                mailbox_backend=os.environ.get("MAILBOX_BACKEND", "memory"),
-                redis_url=os.environ.get("REDIS_URL"),
-            )
-            project = Project(
-                objective=state_board.objective,
-                budget=state_board.budget,
-                state_board=state_board,
-            )
-        self._project = project
-        self._state_board = project.state_board
-        if self._state_board is not None:
-            self._state_board._recorder = self._recorder
-            self._state_board._snapshotter = self._snapshotter
-        if loaded.events_after and self._state_board is not None:
-            from openagents_orchestration.persistence import EventReplayer
-
-            EventReplayer().replay(self._state_board, loaded.events_after)
-            print(
-                f"[Orchestrator] Replayed {len(loaded.events_after)} event(s)",
-                file=sys.stderr,
-                flush=True,
-            )
-        print(
-            f"[Orchestrator] Resumed: {self._state_board.progress_summary()}",
-            file=sys.stderr,
-            flush=True,
-        )
-
     async def _start_run(self, objective: str, *, budget: Budget | None = None) -> None:
         """Initialize a fresh StateBoard for the objective."""
         project_budget = budget or Budget(
@@ -438,8 +365,6 @@ class OrchestratorRunner:
             budget=project_budget,
             work_dir=self._current_work_dir,
         )
-        project.state_board._recorder = self._recorder
-        project.state_board._snapshotter = self._snapshotter
         await project.state_board.validate_redis()
         project.start()
 
@@ -1069,13 +994,6 @@ class OrchestratorRunner:
         print("\n".join(lines), file=sys.stderr, flush=True)
 
     async def close(self) -> None:
-        # Save final snapshot before shutting down
-        if self._state_board is not None and self._snapshotter is not None:
-            seq = self._recorder._seq if self._recorder is not None else 0
-            self._snapshotter.force_snapshot(self._state_board, seq=seq)
-        # Flush remaining events
-        if self._recorder is not None:
-            self._recorder.close()
         for bundle in self._bundles.values():
             memory = getattr(bundle.plugins,"memory", None)
             if memory is not None and hasattr(memory, "close"):

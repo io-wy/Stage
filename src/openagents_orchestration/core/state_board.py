@@ -177,8 +177,6 @@ class StateBoard:
         budget: Budget | None = None,
         *,
         echo: bool = True,
-        recorder: Any = None,
-        snapshotter: Any = None,
         mailbox_backend: str = "memory",
         redis_url: str | None = None,
         channel_policy: Any = None,
@@ -188,7 +186,6 @@ class StateBoard:
         project_id: str = "",
         team_id: str = "",
         max_events: int = 10_000,
-        snapshot_interval_s: float = 5.0,
         hooks: Any = None,
     ):
         self.objective = objective
@@ -202,10 +199,6 @@ class StateBoard:
         self._max_events = max_events
         self._final_summary: str = ""
         self._echo = echo
-        self._recorder = recorder
-        self._snapshotter = snapshotter
-        self._last_snapshot_ts: float = 0.0
-        self._snapshot_interval_s = snapshot_interval_s
         self._hooks = hooks
 
         # Messaging and human-channel are now composed services.
@@ -679,18 +672,6 @@ class StateBoard:
         # Truncate oldest events to prevent unbounded memory growth
         if len(self.events) > self._max_events:
             self.events = self.events[-self._max_events:]
-        # Persist to JSONL if recorder is attached
-        if self._recorder is not None:
-            recorder_payload = dict(payload)
-            recorder_payload.pop("trace_id", None)
-            self._recorder.append(
-                event_type,
-                trace_id=trace_id,
-                task_id=task_id,
-                agent_id=agent_id,
-                message=message,
-                **recorder_payload,
-            )
         if self._echo:
             ts_str = time.strftime("%H:%M:%S", time.localtime(evt.ts))
             parts = [f"[{ts_str}]"]
@@ -704,8 +685,6 @@ class StateBoard:
             if message:
                 parts.append(f"— {message}")
             print(" ".join(parts), file=sys.stderr, flush=True)
-        # Trigger snapshot if threshold reached
-        self._maybe_snapshot()
         # Hook: stateboard.event.log
         if self._hooks is not None:
             self._hooks.run(
@@ -718,20 +697,6 @@ class StateBoard:
                     "payload": dict(payload),
                 },
             )
-
-    def _maybe_snapshot(self) -> None:
-        """Trigger periodic snapshot if snapshotter is attached and interval elapsed.
-
-        Throttled to ``_snapshot_interval_s`` seconds to prevent IO storms
-        during high-frequency mutation bursts (e.g. 50 agents emitting
-        events in the same second).
-        """
-        if self._snapshotter is None:
-            return
-        now = time.time()
-        if now - self._last_snapshot_ts >= self._snapshot_interval_s:
-            self._last_snapshot_ts = now
-            self._snapshotter.on_mutation(self)
 
     def format_events(self) -> str:
         """Return a human-readable event timeline."""
@@ -1150,10 +1115,10 @@ class StateBoard:
             "waiting_for_human": len(unanswered),
         }
 
-    # -- full state for persistence -----------------------------------------
+    # -- full state for serialization ----------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
-        """Full state dict for persistence / resume.
+        """Full state dict for serialization / reconstruction.
 
         Includes everything needed to reconstruct this StateBoard.
         """
@@ -1184,7 +1149,6 @@ class StateBoard:
             "project_context": dict(self.project_context),
             "final_summary": self._final_summary,
             "_max_events": self._max_events,
-            "_snapshot_interval_s": self._snapshot_interval_s,
         }
 
     @classmethod
@@ -1193,8 +1157,6 @@ class StateBoard:
         data: dict[str, Any],
         *,
         echo: bool = True,
-        recorder: Any = None,
-        snapshotter: Any = None,
         reset_budget_clock: bool = True,
         mailbox_backend: str = "memory",
         redis_url: str | None = None,
@@ -1212,7 +1174,7 @@ class StateBoard:
         )
         # Restore mutable budget fields from data
         if reset_budget_clock:
-            # Resume: reset start_time so budget time is not immediately exhausted
+            # Reset start_time so budget time is not immediately exhausted
             budget.start_time = time.time()
         else:
             budget.start_time = budget_data.get("start_time", time.time())
@@ -1222,14 +1184,11 @@ class StateBoard:
             objective=objective,
             budget=budget,
             echo=echo,
-            recorder=recorder,
-            snapshotter=snapshotter,
             mailbox_backend=mailbox_backend,
             redis_url=redis_url,
             project_id=data.get("project_id", ""),
             team_id=data.get("team_id", ""),
             max_events=data.get("_max_events", 10_000),
-            snapshot_interval_s=data.get("_snapshot_interval_s", 5.0),
         )
 
         # Restore tasks

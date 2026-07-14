@@ -61,7 +61,6 @@ class GlobalOrchestrator:
         self,
         config_path: str | Path,
         *,
-        persist_dir: str | None = None,
         enable_monitor: bool = True,
         global_budget: Budget | None = None,
     ):
@@ -75,7 +74,6 @@ class GlobalOrchestrator:
         self._human_channel = HumanChannel()
         self._audit_log = AuditLog()
         self._metrics = OrchestrationMetrics()
-        self._persist_dir = Path(persist_dir) if persist_dir else None
         self._enable_monitor = enable_monitor
         self._monitor: MonitorAgent | None = None
 
@@ -118,7 +116,6 @@ class GlobalOrchestrator:
         async with self._runner_lock:
             self._runner = OrchestratorRunner(
                 self._config_path,
-                persist_dir=str(self._persist_dir) if self._persist_dir else None,
             )
             # Wire human channel into project state board
             if project.state_board is not None:
