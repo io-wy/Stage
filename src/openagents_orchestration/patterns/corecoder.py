@@ -25,7 +25,6 @@ reproduce its event emissions (``tool.called``, ``tool.succeeded``,
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import os
 import time
@@ -186,7 +185,6 @@ class CoreCoderPattern(PatternPlugin):
         self._model_override = self.config.get("model")
         self._enable_planning = bool(self.config.get("enable_planning", True))
         self._permission_mode = str(self.config.get("permission_mode", "default"))
-        self._plan_mode = bool(self.config.get("plan_mode", False))
         self._max_consecutive_readonly_steps = int(
             self.config.get("max_consecutive_readonly_steps", 5)
         )
@@ -345,9 +343,6 @@ class CoreCoderPattern(PatternPlugin):
                 ),
             )
 
-        if self._plan_mode:
-            ctx.state["__plan_mode_active__"] = True
-
         tool_schemas = self._build_tool_schemas()
 
         messages: list[dict[str, Any]] = []
@@ -378,22 +373,6 @@ class CoreCoderPattern(PatternPlugin):
                 if clarification:
                     ctx.state["__clarification_question__"] = clarification
                     return await self._request_clarification_and_pause(clarification)
-
-        # ---- Plan mode: generate plan file and stop for approval --------------
-        if self._plan_mode and not ctx.state.get("__plan_approved__"):
-            plan = ctx.state.get("__plan__") or {}
-            plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
-            plan_path = self._write_plan_file(plan_text)
-            ctx.state["__plan_mode_active__"] = True
-            self._writeback_context()
-            return PatternOutcome(
-                output=(
-                    f"[Plan mode] Generated plan file: {plan_path}\n\n"
-                    f"{plan_text}\n\n"
-                    "Review the plan and call `approve_plan` to continue execution."
-                ),
-                status=PatternOutcomeStatus.AWAITING_HUMAN,
-            )
 
         system_prompt = self.compose_system_prompt("")
         system_messages = _split_system_prompt(system_prompt)
@@ -1493,9 +1472,6 @@ class CoreCoderPattern(PatternPlugin):
         if ctx.llm_client is None:
             raise RuntimeError("CoreCoderPattern needs an llm_client")
 
-        if self._plan_mode:
-            ctx.state["__plan_mode_active__"] = True
-
         tool_schemas = self._build_tool_schemas()
 
         messages: list[dict[str, Any]] = []
@@ -1511,22 +1487,6 @@ class CoreCoderPattern(PatternPlugin):
             plan = await self._generate_plan(messages, tool_schemas)
             if plan:
                 ctx.state["__plan__"] = plan
-
-        if self._plan_mode and not ctx.state.get("__plan_approved__"):
-            plan = ctx.state.get("__plan__") or {}
-            plan_text = json.dumps(plan, ensure_ascii=False, indent=2)
-            plan_path = self._write_plan_file(plan_text)
-            ctx.state["__plan_mode_active__"] = True
-            self._writeback_context()
-            yield StreamEvent(
-                type=StreamEventType.complete,
-                text=(
-                    f"[Plan mode] Generated plan file: {plan_path}\n\n"
-                    f"{plan_text}\n\n"
-                    "Review the plan and call `approve_plan` to continue execution."
-                ),
-            )
-            return
 
         system_prompt = self.compose_system_prompt("")
         system_messages = _split_system_prompt(system_prompt)
@@ -2284,15 +2244,6 @@ class CoreCoderPattern(PatternPlugin):
             if len(spills) > 20:
                 spills.pop(0)
         return str(out_path)
-
-    def _write_plan_file(self, plan_text: str) -> str:
-        """Write the current plan to disk for human review."""
-        ctx = self.context
-        cwd = ctx.scratch.get("bash_cwd") or os.getcwd() if ctx else os.getcwd()
-        plan_path = Path(cwd) / ".agent_plan.md"
-        with contextlib.suppress(OSError, ValueError):
-            plan_path.write_text(plan_text, encoding="utf-8")
-        return str(plan_path)
 
     def _build_diagnosis_message(self, failure_count: int) -> str | None:
         """Build a structured diagnosis message after consecutive tool failures."""

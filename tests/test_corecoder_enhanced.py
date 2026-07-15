@@ -474,60 +474,6 @@ async def test_accept_edits_mode_skips_verification():
 
 
 @pytest.mark.asyncio
-async def test_plan_mode_generates_plan_file_and_stops(tmp_path: Any, monkeypatch: Any):
-    """plan_mode=True stops after generating .agent_plan.md until approved."""
-    from openagents_orchestration.tools.corecoder.approve_plan import ApprovePlanTool
-
-    monkeypatch.chdir(tmp_path)
-    llm = FakeLLMClient(
-        [
-            FakeResponse(
-                output_text='{"files_to_read": ["src/a.py"], "files_to_edit": ["src/a.py"], "steps": ["read", "edit"]}'
-            ),
-        ]
-    )
-    pattern = CoreCoderPattern(config={"plan_mode": True})
-    ctx = _make_run_context(llm, tools={"approve_plan": ApprovePlanTool()})
-    await _setup_pattern(pattern, ctx)
-
-    result = await pattern.execute()
-
-    assert "[Plan mode]" in result.output
-    assert (tmp_path / ".agent_plan.md").exists()
-    assert ctx.state.get("__plan_mode_active__") is True
-    assert "__plan_approved__" not in ctx.state
-
-
-@pytest.mark.asyncio
-async def test_plan_mode_resumes_after_approval(tmp_path: Any, monkeypatch: Any):
-    """After approve_plan, plan_mode pattern executes normally."""
-    from openagents_orchestration.tools.corecoder.approve_plan import ApprovePlanTool
-
-    monkeypatch.chdir(tmp_path)
-    llm = FakeLLMClient(
-        [
-            FakeResponse(
-                output_text='{"files_to_read": ["src/a.py"], "files_to_edit": ["src/a.py"], "steps": ["read", "edit"]}'
-            ),
-            # After approval, the agent reads and finishes.
-            FakeResponse(tool_calls=[FakeToolCall("read_file", {"file_path": "src/a.py"})]),
-            FakeResponse(output_text="Done"),
-        ]
-    )
-    pattern = CoreCoderPattern(config={"plan_mode": True})
-    ctx = _make_run_context(
-        llm, tools={"read_file": ReadTool(), "approve_plan": ApprovePlanTool()}
-    )
-    ctx.state["__plan_approved__"] = True
-    await _setup_pattern(pattern, ctx)
-
-    result = await pattern.execute()
-
-    assert result.output == "Done"
-    assert ctx.state.get("__plan_mode_active__") is True
-
-
-@pytest.mark.asyncio
 async def test_auto_mode_allows_destructive_bash():
     """permission_mode=auto does not block destructive bash commands."""
     from openagents_orchestration.tools.corecoder.bash_tool import BashTool
