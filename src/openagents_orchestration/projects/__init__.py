@@ -1,6 +1,5 @@
 """Multi-project orchestration extensions."""
 
-from openagents_orchestration.projects.events import OrchestrationEvent
 from openagents_orchestration.projects.human_channel import (
     HumanChannel,
     HumanMessage,
@@ -42,7 +41,6 @@ def __getattr__(name: str):
 
 
 __all__ = [
-    "OrchestrationEvent",
     "GlobalOrchestrator",
     "HumanChannel",
     "HumanMessage",
