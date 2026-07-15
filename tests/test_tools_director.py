@@ -72,20 +72,6 @@ class TestShowStateTool:
         with pytest.raises(PermanentToolError, match="StateBoard"):
             await tool.invoke({}, ctx)
 
-    @pytest.mark.asyncio
-    async def test_invoke_with_dlq(self):
-        board = StateBoard("test-obj")
-        board.register_agent("agent-a", "coder")
-        # Create a mailbox by sending a message
-        from openagents_orchestration.models.message import StructuredMessage
-        msg = StructuredMessage.from_text("director", "agent-a", "test")
-        await board.send_structured(msg)
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = ShowStateTool()
-        result = await tool.invoke({}, ctx)
-        assert "test-obj" in result
-
 
 # ---------------------------------------------------------------------------
 # SpawnAgentTool

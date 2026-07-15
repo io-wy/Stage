@@ -4,7 +4,7 @@ Supports:
 - Agents ask humans questions (blocking / async)
 - Humans proactively post messages to projects/teams/agents
 - Full conversation history with project/team scoping
-- Integration with StateBoard mailbox for Director visibility
+- Integration with StateBoard for Director visibility
 """
 
 from __future__ import annotations

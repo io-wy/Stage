@@ -49,8 +49,7 @@ class SpawnAgentTool(ToolPlugin):
         "- The task is too large for a single context window and needs its own workspace.\n\n"
         "# When NOT to use\n"
         "- The task is not ready (dependencies missing or blocked) — wait or unblock first.\n"
-        "- You only need a tiny edit you can verify yourself — use edit_file/apply_patch directly.\n"
-        "- You want synchronous back-and-forth — use send_message instead.\n\n"
+        "- You only need a tiny edit you can verify yourself — use edit_file/apply_patch directly.\n\n"
         "# Parameters\n"
         "- task_id (string, required for single task): the ready task to execute.\n"
         "- task_ids (list of strings, optional, for batch mode): multiple independent ready tasks. "
@@ -318,7 +317,7 @@ class SpawnAgentTool(ToolPlugin):
         """Compose the full input text for a tactical agent.
 
         Includes: task description + input_context + dependency artifacts +
-        pending messages + current working directory.
+        current working directory.
         """
         import os
 
@@ -356,21 +355,6 @@ class SpawnAgentTool(ToolPlugin):
                                 f"file not yet on disk)\n{preview}{suffix}"
                             )
                             break  # Only inject first missing artifact to save tokens
-
-        # Pending messages addressed to this task or its agent type
-        relevant = board.messages_for(task.task_id)
-        relevant += board.messages_for(agent_type)
-        if relevant:
-            parts.append("\n# Messages from other agents")
-            for msg in relevant:
-                parts.append(f"- From {msg['from']}: {msg['content'][:300]}")
-
-        # Remind agent to check messages periodically
-        parts.append(
-            "\n# Communication reminder\n"
-            "Call `send_message` when you need to talk to another agent, and check "
-            "your mailbox (via available tools) every 3-5 turns for replies."
-        )
 
         # Agent-specific hard constraints
         if agent_type == "coder":

@@ -17,10 +17,8 @@ from openagents_orchestration.core.decision_history import (
     DecisionHistory,
     DecisionRecord,
 )
-from openagents_orchestration.core.mailbox_manager import MailboxManager
 from openagents_orchestration.core.task_state_machine import TaskStateMachine
 from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
-from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.models.trace import TraceContext
 from openagents_orchestration.projects.human_channel_service import HumanChannelService
@@ -177,11 +175,7 @@ class StateBoard:
         budget: Budget | None = None,
         *,
         echo: bool = True,
-        mailbox_backend: str = "memory",
-        redis_url: str | None = None,
-        channel_policy: Any = None,
         human_channel: Any = None,
-        mailbox_manager: MailboxManager | None = None,
         human_channel_service: HumanChannelService | None = None,
         project_id: str = "",
         team_id: str = "",
@@ -201,12 +195,7 @@ class StateBoard:
         self._echo = echo
         self._hooks = hooks
 
-        # Messaging and human-channel are now composed services.
-        self._mailbox_manager = mailbox_manager or MailboxManager(
-            mailbox_backend=mailbox_backend,
-            redis_url=redis_url,
-            channel_policy=channel_policy,
-        )
+        # Human-channel is a composed service.
         self._human_channel_service = human_channel_service or HumanChannelService(
             human_channel
         )
@@ -227,21 +216,9 @@ class StateBoard:
         }
 
     @property
-    def mailbox_manager(self) -> MailboxManager:
-        """Exposed for callers that need direct mailbox access (e.g. Runner)."""
-        return self._mailbox_manager
-
-    @property
     def human_channel_service(self) -> HumanChannelService:
         """Exposed for callers that need direct human-channel access."""
         return self._human_channel_service
-
-    def on_mail_sent(self, callback: Any) -> None:
-        """Register a callback invoked on every ``send_structured``.
-
-        Delegated to ``MailboxManager``.
-        """
-        self._mailbox_manager.on_mail_sent(callback)
 
     # -- tracing helpers -----------------------------------------------------
 
@@ -261,124 +238,6 @@ class StateBoard:
     def get_trace(self, key: str) -> TraceContext | None:
         """Return the active trace context for a key, if any."""
         return self._traces.get(key)
-
-    def propagate_trace(self, msg: StructuredMessage, *, key: str | None = None) -> StructuredMessage:
-        """Inject an active trace context into a message.
-
-        Priority:
-        1. Use ``key`` if provided and a trace exists for it.
-        2. Use the sender's active trace.
-        3. Use the recipient's active trace.
-        4. Leave the message's own trace_id unchanged.
-        """
-        if msg.header.trace_id:
-            return msg
-        for candidate in (key, msg.header.sender, msg.header.recipient):
-            if candidate and candidate in self._traces:
-                self._traces[candidate].inject_into_message(msg)
-                return msg
-        return msg
-
-    # -- mailbox / routing adapters ------------------------------------------
-
-    async def validate_redis(self) -> bool:
-        """Delegated to ``MailboxManager``."""
-        return await self._mailbox_manager.validate_redis()
-
-    async def close(self) -> None:
-        """Close composed services (mailbox, human-channel)."""
-        await self._mailbox_manager.close()
-
-    def subscribe_topic(self, agent_id: str, topic: str) -> None:
-        """Delegated to ``MailboxManager``; also logs the event."""
-        self._mailbox_manager.subscribe_topic(agent_id, topic)
-        self.log_event(
-            "routing.subscribe",
-            agent_id=agent_id,
-            message=f"topic={topic}",
-            topic=topic,
-        )
-
-    def unsubscribe_topic(self, agent_id: str, topic: str) -> None:
-        """Delegated to ``MailboxManager``."""
-        self._mailbox_manager.unsubscribe_topic(agent_id, topic)
-
-    def add_route(self, pattern: str, topology: str, *, priority_boost: int = 0) -> None:
-        """Delegated to ``MailboxManager``."""
-        self._mailbox_manager.add_route(pattern, topology, priority_boost=priority_boost)
-
-    async def inspect_dlq(self) -> dict[str, dict[str, Any]]:
-        """Delegated to ``MailboxManager``."""
-        return await self._mailbox_manager.inspect_dlq()
-
-    def aggregate_mailbox_metrics(self) -> dict[str, Any]:
-        """Delegated to ``MailboxManager``."""
-        return self._mailbox_manager.aggregate_mailbox_metrics()
-
-    # -- mailbox legacy sync adapters ----------------------------------------
-
-    def send_mail(self, from_id: str, to_id: str, content: str) -> None:
-        """Delegated to ``MailboxManager`` (legacy sync API)."""
-        self._mailbox_manager.send_mail(from_id, to_id, content)
-
-    def messages_for(self, recipient: str) -> list[dict[str, Any]]:
-        """Delegated to ``MailboxManager`` (legacy sync API)."""
-        return self._mailbox_manager.messages_for(recipient)
-
-    def clear_mail(self, recipient: str | None = None) -> int:
-        """Delegated to ``MailboxManager`` (legacy sync API)."""
-        return self._mailbox_manager.clear_mail(recipient)
-
-    # -- mailbox async adapters ----------------------------------------------
-
-    async def send_structured(self, msg: StructuredMessage) -> bool:
-        """Inject trace context, then delegate delivery to ``MailboxManager``."""
-        self.propagate_trace(msg)
-        agent = self.agents.get(msg.header.sender)
-        if agent is not None and getattr(agent, "_capability_token", None) is not None:
-            token = agent._capability_token
-            if not token.can_with_verify("send_message", msg.header.recipient):
-                self.log_event(
-                    "mail.auth_failed",
-                    agent_id=msg.header.sender,
-                    message=f"Token does not authorize send_message to {msg.header.recipient}",
-                )
-                return False
-        return await self._mailbox_manager.send_structured(msg)
-
-    async def peek_mailbox(
-        self,
-        recipient: str,
-        limit: int = 5,
-        *,
-        msg_type: str | None = None,
-        sender: str | None = None,
-        priority_min: int | None = None,
-    ) -> list[StructuredMessage]:
-        """Delegated to ``MailboxManager``."""
-        return await self._mailbox_manager.peek_mailbox(
-            recipient, limit, msg_type=msg_type, sender=sender, priority_min=priority_min
-        )
-
-    async def claim_message(self, recipient: str, msg_id: str) -> StructuredMessage | None:
-        """Delegated to ``MailboxManager``."""
-        return await self._mailbox_manager.claim_message(recipient, msg_id)
-
-    async def claim_messages(self, recipient: str, batch_size: int = 10) -> list[StructuredMessage]:
-        """Delegated to ``MailboxManager``."""
-        return await self._mailbox_manager.claim_messages(recipient, batch_size=batch_size)
-
-    async def ack_message(self, recipient: str, msg_id: str) -> None:
-        """Delegated to ``MailboxManager``."""
-        await self._mailbox_manager.ack_message(recipient, msg_id)
-
-    async def nack_message(self, recipient: str, msg_id: str, reason: str = "") -> None:
-        """Delegated to ``MailboxManager``."""
-        await self._mailbox_manager.nack_message(recipient, msg_id, reason)
-
-    async def dlq_replay(self, recipient: str, msg_id: str) -> bool:
-        """Delegated to ``MailboxManager``."""
-        return await self._mailbox_manager.dlq_replay(recipient, msg_id)
 
     # -- human-channel adapters ----------------------------------------------
 
@@ -426,7 +285,6 @@ class StateBoard:
         """Delegated to ``HumanChannelService``."""
         ok = self._human_channel_service.reply_human(qid, answer)
         if ok:
-            self.send_mail("human", "director", f"[回复 {qid}] {answer}")
             self.log_event(
                 "human.replied",
                 message=f"{qid}: {answer[:100]}",
@@ -440,6 +298,11 @@ class StateBoard:
         return self._human_channel_service.get_human_questions(
             project_id=self.project_id, answered=answered
         )
+
+    async def close(self) -> None:
+        """Close composed services (human-channel)."""
+        if hasattr(self._human_channel_service, "close"):
+            await self._human_channel_service.close()
 
     # -- task management -----------------------------------------------------
 
@@ -548,13 +411,15 @@ class StateBoard:
     def register_agent(self, agent_id: str, agent_type: str) -> None:
         if agent_id not in self.agents:
             self.agents[agent_id] = AgentState(agent_id=agent_id, agent_type=agent_type)
-            self._mailbox_manager.register_agent(agent_id, agent_type)
             self.log_event("agent.registered", agent_id=agent_id, message=f"Registered {agent_type}")
 
     def set_agent_token(self, agent_id: str, token: Any) -> None:
-        """Store a CapabilityToken for an agent.  Once set, send_structured
-        verifies the token's HMAC signature before delivering messages from
-        that agent.  Agents without a token are trusted (backward compat)."""
+        """Store a CapabilityToken for an agent.
+
+        Tokens are enforced by callers that gate privileged actions
+        (e.g. spawning agents on behalf of others).  Agents without a
+        token are trusted (backward compat).
+        """
         from openagents_orchestration.projects.security import CapabilityToken
         if not isinstance(token, CapabilityToken):
             raise TypeError(f"Expected CapabilityToken, got {type(token).__name__}")
@@ -562,9 +427,8 @@ class StateBoard:
             self.agents[agent_id]._capability_token = token
 
     def unregister_agent(self, agent_id: str) -> None:
-        """Remove an agent from the board and routing table."""
+        """Remove an agent from the board."""
         self.agents.pop(agent_id, None)
-        self._mailbox_manager.unregister_agent(agent_id)
         self.log_event("agent.unregistered", agent_id=agent_id)
 
     def update_agent(self, agent_id: str, **fields: Any) -> None:
@@ -940,12 +804,7 @@ class StateBoard:
         if overdue:
             suggestions.extend(["spawn_agent", "ask_human"])
 
-        # 高优先级：pending messages
-        pending_count = self._mailbox_manager.aggregate_mailbox_metrics()["total_enqueued"]
-        if pending_count:
-            suggestions.append("show_state")
-
-        # 有 failed 任务 → 先看原因再决定
+        # 高优先级：有 failed 任务 → 先看原因再决定
         failed = [t for t in self.tasks.values() if t.status == TaskStatus.FAILED]
         if failed:
             suggestions.extend(["read_file", "replan", "spawn_agent"])
@@ -1158,8 +1017,6 @@ class StateBoard:
         *,
         echo: bool = True,
         reset_budget_clock: bool = True,
-        mailbox_backend: str = "memory",
-        redis_url: str | None = None,
     ) -> StateBoard:
         """Reconstruct a StateBoard from a full state dict."""
         from openagents_orchestration.models.task import TaskNode
@@ -1184,8 +1041,6 @@ class StateBoard:
             objective=objective,
             budget=budget,
             echo=echo,
-            mailbox_backend=mailbox_backend,
-            redis_url=redis_url,
             project_id=data.get("project_id", ""),
             team_id=data.get("team_id", ""),
             max_events=data.get("_max_events", 10_000),
@@ -1347,14 +1202,6 @@ class StateBoard:
         unanswered = self._human_channel_service.get_pending_questions(project_id=self.project_id)
         recent_human_posts = self._human_channel_service.get_messages(project_id=self.project_id)[-5:]
 
-        # Per-agent pending message counts (LLM-readable and backend-agnostic)
-        mailbox_metrics = self._mailbox_manager.aggregate_mailbox_metrics()
-        pending_messages: dict[str, int] = {
-            agent_id: snap.get("enqueued", 0) - snap.get("dequeued", 0)
-            for agent_id, snap in mailbox_metrics.get("per_agent", {}).items()
-        }
-        total_pending = max(0, mailbox_metrics["total_enqueued"] - mailbox_metrics["total_dequeued"])
-
         # Detect expired deadlines
         now = time.time()
         overdue_tasks = [
@@ -1381,8 +1228,6 @@ class StateBoard:
                 "running": [t.task_id for t in running],
                 "deadline_overdue": overdue_tasks,
                 "needs_human": self.needs_human(),
-                "pending_messages": total_pending,
-                "pending_messages_by_agent": pending_messages,
                 "unanswered_human_questions": len(unanswered),
                 "waiting_for_human": [
                     {"id": q.qid, "question": q.question[:100]}

@@ -8,8 +8,6 @@ Metrics:
 - orchestration_teams_total (gauge)        — by project_id, status
 - orchestration_agents_total (gauge)       — by project_id, team_id, status
 - orchestration_tasks_total (gauge)        — by project_id, status
-- orchestration_messages_delivered_total   — by project_id, topology
-- orchestration_messages_dlq_total         — by project_id, agent_id
 - orchestration_heartbeat_latency_ms       — by project_id, agent_id
 - orchestration_budget_tokens_used         — by project_id
 - orchestration_llm_calls_total            — by project_id, agent_id
@@ -224,16 +222,6 @@ class OrchestrationMetrics:
             "Number of tasks by project and status",
             ["project_id", "status"],
         )
-        self.messages_delivered = _Counter(
-            "orchestration_messages_delivered_total",
-            "Total messages delivered",
-            ["project_id", "topology"],
-        )
-        self.messages_dlq = _Counter(
-            "orchestration_messages_dlq_total",
-            "Total messages moved to DLQ",
-            ["project_id", "agent_id"],
-        )
         self.heartbeat_latency = _Histogram(
             "orchestration_heartbeat_latency_ms",
             "Heartbeat latency in milliseconds",
@@ -265,8 +253,6 @@ class OrchestrationMetrics:
             self.teams_total,
             self.agents_total,
             self.tasks_total,
-            self.messages_delivered,
-            self.messages_dlq,
             self.heartbeat_latency,
             self.budget_tokens_used,
             self.llm_calls,
@@ -288,8 +274,7 @@ class OrchestrationMetrics:
         type_map: dict[str, tuple[str, str]] = {}
         for metric in (
             self.projects_total, self.teams_total, self.agents_total,
-            self.tasks_total, self.messages_delivered, self.messages_dlq,
-            self.heartbeat_latency, self.budget_tokens_used,
+            self.tasks_total, self.heartbeat_latency, self.budget_tokens_used,
             self.llm_calls, self.llm_latency,
         ):
             mtype = "gauge"

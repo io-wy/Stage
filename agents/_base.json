@@ -41,7 +41,6 @@
     "list_directory",
     "think",
     "bash",
-    "ask_human",
-    "send_message"
+    "ask_human"
   ]
 }

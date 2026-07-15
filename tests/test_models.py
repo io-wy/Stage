@@ -1,22 +1,15 @@
-"""Adversarial + contract tests for the data models (task / message / delivery).
+"""Adversarial + contract tests for the data models (task / delivery / pattern).
 
-Modules under test:
+Module under test:
 - ``models/task.py`` (TaskGraph DAG validation, topological layers, serialization)
-- ``models/message.py`` (StructuredMessage round-trip, enum decoding)
-- ``models/delivery.py`` (DeliveryReport success accounting)
-
-All three lost coverage in the cull (``test_models.py`` / ``test_message.py``
-deleted). ``test_gap_*`` pin contract violations and misleading diagnostics.
+- ``models/delivery.py`` (DeliveryReport)
+- ``models/pattern.py`` (PatternOutcome, FailureDecision)
 """
 
 from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.models.message import (
-    MessageType,
-    StructuredMessage,
-)
 from openagents_orchestration.models.pattern import (
     FailureDecision,
     FailureGrade,
@@ -124,37 +117,6 @@ def test_gap_tasknode_from_dict_keyerror_on_missing_required_field():
     default — so a partial/migrated record raises a raw KeyError."""
     with pytest.raises(KeyError):
         TaskNode.from_dict({"task_id": "a"})  # missing description, agent_type
-
-
-# ── StructuredMessage round-trip + decoding GAPs ──────────────────────────────
-
-
-def test_message_roundtrip_preserves_fields():
-    m = StructuredMessage.signal("a", "b", "review_ready", "t1", trace_id="tr1")
-    r = StructuredMessage.from_dict(m.to_dict())
-    assert r.msg_id == m.msg_id
-    assert r.msg_type == MessageType.SIGNAL
-    assert r.priority == m.priority
-    assert r.payload == m.payload
-    # Note: trace_id is only reachable via .header (StructuredMessage surfaces
-    # msg_id/sender/recipient/msg_type/priority as shortcuts, but not trace_id).
-    assert r.header.trace_id == "tr1"
-
-
-def test_gap_message_from_dict_keyerror_on_missing_created_at():
-    """``from_dict`` reads ``data['created_at']`` directly (not ``.get``), so any
-    dict not produced by ``to_dict`` (hand-built, or an older schema) raises a
-    raw KeyError — inconsistent with the ``.get`` defaults used elsewhere."""
-    with pytest.raises(KeyError):
-        StructuredMessage.from_dict({"msg_id": "x", "type": "signal"})
-
-
-def test_gap_message_from_dict_valueerror_on_invalid_enum():
-    base = StructuredMessage.from_text("a", "b", "hi").to_dict()
-    with pytest.raises(ValueError):
-        StructuredMessage.from_dict({**base, "type": "not-a-type"})
-    with pytest.raises(ValueError):
-        StructuredMessage.from_dict({**base, "priority": 99})
 
 
 # ── DeliveryReport success accounting removed ─────────────────────────────────

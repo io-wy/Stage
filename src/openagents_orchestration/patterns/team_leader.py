@@ -18,7 +18,7 @@ class TeamLeaderPattern(DirectorPattern):
 
     Differences from Global Director:
     - max_steps defaults to 30 (vs 100)
-    - Cannot call ``ask_human``; escalations go to GlobalDirector via send_message
+    - Cannot call ``ask_human``; escalations go to GlobalDirector via finalize/report
     - show_state returns the *team* snapshot, not the global one
 
     Prompt 同 DirectorPattern：声明式 ``prompts`` 优先（director PRINCIPLES +

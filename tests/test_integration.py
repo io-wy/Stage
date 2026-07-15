@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openagents_orchestration.core.state_board import Budget, StateBoard
-from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.models.pattern import PatternOutcome, PatternOutcomeStatus
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.tools.director.finalize import FinalizeTool
@@ -108,26 +107,6 @@ class TestSpawnAgentFullChain:
         # Dependency artifact should be included
         assert "api.yml" in input_text
         assert "Upstream artifacts" in input_text
-
-
-class TestMessageFlow:
-    """Test send_message -> mailbox -> peek full cycle."""
-
-    @pytest.mark.asyncio
-    async def test_message_in_spawn_input(self):
-        """Pending messages should be injected into spawned agent's input."""
-        board = StateBoard("obj")
-        board.add_tasks(TaskGraph(
-            objective="obj",
-            tasks=[TaskNode("t1", "fix bug", "coder")],
-        ))
-        board.send_mail("reviewer", "coder", "The bug is on line 42")
-
-        task = board.get_task("t1")
-        input_text = SpawnAgentTool._build_input(task, board, agent_type="coder")
-
-        assert "Messages from other agents" in input_text
-        assert "line 42" in input_text
 
 
 class TestReplanFlow:
@@ -256,100 +235,3 @@ class TestBudgetTracking:
 
         board.add_tokens(100)
 
-
-class TestCommunicationEndToEnd:
-    """End-to-end communication: send → route → claim → ack."""
-
-    async def test_send_structured_routed_claimed_acked(self):
-        """Full lifecycle: send_structured → claim → ack → no redelivery."""
-        board = StateBoard("e2e", budget=Budget())
-        board.register_agent("agent-a", "coder")
-        board.register_agent("agent-b", "reviewer")
-        board.register_agent("agent-c", "tester")
-
-        # Send p2p
-        msg = StructuredMessage.from_text("director", "agent-a", "task assignment")
-        ok = await board.send_structured(msg)
-        assert ok is True
-
-        # Claim
-        claimed = await board.claim_messages("agent-a", batch_size=5)
-        assert len(claimed) == 1
-        assert claimed[0].text == "task assignment"
-
-        # Ack
-        await board.ack_message("agent-a", claimed[0].msg_id)
-
-        # No redelivery
-        claimed2 = await board.claim_messages("agent-a")
-        assert len(claimed2) == 0
-
-    async def test_send_broadcast_all_agents_receive(self):
-        """Broadcast delivers to all registered agents."""
-        board = StateBoard("e2e", budget=Budget())
-        for aid in ("a", "b", "c", "d", "e"):
-            board.register_agent(aid, "coder")
-
-        msg = StructuredMessage.event("director", "deploy", data="v1.0")
-        ok = await board.send_structured(msg)
-        assert ok is True
-
-        for aid in ("a", "b", "c", "d", "e"):
-            claimed = await board.claim_messages(aid)
-            assert len(claimed) == 1
-
-    async def test_send_pubsub_only_subscribers_receive(self):
-        """Pubsub delivers only to topic subscribers."""
-        board = StateBoard("e2e", budget=Budget())
-        board.register_agent("sub-1", "coder")
-        board.register_agent("sub-2", "reviewer")
-        board.register_agent("no-sub", "coder")
-        board.subscribe_topic("sub-1", "alerts")
-        board.subscribe_topic("sub-2", "alerts")
-
-        msg = StructuredMessage.from_text("director", "topic:alerts", "fire drill")
-        ok = await board.send_structured(msg)
-        assert ok is True
-
-        assert len(await board.claim_messages("sub-1")) == 1
-        assert len(await board.claim_messages("sub-2")) == 1
-        assert len(await board.claim_messages("no-sub")) == 0
-
-    async def test_collaboration_signal_flow(self):
-        """Coder sends REVIEW_READY signal, it lands as typed SIGNAL message."""
-        board = StateBoard("collab", budget=Budget())
-        board.register_agent("coder-api", "coder")
-        board.register_agent("reviewer-api", "reviewer")
-
-        signal = StructuredMessage.signal(
-            "coder-api", "reviewer-api", "review_ready", "api",
-            tests_passed=5,
-        )
-        await board.send_structured(signal)
-
-        claimed = await board.claim_messages("reviewer-api")
-        assert len(claimed) == 1
-        assert claimed[0].msg_type.value == "signal"
-        assert claimed[0].payload["signal"] == "review_ready"
-        assert claimed[0].payload["task_id"] == "api"
-        assert claimed[0].payload["tests_passed"] == 5
-
-    async def test_peek_filtered_view(self):
-        """Peek with filters returns only matching messages."""
-        board = StateBoard("filter", budget=Budget())
-        board.register_agent("agent-1", "coder")
-
-        await board.send_structured(
-            StructuredMessage.signal("director", "agent-1", "review_ready", "t1")
-        )
-        await board.send_structured(
-            StructuredMessage.command("director", "agent-1", "implement")
-        )
-
-        signals = await board.peek_mailbox("agent-1", limit=5, msg_type="signal")
-        assert len(signals) == 1
-        assert signals[0].msg_type.value == "signal"
-
-        commands = await board.peek_mailbox("agent-1", limit=5, msg_type="command")
-        assert len(commands) == 1
-        assert not board.has_actionable()

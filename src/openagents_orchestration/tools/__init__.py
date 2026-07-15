@@ -3,7 +3,6 @@
 from openagents_orchestration.tools.director.ask_human import AskHumanTool
 from openagents_orchestration.tools.director.finalize import FinalizeTool
 from openagents_orchestration.tools.director.replan import ReplanTool
-from openagents_orchestration.tools.director.send_message import SendMessageTool
 from openagents_orchestration.tools.director.show_state import ShowStateTool
 from openagents_orchestration.tools.director.spawn_agent import SpawnAgentTool
 from openagents_orchestration.tools.github import (
@@ -36,7 +35,6 @@ __all__ = [
     "PredictBudgetTool",
     "ReplanTool",
     "SendAlertTool",
-    "SendMessageTool",
     "VerifyAlertEffectivenessTool",
     "ShowStateTool",
     "SpawnAgentTool",

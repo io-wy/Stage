@@ -121,12 +121,16 @@ class GlobalOrchestrator:
             if project.state_board is not None:
                 project.state_board.human_channel_service.channel = self._human_channel
 
-            report = await self._runner.run(
-                objective=objective,
-                budget=budget,
-                work_dir=work_dir,
-                **runner_kwargs,
-            )
+            try:
+                report = await self._runner.run(
+                    objective=objective,
+                    budget=budget,
+                    work_dir=work_dir,
+                    **runner_kwargs,
+                )
+            finally:
+                if hasattr(self._runner, "close"):
+                    await self._runner.close()
 
         # Collect metrics from the runner's state board
         if self._runner is not None and self._runner.state_board is not None:

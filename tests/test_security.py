@@ -136,10 +136,10 @@ def test_gap_can_with_verify_rejects_completely_forged_token():
 
 def test_can_with_verify_enforces_action_and_scope():
     t = CapabilityToken.issue(
-        "director", "bob", ["send_message"], ["reviewer-1"], secret=_SECRET
+        "director", "bob", ["spawn_agent"], ["reviewer-1"], secret=_SECRET
     )
-    assert t.can_with_verify("send_message", "reviewer-1", secret=_SECRET) is True
-    assert t.can_with_verify("send_message", "monitor-1", secret=_SECRET) is False
+    assert t.can_with_verify("spawn_agent", "reviewer-1", secret=_SECRET) is True
+    assert t.can_with_verify("spawn_agent", "monitor-1", secret=_SECRET) is False
     assert t.can_with_verify("delete", "reviewer-1", secret=_SECRET) is False
 
 

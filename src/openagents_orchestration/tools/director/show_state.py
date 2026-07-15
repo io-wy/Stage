@@ -20,8 +20,7 @@ class ShowStateTool(ToolPlugin):
         "- objective, budget (tokens/steps/time used and remaining), and progress summary.\n"
         "- tasks: every task with id, description, agent_type, status, dependencies, artifacts, errors, priority.\n"
         "- agents: who is running, idle, failed, or stuck, plus resource usage.\n"
-        "- signals: ready_to_run, running, blocked, deadline_overdue, needs_human, pending_messages, unanswered_human_questions.\n"
-        "- dlq_summary: dead-letter messages that indicate stuck or failed deliveries.\n"
+        "- signals: ready_to_run, running, blocked, deadline_overdue, needs_human, unanswered_human_questions.\n"
         "- decision_feedback and strategy_signals: historical success rate and automated warnings.\n"
         "- suggested_next_tools: a short list of tools likely to be useful right now.\n"
         "- fallback suggestions for failed tasks.\n\n"
@@ -74,11 +73,6 @@ class ShowStateTool(ToolPlugin):
 
             payload = snapshot[section] if section and section in snapshot else snapshot
 
-            # Append DLQ summary so Director can spot stuck messages
-            dlq_summary = await board.inspect_dlq()
-            if dlq_summary:
-                payload["dlq_summary"] = dlq_summary
-
             # Append suggested tools based on current state
             suggested_tools = board.suggest_tools()
             if suggested_tools:
@@ -101,7 +95,7 @@ class ShowStateTool(ToolPlugin):
         except Exception as exc:
             # Surface internal errors to the Director instead of failing silently.
             # This prevents the Director from getting stuck on transient snapshot
-            # or mailbox inspection issues.
+            # issues.
             import traceback
             error_text = f"show_state internal error: {exc}\n{traceback.format_exc()}"
             return error_text

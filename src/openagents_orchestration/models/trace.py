@@ -75,27 +75,3 @@ class TraceContext:
             started_at=data.get("started_at", 0.0),
             finished_at=data.get("finished_at"),
         )
-
-    def inject_into_message(self, msg: Any) -> None:
-        """Set the message's trace fields by replacing the frozen header."""
-        from openagents_orchestration.models.message import MessageHeader
-
-        if not isinstance(msg.header, MessageHeader):
-            return
-        if msg.header.trace_id:
-            return
-        msg.header = MessageHeader(
-            msg_id=msg.header.msg_id,
-            parent_id=msg.header.parent_id,
-            trace_id=self.trace_id,
-            causality=msg.header.causality,
-            idempotency_key=msg.header.idempotency_key,
-            sender=msg.header.sender,
-            recipient=msg.header.recipient,
-            msg_type=msg.header.msg_type,
-            priority=msg.header.priority,
-            created_at=msg.header.created_at,
-            ttl_s=msg.header.ttl_s,
-            delivery_count=msg.header.delivery_count,
-            parent_span_id=self.span_id,
-        )

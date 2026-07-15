@@ -42,8 +42,7 @@
     "+edit_file",
     "+apply_patch",
     "+todo_read",
-    "+todo_write",
-    "-send_message"
+    "+todo_write"
   ],
   "runtime": {
     "max_steps": 30,

@@ -13,7 +13,6 @@ from enum import StrEnum
 from typing import Any
 
 from openagents_orchestration.core.sub_state_board import SubStateBoard
-from openagents_orchestration.models.message import StructuredMessage
 from openagents_orchestration.transport.channel_policy import (
     DEFAULT_TEAM_POLICY,
     ChannelPolicy,
@@ -134,31 +133,6 @@ class Team:
         if status is not None:
             result = [w for w in result if getattr(getattr(w, "state", w), "status", "") == status]
         return result
-
-    # -- messaging -------------------------------------------------------------
-
-    def can_communicate(self, sender: str, recipient: str) -> bool:
-        """Check channel policy for intra-team messaging."""
-        return self.channel_policy.allows(sender, recipient)
-
-    async def route_message(self, msg: StructuredMessage) -> bool:
-        """Route a message to a team worker if allowed by policy.
-
-        Returns True if the message was accepted (policy allows it).
-        """
-        sender = msg.header.sender
-        recipient = msg.header.recipient
-
-        if not self.can_communicate(sender, recipient):
-            self.sub_state_board.log_event(
-                "team.policy_blocked",
-                message=f"Blocked {sender} -> {recipient}",
-            )
-            return False
-
-        # Also store in SubStateBoard mailbox for pull-based retrieval
-        await self.sub_state_board.send_structured(msg)
-        return True
 
     # -- snapshot --------------------------------------------------------------
 

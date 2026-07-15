@@ -1,4 +1,4 @@
-"""Tests for monitor tools: send_alert, inspect_state, diagnose_agent, check_dlq,
+"""Tests for monitor tools: send_alert, inspect_state, diagnose_agent,
 analyze_event_pattern, predict_budget, verify_alert_effectiveness."""
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.tools.monitor.analyze_event_pattern import (
     AnalyzeEventPatternTool,
 )
-from openagents_orchestration.tools.monitor.check_dlq import CheckDLQTool
 from openagents_orchestration.tools.monitor.diagnose_agent import DiagnoseAgentTool
 from openagents_orchestration.tools.monitor.inspect_state import InspectStateTool
 from openagents_orchestration.tools.monitor.predict_budget import PredictBudgetTool
@@ -60,7 +59,7 @@ class TestSendAlertTool:
             "recommended_action": "replan",
         }, ctx)
 
-        assert "告警已发送" in result or "sent" in result.lower()
+        assert "告警已记录" in result or "recorded" in result.lower()
         assert "warning" in result.lower() or "warning" in result
 
     @pytest.mark.asyncio
@@ -75,7 +74,7 @@ class TestSendAlertTool:
             "message": "Agent is stuck in a loop",
             "data": {"agent_id": "coder-1"},
         }, ctx)
-        assert "告警已发送" in result1 or "sent" in result1.lower()
+        assert "告警已记录" in result1 or "recorded" in result1.lower()
         # Same alert within dedup window should be suppressed
         result2 = await tool.invoke({
             "severity": "warning",
@@ -261,54 +260,6 @@ class TestDiagnoseAgentTool:
         tool = DiagnoseAgentTool()
         with pytest.raises(PermanentToolError, match="StateBoard"):
             await tool.invoke({"agent_id": "coder-1"}, ctx)
-
-
-# ---------------------------------------------------------------------------
-# CheckDLQTool
-# ---------------------------------------------------------------------------
-
-class TestCheckDLQTool:
-    def test_schema_has_limit(self):
-        tool = CheckDLQTool()
-        schema = tool.schema()
-        assert "limit" in schema["properties"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_empty_dlq(self):
-        board = StateBoard("obj")
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-
-        tool = CheckDLQTool()
-        result = await tool.invoke({}, ctx)
-
-        assert result["count"] == 0
-        assert "No dead-letter" in result["message"]
-
-    @pytest.mark.asyncio
-    async def test_invoke_with_dlq(self):
-        board = StateBoard("obj")
-        board.register_agent("agent-1", "coder")
-        # Create a mailbox and nack a message to put it in DLQ
-        from openagents_orchestration.models.message import StructuredMessage
-        msg = StructuredMessage.from_text("director", "agent-1", "test")
-        await board.send_structured(msg)
-        # Nack the message to move it to DLQ
-        await board.nack_message("agent-1", msg.msg_id, reason="test_failure")
-
-        ctx = MockContext(deps=MockContext(state_board=board), agent_id="director")
-        tool = CheckDLQTool()
-        result = await tool.invoke({}, ctx)
-
-        # DLQ may or may not have entries depending on mailbox implementation
-        assert "count" in result
-        assert "agents" in result
-
-    @pytest.mark.asyncio
-    async def test_invoke_no_board_raises(self):
-        ctx = MockContext(deps=MockContext(), agent_id="director")
-        tool = CheckDLQTool()
-        with pytest.raises(PermanentToolError, match="StateBoard"):
-            await tool.invoke({}, ctx)
 
 
 # ---------------------------------------------------------------------------

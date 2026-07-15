@@ -10,7 +10,6 @@ __all__ = [
     "HumanChannel",
     "MonitorAgent",
     "ChannelPolicy",
-    "OrchestrationEvent",
     "CapabilityToken",
     "AgentIdentity",
     "AuditLog",
@@ -48,9 +47,6 @@ def __getattr__(name: str):
     if name == "ChannelPolicy":
         from openagents_orchestration.transport.channel_policy import ChannelPolicy
         return ChannelPolicy
-    if name == "OrchestrationEvent":
-        from openagents_orchestration.projects.events import OrchestrationEvent
-        return OrchestrationEvent
     if name == "CapabilityToken":
         from openagents_orchestration.projects.security import CapabilityToken
         return CapabilityToken

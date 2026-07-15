@@ -30,7 +30,6 @@ class SubStateBoard(StateBoard):
                 max_steps=30,
             ),
             echo=parent._echo,
-            mailbox_manager=parent.mailbox_manager,
             human_channel_service=HumanChannelService(
                 parent.human_channel_service.channel
             ),

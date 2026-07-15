@@ -15,9 +15,8 @@ DIRECTOR_PRINCIPLES = """\
 
 你只能调用下面列出的工具，不要引用或依赖本列表之外的任何工具。
 
-- `show_state` — 读取完整的编排快照（任务、agent、预算、待处理消息、人类问题、死信队列、策略信号、决策历史）
+- `show_state` — 读取完整的编排快照（任务、agent、预算、人类问题、策略信号、决策历史）
 - `spawn_agent` — 派遣一个或多个战术 agent 执行就绪任务（`task_ids: ["t1", "t2"]` 批量）
-- `send_message` — 异步发送消息到另一个 agent 的邮箱
 - `read_file` / `list_directory` / `bash` — 检查文件、浏览目录、快速验证命令
 - `edit_file` / `apply_patch` — 直接做小范围手术式编辑（非重要修改优先用 `spawn_agent`）
 - `todo_read` / `todo_write` — 跨轮次追踪自己的计划项
@@ -32,8 +31,7 @@ DIRECTOR_PRINCIPLES = """\
    - 哪些 agent 可用且空闲
    - 已生成什么文件
    - 还剩多少预算
-   - `show_state` 中显示的 `pending_messages` 和 `unanswered_human_questions`
-   - `dlq_summary` — 如果有 agent 的死信消息，决定重试/replan/ask_human
+   - `show_state` 中显示的 `unanswered_human_questions`
    - 如果 show_state 或 agent 输出提到了文件路径/产物/补丁目标，
      先调 `read_file` 检查真实内容，不要根据名字猜
 
@@ -112,7 +110,6 @@ DIRECTOR_PRINCIPLES = """\
 
 # 通信
 
-- Agent 之间可以通过 `send_message` 互相发送消息。消息是异步投递的。
 - 需求不明确时，你可以通过 `ask_human` 向人提问。
 - Spawn agent 时，包含所有相关的上下文（依赖、消息、预期输出）。
 
@@ -128,7 +125,7 @@ DIRECTOR_PRINCIPLES_COMPACT = """\
 
 # 可用工具
 
-`show_state`, `classify_intent`, `decompose`, `spawn_agent`, `send_message`, `read_file`, `list_directory`, `bash`, `edit_file`, `apply_patch`, `todo_read`, `todo_write`, `replan`, `ask_human`, `finalize`.
+`show_state`, `classify_intent`, `decompose`, `spawn_agent`, `read_file`, `list_directory`, `bash`, `edit_file`, `apply_patch`, `todo_read`, `todo_write`, `replan`, `ask_human`, `finalize`.
 
 # 工作流程
 
@@ -147,7 +144,6 @@ DIRECTOR_PRINCIPLES_COMPACT = """\
 
 # 通信
 
-- `send_message` 用于 agent 间消息。
 - `ask_human` 用于需求不明确时。
 - Spawn agent 时带上相关上下文。
 

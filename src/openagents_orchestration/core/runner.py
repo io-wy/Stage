@@ -3,7 +3,6 @@
 Extends CoreCoderLocalRunner patterns to support:
 - Multiple agent types (director + tactical agents)
 - StateBoard for global coordination
-- Agent-to-agent messaging
 - Async event bus for observability
 """
 
@@ -365,7 +364,6 @@ class OrchestratorRunner:
             budget=project_budget,
             work_dir=self._current_work_dir,
         )
-        await project.state_board.validate_redis()
         project.start()
 
     async def _wire_run_deps(self) -> None:
@@ -998,7 +996,7 @@ class OrchestratorRunner:
             memory = getattr(bundle.plugins,"memory", None)
             if memory is not None and hasattr(memory, "close"):
                 await memory.close()
-        # Close composed services in StateBoard (Redis connections, etc.)
+        # Close composed services in StateBoard.
         if self._state_board is not None:
             await self._state_board.close()
         await self._event_bus.close()

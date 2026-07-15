@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 
 class CollaborationSignal(StrEnum):
@@ -48,28 +47,6 @@ def parse_collaboration_message(content: str, *, default_task_id: str = "") -> C
         task_id=(explicit_task_id or default_task_id).strip(),
         body=body,
         tests_passed=int(next(g for g in passed_match.groups() if g)) if passed_match else 0,
-    )
-
-
-def collaboration_message_from_structured(msg: Any) -> CollaborationMessage | None:
-    """Convert a StructuredMessage (type=SIGNAL) into a CollaborationMessage."""
-    from openagents_orchestration.models.message import MessageType
-
-    if getattr(msg, "msg_type", None) != MessageType.SIGNAL:
-        return None
-
-    payload = getattr(msg, "payload", {}) or {}
-    signal_str = payload.get("signal", "")
-    try:
-        signal = CollaborationSignal(signal_str)
-    except ValueError:
-        return None
-
-    return CollaborationMessage(
-        signal=signal,
-        task_id=payload.get("task_id", ""),
-        body=msg.text or "",
-        tests_passed=payload.get("tests_passed", 0),
     )
 
 

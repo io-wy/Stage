@@ -8,11 +8,7 @@ from typing import Any
 from openagents.errors.exceptions import PermanentToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-from openagents_orchestration.models.message import (
-    MessageHeader,
-    MessageType,
-    StructuredMessage,
-)
+# Alerts are recorded as StateBoard events; there is no separate message transport.
 
 
 class SendAlertTool(ToolPlugin):
@@ -107,28 +103,6 @@ class SendAlertTool(ToolPlugin):
         # Generate alert ID
         alert_id = f"ALERT-{fingerprint[:20]}-{int(now)}"
 
-        # Send via structured mailbox
-        alert_text = f"[{severity.upper()}] {message}"
-        if recommended_action:
-            alert_text += f"\n[建议措施] {recommended_action}"
-        alert_obj = StructuredMessage(
-            header=MessageHeader(
-                sender=from_agent,
-                recipient=target,
-                msg_type=MessageType.NOTIFICATION,
-            ),
-            payload={
-                "alert_id": alert_id,
-                "severity": severity,
-                "target": target,
-                "data": data,
-                "recommended_action": recommended_action,
-                "fingerprint": fingerprint,
-            },
-            text=alert_text,
-        )
-        await board.send_structured(alert_obj)
-
         # Log to StateBoard with full context for verification
         board.log_event(
             "observer.alert",
@@ -145,7 +119,7 @@ class SendAlertTool(ToolPlugin):
         )
 
         return (
-            f"告警已发送给 {target} (级别: {severity}, "
+            f"告警已记录 (target: {target}, 级别: {severity}, "
             f"alert_id: {alert_id}, "
             f"历史次数: {self._alert_history[fingerprint]['count']})"
         )

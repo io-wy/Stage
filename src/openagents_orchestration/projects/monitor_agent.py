@@ -2,13 +2,13 @@
 
 Unlike the passive HealthMonitor (which scans StateBoard periodically),
 MonitorAgent actively sends heartbeat requests to agents and
-detects timeouts.  It also watches for DLQ growth and budget exhaustion.
+detects timeouts.  It also watches for budget exhaustion.
 
 Design:
 - Runs as a background asyncio task inside GlobalOrchestrator
 - Sends heartbeat SIGNAL messages to agents
 - Expects heartbeat replies within HEARTBEAT_TIMEOUT_S
-- On timeout: logs event, notifies GlobalDirector, optionally stops agent
+- On timeout: logs event, notifies GlobalOrchestrator, optionally stops agent
 """
 
 from __future__ import annotations
@@ -141,10 +141,14 @@ class MonitorAgent:
                 )
 
     async def _send_to_agent(self, agent_id: str, message: dict[str, Any]) -> None:
-        """Send a message to an agent via the orchestrator's state board."""
+        """Record a heartbeat attempt in the StateBoard event log."""
         board = self._get_state_board()
-        if board is not None and hasattr(board, "send_mail"):
-            board.send_mail("monitor", agent_id, str(message))
+        if board is not None and hasattr(board, "log_event"):
+            board.log_event(
+                "agent.heartbeat_sent",
+                agent_id=agent_id,
+                message=str(message)[:200],
+            )
 
     async def _await_reply(
         self,
@@ -173,16 +177,6 @@ class MonitorAgent:
         if self._orchestrator is not None:
             with contextlib.suppress(Exception):
                 await self._orchestrator.on_agent_timeout(agent_id)
-
-    # -- DLQ monitoring --------------------------------------------------------
-
-    async def check_dlq(self) -> dict[str, dict[str, Any]]:
-        """Check dead-letter queues across all projects."""
-        result: dict[str, dict[str, Any]] = {}
-        board = self._get_state_board()
-        if board is not None and hasattr(board, "inspect_dlq"):
-            result = await board.inspect_dlq()
-        return result
 
     # -- metrics ---------------------------------------------------------------
 

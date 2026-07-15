@@ -57,7 +57,6 @@ TOOL_REGISTRY: dict[str, str] = {
     "replan": "openagents_orchestration.tools.director.replan.ReplanTool",
     "finalize": "openagents_orchestration.tools.director.finalize.FinalizeTool",
     "ask_human": "openagents_orchestration.tools.director.ask_human.AskHumanTool",
-    "send_message": "openagents_orchestration.tools.director.send_message.SendMessageTool",
     "classify_intent": "openagents_orchestration.tools.director.classify_intent.ClassifyIntentTool",
     "decompose": "openagents_orchestration.tools.director.decompose.DecomposeTool",
     # github 工具
