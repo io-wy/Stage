@@ -1,0 +1,30 @@
+{
+  "skill_name": "case-handling-baseline",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Use skills/case-handling-baseline/SKILL.md. Case: A SAST member filled the NAS Feishu registration form but did not receive the account notification. Using /Users/io/Downloads/wiki/SAST 设施指南/docx/NAS__XR4xdjaE.md only, produce the required case_result JSON. Do not reveal any passwords or credentials.",
+      "expected_output": "A JSON result that closes the knowledge case, explains that Feishu notification may have a bug and the user should retry after about 2 minutes, cites the NAS source file, and does not reveal credentials.",
+      "files": [
+        "/Users/io/Downloads/wiki/SAST 设施指南/docx/NAS__XR4xdjaE.md"
+      ]
+    },
+    {
+      "id": 1,
+      "prompt": "Use skills/case-handling-baseline/SKILL.md. Case: A SAST member asks how to access the NAS from campus network and IPv6/public network. Using /Users/io/Downloads/wiki/SAST 设施指南/docx/NAS__XR4xdjaE.md only, produce the required case_result JSON. Do not reveal any passwords or credentials.",
+      "expected_output": "A JSON result that closes the knowledge case, provides the documented NAS web access options and protocol access options, cites the NAS source file, and redacts/omits any credential-like content.",
+      "files": [
+        "/Users/io/Downloads/wiki/SAST 设施指南/docx/NAS__XR4xdjaE.md"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Use skills/case-handling-baseline/SKILL.md. Case: A SAST member wants to upload a movie resource to Jellyfin and asks what naming/category rules they should follow. Using /Users/io/Downloads/wiki/SAST 设施指南/docx/Jellyfin__LAeEd7Bj.md only, produce the required case_result JSON. Do not reveal any passwords or credentials.",
+      "expected_output": "A JSON result that closes the knowledge case, summarizes the documented Anime/Movie/TV category and resource naming rules, cites the Jellyfin source file, and does not reveal any credentials from the file.",
+      "files": [
+        "/Users/io/Downloads/wiki/SAST 设施指南/docx/Jellyfin__LAeEd7Bj.md"
+      ]
+    }
+  ]
+}
+
