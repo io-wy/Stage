@@ -1,0 +1,218 @@
+pack_id: sast_service_desk
+version: 0.2.0
+rules:
+  - id: nas_public_access_knowledge
+    keywords:
+      - complete safe ways
+      - safe ways to access nas
+      - protocol clients
+      - old shared account
+    profile:
+      workflow_type: service_case
+      business_process: identity_and_access_support
+      risk_class: normal
+      backend_plan: ["rag_retrieval"]
+      evidence_requirements: ["source", "access_path"]
+      closure_policy: standard
+      human_handoff_policy: none
+      verifier_profile: service_desk
+      ambiguity_notes: ["documentation-oriented access request"]
+
+  - id: nas_identity_access
+    keywords:
+      - nas
+      - link账号
+      - 统一身份认证
+    profile:
+      workflow_type: service_case
+      business_process: identity_and_access_support
+      risk_class: privileged_action
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "access_path", "recovery_path"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_if_missing_identity_or_state
+      verifier_profile: service_desk
+      ambiguity_notes: ["identity or recovery state may be missing"]
+
+  - id: media_service_operations
+    keywords:
+      - playback
+      - playback broken
+    profile:
+      workflow_type: service_case
+      business_process: media_service_operations
+      risk_class: normal
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "reproduction"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_reproduction_fields
+      verifier_profile: service_desk
+      ambiguity_notes: ["playback defects require client and reproduction context"]
+
+  - id: media_upload_operations
+    keywords:
+      - jellyfin
+      - media repository
+      - movie upload
+    profile:
+      workflow_type: service_case
+      business_process: media_service_operations
+      risk_class: normal
+      backend_plan: ["rag_retrieval"]
+      evidence_requirements: ["source", "naming_rule", "upload_rule"]
+      closure_policy: standard
+      human_handoff_policy: ask_if_destination_is_ambiguous
+      verifier_profile: service_desk
+      ambiguity_notes: ["destination between media and jellyfin may be ambiguous"]
+
+  - id: communications_platform_incident
+    keywords:
+      - submail
+      - verification sms
+      - sms notification
+    profile:
+      workflow_type: service_case
+      business_process: communications_platform_incident
+      risk_class: normal
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "service_state"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_alternate_channel_or_owner
+      verifier_profile: service_desk
+      ambiguity_notes: ["service availability may need live confirmation"]
+
+  - id: equipment_use_approval
+    keywords:
+      - 3d printer
+      - bambu
+      - overnight print
+    profile:
+      workflow_type: service_case
+      business_process: equipment_use_approval
+      risk_class: normal
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "approval_owner", "safety_constraints"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_owner_and_safety_constraints
+      verifier_profile: service_desk
+      ambiguity_notes: ["approval may need policy not present in source"]
+      permission_required_fields: ["owner", "scope", "safety_constraints"]
+      permission_action_markers: ["approve equipment use", "run overnight"]
+
+  - id: shared_facility_support
+    keywords:
+      - printer
+      - 卡纸
+      - maintenance
+    profile:
+      workflow_type: service_case
+      business_process: shared_facility_support
+      risk_class: normal
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "safe_steps"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_maintainer_if_internal_access_needed
+      verifier_profile: service_desk
+      ambiguity_notes: ["physical maintenance may require human operator"]
+
+  - id: internal_network_access_support
+    keywords:
+      - tailscale
+      - vpn
+      - proxy boundary
+      - internal services
+      - 内网
+    profile:
+      workflow_type: service_case
+      business_process: internal_network_access_support
+      risk_class: sensitive
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "network_context"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_os_and_network_context
+      verifier_profile: service_desk
+      ambiguity_notes: ["network route depends on location and device context"]
+
+  - id: infrastructure_power_incident
+    keywords:
+      - ups
+      - power alarm
+      - nut alarm
+    profile:
+      workflow_type: service_case
+      business_process: infrastructure_power_incident
+      risk_class: sensitive
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "live_status"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_authorized_operator_and_status
+      verifier_profile: service_desk
+      ambiguity_notes: ["incident resolution depends on live status"]
+
+  - id: developer_service_defect_triage
+    keywords:
+      - sastoj
+      - database defect
+      - db error
+      - sql error
+    profile:
+      workflow_type: service_case
+      business_process: developer_service_defect_triage
+      risk_class: sensitive
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "logs", "reproduction"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_logs_and_reproduction
+      verifier_profile: service_desk
+      ambiguity_notes: ["defect cannot close without reproduction evidence"]
+
+  - id: collaboration_platform_change_approval
+    keywords:
+      - overleaf
+    profile:
+      workflow_type: service_case
+      business_process: collaboration_platform_change_approval
+      risk_class: privileged_action
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "change_scope", "approval_owner"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_change_control_fields
+      verifier_profile: service_desk
+      ambiguity_notes: ["change control details may be missing"]
+      permission_required_fields: ["approver", "target", "scope", "change_ticket"]
+      permission_action_markers: ["apply overleaf change", "overleaf admin"]
+
+  - id: developer_platform_access_approval
+    keywords:
+      - gitlab
+      - gitlab project
+      - gitlab permission
+      - gitlab admin
+    profile:
+      workflow_type: service_case
+      business_process: developer_platform_access_approval
+      risk_class: privileged_action
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "approval_owner", "scope"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_sponsor_and_scope
+      verifier_profile: service_desk
+      ambiguity_notes: ["approval metadata may be missing"]
+      permission_required_fields: ["approver", "target", "scope", "ticket_id"]
+      permission_action_markers: ["gitlab admin", "add maintainer", "grant maintainer"]
+
+  - id: member_onboarding_routing
+    keywords:
+      - 软件研发部
+      - web group
+      - algorithm direction
+    profile:
+      workflow_type: service_case
+      business_process: member_onboarding_routing
+      risk_class: normal
+      backend_plan: ["rag_retrieval"]
+      evidence_requirements: ["source", "routing_choice"]
+      closure_policy: standard
+      human_handoff_policy: ask_if_user_goal_is_ambiguous
+      verifier_profile: knowledge
+      ambiguity_notes: ["routing depends on public intro docs"]
