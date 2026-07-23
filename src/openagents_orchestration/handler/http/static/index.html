@@ -14,15 +14,7 @@
         <div class="subtitle">服务治理运行台</div>
       </div>
       <div class="top-actions">
-        <nav class="tabs" aria-label="页面导航">
-          <button class="tab active" data-view="run" type="button">运行台</button>
-          <button class="tab" data-view="pipeline" type="button">流程</button>
-          <button class="tab" data-view="evidence" type="button">证据</button>
-          <button class="tab" data-view="audit" type="button">审计</button>
-          <button class="tab" data-view="history" type="button">历史</button>
-          <button class="tab" data-view="feedback" type="button">反馈</button>
-        </nav>
-        <div class="mode-chip">RAG 在治理链路内</div>
+        <div class="mode-chip">治理链路</div>
         <div id="health" class="health">连接中</div>
       </div>
     </header>
@@ -40,125 +32,13 @@
             提交治理请求
           </button>
         </section>
-
-        <section class="panel control-panel">
-          <div class="section-head compact">
-            <h2>RAG</h2>
-            <span>调试</span>
-          </div>
-          <label for="wikiPath">知识库目录</label>
-          <input
-            id="wikiPath"
-            placeholder="留空使用 STAGE_WIKI_PATH"
-            autocomplete="off"
-          />
-          <label for="ragQuestion">问题</label>
-          <textarea id="ragQuestion" rows="3">NAS 的访问方式是什么？</textarea>
-          <div class="row">
-            <label for="embeddingMode">向量</label>
-            <select id="embeddingMode">
-              <option value="ollama">Ollama</option>
-              <option value="mock">Mock</option>
-            </select>
-            <label for="topK">Top K</label>
-            <input id="topK" type="number" min="1" max="10" value="3" />
-          </div>
-          <button id="runRagButton" class="secondary-action" type="button">
-            单独运行 RAG
-          </button>
-        </section>
-
-        <section class="panel control-panel">
-          <div class="section-head compact">
-            <h2>反馈回流</h2>
-            <span>回流</span>
-          </div>
-          <div class="labels" id="feedbackLabels">
-            <label><input type="checkbox" value="wrong_closure" /> 不应该闭环</label>
-            <label><input type="checkbox" value="should_human_handoff" /> 应该人工介入</label>
-            <label><input type="checkbox" value="should_require_approval" /> 应该要求审批</label>
-            <label><input type="checkbox" value="should_cite_doc" /> 应该引用制度</label>
-            <label><input type="checkbox" value="should_not_use_claude_code" /> 不该调用 ClaudeCode</label>
-            <label><input type="checkbox" value="should_redact_secret" /> 应该脱敏</label>
-            <label><input type="checkbox" value="risk:privileged_action" /> 风险应为特权操作</label>
-          </div>
-          <label for="feedbackNote">备注</label>
-          <textarea id="feedbackNote" rows="3"></textarea>
-          <button id="writeFeedbackButton" class="secondary-action" type="button">
-            写入反馈
-          </button>
-        </section>
       </aside>
 
       <section class="workspace" aria-label="治理结果">
-        <section class="decision" id="decisionStrip">
-          <div>
-            <span>闭环</span>
-            <strong id="closedValue">未运行</strong>
-          </div>
-          <div>
-            <span>失败模式</span>
-            <strong id="failureValue">-</strong>
-          </div>
-          <div>
-            <span>路由</span>
-            <strong id="routeValue">-</strong>
-          </div>
-          <div>
-            <span>人工介入</span>
-            <strong id="humanValue">-</strong>
-          </div>
-          <div>
-            <span>执行器</span>
-            <strong id="executorValue">-</strong>
-          </div>
-        </section>
-
-        <section class="panel view active" data-view-panel="run">
-          <div class="section-head">
-            <h2>运行概览</h2>
-            <span id="runSummary">等待运行</span>
-          </div>
-          <div class="overview-grid">
-            <div>
-              <span>业务流程</span>
-              <strong id="businessValue">-</strong>
-            </div>
-            <div>
-              <span>证据质量</span>
-              <strong id="verificationValue">-</strong>
-            </div>
-            <div>
-              <span>权限结果</span>
-              <strong id="permissionValue">-</strong>
-            </div>
-            <div>
-              <span>安全扫描</span>
-              <strong id="safetyValue">-</strong>
-            </div>
-            <div>
-              <span>证据数量</span>
-              <strong id="overviewEvidenceValue">-</strong>
-            </div>
-            <div>
-              <span>执行适配器</span>
-              <strong id="adapterValue">-</strong>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel view active" data-view-panel="run pipeline">
-          <div class="section-head">
-            <h2>执行边界</h2>
-            <span id="actionBoundaryStatus">等待运行</span>
-          </div>
-          <div id="actionContract" class="contract-grid"></div>
-        </section>
-
         <section class="panel workflow-panel view active" data-view-panel="run pipeline">
           <div class="section-head">
             <h2>企业服务治理流</h2>
-            <span id="activeCase">等待运行</span>
+            <span id="activeCase">企业服务治理模板</span>
           </div>
           <div class="workflow-shell">
             <div class="workflow-main">
@@ -179,64 +59,6 @@
               <pre id="nodeDetails" class="details"></pre>
             </aside>
           </div>
-        </section>
-
-        <section class="grid-two view active" data-view-panel="run evidence">
-          <section class="panel">
-            <div class="section-head">
-              <h2>证据</h2>
-              <span id="evidenceCount">0</span>
-            </div>
-            <div id="evidenceList" class="list"></div>
-          </section>
-
-          <section class="panel">
-            <div class="section-head">
-              <h2>声明追踪</h2>
-              <span id="traceCount">0</span>
-            </div>
-            <div id="traceList" class="list"></div>
-          </section>
-        </section>
-
-        <section class="panel view active" data-view-panel="run evidence">
-          <div class="section-head">
-            <h2>RAG 证据</h2>
-            <span id="ragMeta">未运行</span>
-          </div>
-          <div id="ragResults" class="list"></div>
-        </section>
-
-        <section class="panel view" data-view-panel="audit">
-          <div class="section-head">
-            <h2>审计时间线</h2>
-            <span id="auditCount">0</span>
-          </div>
-          <div id="auditList" class="audit-list"></div>
-        </section>
-
-        <section class="panel view" data-view-panel="history">
-          <div class="section-head">
-            <h2>运行历史</h2>
-            <button id="refreshHistoryButton" class="inline-action" type="button">刷新</button>
-          </div>
-          <div id="historyList" class="history-list"></div>
-        </section>
-
-        <section class="panel view" data-view-panel="feedback">
-          <div class="section-head">
-            <h2>反馈产物</h2>
-            <span id="feedbackPageStatus">等待反馈</span>
-          </div>
-          <pre id="feedbackArtifacts" class="details small"></pre>
-        </section>
-
-        <section class="panel view active" data-view-panel="run feedback">
-          <div class="section-head">
-            <h2>产物路径</h2>
-            <span id="feedbackStatus"></span>
-          </div>
-          <pre id="artifacts" class="details small"></pre>
         </section>
       </section>
     </main>

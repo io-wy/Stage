@@ -24,23 +24,21 @@ def test_stage_web_console_health_and_homepage() -> None:
     assert "hard-v2" not in page.text
     assert "caseSelect" not in page.text
     assert "/Users/io/Downloads" not in page.text
-    assert "value=\"/Users/io/Downloads" not in page.text
     assert "企业服务治理流" in page.text
     assert "节点详情" in page.text
-    assert "交付阶段" in page.text
-    assert "执行边界" in page.text
-    assert "执行适配器" in page.text
-    for english_label in [
-        "Pipeline</button>",
-        "Evidence</button>",
-        "Audit</button>",
-        "History</button>",
-        "Feedback</button>",
-        "Run overview",
-        "Pipeline nodes",
-        "Run history",
+    assert "服务请求" in page.text
+    for label in [
+        "RAG",
+        "反馈回流",
+        "运行历史",
+        "审计时间线",
+        "证据",
+        "声明追踪",
+        "产物路径",
+        "执行边界",
+        "运行概览",
     ]:
-        assert english_label not in page.text
+        assert label not in page.text
 
 
 def test_stage_web_console_runs_governance_case(tmp_path: Path) -> None:

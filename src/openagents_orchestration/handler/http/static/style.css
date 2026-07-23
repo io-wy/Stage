@@ -462,7 +462,7 @@ label {
 
 .workflow-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 34%);
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
   gap: 14px;
   align-items: stretch;
 }
@@ -516,26 +516,37 @@ label {
 .workflow-canvas {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: minmax(158px, 184px);
-  gap: 22px;
+  grid-auto-columns: 178px;
+  gap: 30px;
   align-items: start;
   align-content: start;
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 6px 6px 14px;
+  min-height: 360px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 72px 28px 24px;
+  background:
+    linear-gradient(rgba(30, 42, 56, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(30, 42, 56, 0.055) 1px, transparent 1px),
+    rgba(249, 251, 253, 0.88);
+  background-size:
+    24px 24px,
+    24px 24px,
+    auto;
   scroll-snap-type: x proximity;
 }
 
 .node {
   position: relative;
-  min-height: 128px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.82);
+  min-height: 142px;
+  border: 1px solid rgba(30, 42, 56, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
   color: var(--ink);
-  padding: 12px;
+  padding: 14px 14px 36px;
   text-align: left;
-  box-shadow: none;
+  box-shadow: 0 14px 30px rgba(21, 34, 48, 0.08);
   scroll-snap-align: start;
 }
 
@@ -543,14 +554,33 @@ label {
   content: "";
   position: absolute;
   top: 50%;
-  left: calc(100% + 1px);
-  width: 20px;
+  left: calc(100% + 8px);
+  width: 16px;
   height: 2px;
-  background: var(--line-strong);
+  background: rgba(93, 105, 119, 0.36);
 }
 
 .node:last-child::after {
   display: none;
+}
+
+.node-port {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  background: var(--quiet);
+  box-shadow: 0 0 0 1px rgba(30, 42, 56, 0.16);
+}
+
+.node-port.input {
+  left: -6px;
+}
+
+.node-port.output {
+  right: -6px;
 }
 
 .node-phase,
@@ -569,7 +599,7 @@ label {
 .node-phase {
   margin-bottom: 10px;
   color: var(--muted);
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(246, 247, 249, 0.86);
   border: 1px solid var(--line);
 }
 
@@ -622,6 +652,22 @@ label {
   background: var(--green-soft);
 }
 
+.node.ok .node-port {
+  background: var(--green);
+}
+
+.node.warn .node-port {
+  background: var(--amber);
+}
+
+.node.danger .node-port {
+  background: var(--red);
+}
+
+.node.info .node-port {
+  background: var(--violet);
+}
+
 .node.warn .node-status {
   color: #8a5200;
   background: var(--amber-soft);
@@ -640,9 +686,9 @@ label {
 .node-inspector {
   min-width: 0;
   border: 1px solid var(--line);
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.74);
-  padding: 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  padding: 14px;
 }
 
 .inspector-head {

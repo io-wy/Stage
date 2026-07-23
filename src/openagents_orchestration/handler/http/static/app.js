@@ -1,7 +1,6 @@
 "use strict";
 // Source for /static/app.js. Run `npm run build:web` after editing.
 let currentRun = null;
-let currentView = "run";
 const $ = (selector) => {
     const element = document.querySelector(selector);
     if (!element) {
@@ -83,6 +82,7 @@ const TEXT = {
     workspace_write: "工作区写入",
 };
 const NODE_NAMES = {
+    Request: "请求输入",
     Intent: "意图识别",
     Domain: "治理包匹配",
     Route: "路由规划",
@@ -95,6 +95,20 @@ const NODE_NAMES = {
     Trace: "声明追踪",
     Audit: "审计",
 };
+const WORKFLOW_TEMPLATE = [
+    { name: "Request", phase: "服务入口" },
+    { name: "Intent", phase: "请求理解" },
+    { name: "Domain", phase: "服务域" },
+    { name: "Route", phase: "路由规划" },
+    { name: "Action", phase: "执行边界" },
+    { name: "Permission", phase: "交付约束" },
+    { name: "Evidence", phase: "证据收集" },
+    { name: "Verification", phase: "证据校验" },
+    { name: "Safety", phase: "安全检查" },
+    { name: "Closure", phase: "闭环判断" },
+    { name: "Trace", phase: "声明追踪" },
+    { name: "Audit", phase: "审计沉淀" },
+];
 const JSON_KEYS = {
     actions: "动作",
     action_plan: "执行计划",
@@ -215,10 +229,6 @@ function localizePayload(payload) {
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
-function wikiPathValue() {
-    const value = $("#wikiPath").value.trim();
-    return value || undefined;
-}
 async function loadHealth() {
     try {
         const health = await api("/api/health");
@@ -228,47 +238,19 @@ async function loadHealth() {
         $("#health").textContent = "离线";
     }
 }
-function showView(view) {
-    currentView = view;
-    document.querySelectorAll(".tab").forEach((tab) => {
-        tab.classList.toggle("active", tab.dataset.view === view);
-    });
-    document.querySelectorAll("[data-view-panel]").forEach((panel) => {
-        const views = (panel.dataset.viewPanel || "").split(/\s+/);
-        panel.classList.toggle("active", views.includes(view));
-    });
-    if (view === "history") {
-        loadHistory();
-    }
-    if (view === "audit" && currentRun?.run_key) {
-        loadAudit(currentRun.run_key);
-    }
-}
 async function runCase() {
     const button = $("#runCaseButton");
     setBusy(button, true, "运行中");
     try {
         const payload = {
             service_request: $("#serviceRequest").value,
-            embedding: $("#embeddingMode").value,
-            top_k: Number($("#topK").value),
         };
-        const wikiPath = wikiPathValue();
-        if (wikiPath) {
-            payload.wiki_path = wikiPath;
-        }
         const result = await api("/api/governance/run", {
             method: "POST",
             body: JSON.stringify(payload),
         });
         currentRun = result;
         renderRun(result);
-        loadHistory();
-        if (result.run_key) {
-            loadAudit(result.run_key);
-        }
-        showView("run");
-        $("#feedbackStatus").textContent = "";
     }
     catch (error) {
         $("#nodeDetails").textContent = errorMessage(error);
@@ -280,80 +262,20 @@ async function runCase() {
 function renderRun(result) {
     $("#activeCase").textContent =
         result.governance?.case_id || result.run_key || "当前请求";
-    $("#closedValue").textContent = result.closed ? "是" : "否";
-    $("#failureValue").textContent = compactText(result.failure_mode);
-    $("#routeValue").textContent = compactText(result.route.backends);
-    $("#humanValue").textContent = result.case_result.human_questions?.length
-        ? "需要"
-        : "不需要";
-    const actionPlan = result.governance?.action_plan || result.route?.action_plan || {};
-    const actionResult = result.governance?.action_result || {};
-    $("#executorValue").textContent = compactText(actionPlan.executor);
-    $("#decisionStrip").className = `decision ${result.closed ? "closed-yes" : "closed-no"}`;
-    $("#runSummary").textContent = result.run_key || "当前运行";
-    $("#businessValue").textContent = compactText(result.governance?.domain?.business_process);
-    $("#adapterValue").textContent = compactText(actionPlan.adapter_id, "未指定");
-    $("#verificationValue").textContent = result.governance?.verification?.passed
-        ? `通过 · ${result.governance.verification.relevant_evidence_count || 0}/${result.governance.verification.evidence_count || 0}`
-        : `未通过 · ${compactText(result.governance?.verification?.reasons)}`;
-    $("#permissionValue").textContent = result.permissions?.combined?.needs_human
-        ? "需要人工"
-        : result.permissions?.combined?.passed
-            ? "通过"
-            : "阻断";
-    $("#safetyValue").textContent = result.safety?.blocked ? "阻断" : "通过";
-    $("#overviewEvidenceValue").textContent = `${result.evidence.length}`;
-    $("#evidenceCount").textContent = `${result.evidence.length}`;
-    $("#traceCount").textContent = `${result.claim_trace.length}`;
-    renderActionContract(actionPlan, actionResult);
     renderTimeline(result);
-    renderEvidence(result.evidence);
-    renderTrace(result.claim_trace);
-    if (result.rag && !result.rag.skipped) {
-        renderRagFromLog(result.rag);
-    }
-    renderJson($("#artifacts"), result.artifact_paths);
 }
-function renderActionContract(actionPlan, actionResult) {
-    const target = $("#actionContract");
-    if (!actionPlan || !Object.keys(actionPlan).length) {
-        $("#actionBoundaryStatus").textContent = "没有执行计划";
-        target.innerHTML = '<div class="empty">当前请求没有执行边界</div>';
-        return;
-    }
-    $("#actionBoundaryStatus").textContent = actionResult?.executed
-        ? "已执行"
-        : "未执行";
-    target.innerHTML = [
-        contractCard("执行器", compactText(actionPlan.executor), [
-            `副作用：${compactText(actionPlan.side_effect_level)}`,
-            `执行：${actionResult?.executed ? "已执行" : "未执行"}`,
-        ]),
-        contractCard("执行适配器", compactText(actionPlan.adapter_id, "未指定"), [
-            ...(actionPlan.adapter_tools || []).map(label),
-        ]),
-        contractCard("审批字段", compactText(actionPlan.required_approval_fields), []),
-        contractCard("允许动作", compactText(actionPlan.allowed_actions), []),
-        contractCard("禁止动作", compactText(actionPlan.forbidden_actions), []),
-        contractCard("验证要求", compactText(actionPlan.verify_requirements), [
-            ...(actionPlan.rollback_plan || []).map((item) => `回滚：${label(item)}`),
-        ]),
-    ].join("");
-}
-function contractCard(title, main, pills) {
-    const renderedPills = (pills || [])
-        .filter(Boolean)
-        .map((item) => `<span class="pill">${escapeHtml(item)}</span>`)
-        .join("");
-    return `<article class="contract-card">
-    <span>${escapeHtml(title)}</span>
-    <strong>${escapeHtml(main)}</strong>
-    <div>${renderedPills}</div>
-  </article>`;
+function renderWorkflowTemplate() {
+    const nodes = WORKFLOW_TEMPLATE.map((item) => workflowNode(item.name, item.phase, undefined, "info", "待运行"));
+    $("#activeCase").textContent = "企业服务治理模板";
+    renderWorkflowNodes(nodes);
 }
 function renderTimeline(result) {
     const governance = result.governance;
     const nodes = [
+        workflowNode("Request", "服务入口", {
+            service_request: result.governance?.routing_prompt,
+            case_id: result.case_id,
+        }, "info"),
         workflowNode("Intent", "请求理解", governance.intent, "info"),
         workflowNode("Domain", "服务域", governance.domain, "info"),
         workflowNode("Route", "路由规划", governance.route, governance.route.needs_human ? "warn" : "ok"),
@@ -369,12 +291,17 @@ function renderTimeline(result) {
         workflowNode("Trace", "声明追踪", governance.claim_trace, traceState(governance.claim_trace)),
         workflowNode("Audit", "审计沉淀", governance.audit_events, governance.audit_events?.length ? "ok" : "warn"),
     ];
+    renderWorkflowNodes(nodes);
+}
+function renderWorkflowNodes(nodes) {
     $("#timeline").innerHTML = nodes
         .map((node, index) => `<button class="node ${node.state}" data-index="${index}" type="button">
+          <span class="node-port input"></span>
           <span class="node-phase">${escapeHtml(node.phase)}</span>
           <strong>${escapeHtml(NODE_NAMES[node.name] || node.name)}</strong>
           <span class="node-hint">${escapeHtml(nodeHint(node.name, node.payload))}</span>
           <span class="node-status">${escapeHtml(node.status)}</span>
+          <span class="node-port output"></span>
         </button>`)
         .join("");
     document.querySelectorAll(".node").forEach((button, index) => {
@@ -389,13 +316,13 @@ function renderTimeline(result) {
     document.querySelector(".node")?.classList.add("active");
     renderWorkflowInspector(nodes[0]);
 }
-function workflowNode(name, phase, payload, state) {
+function workflowNode(name, phase, payload, state, status = stateLabel(state)) {
     return {
         name,
         phase,
         payload,
         state,
-        status: stateLabel(state),
+        status,
     };
 }
 function renderWorkflowInspector(node) {
@@ -430,6 +357,12 @@ function nodeHint(name, payload) {
     const record = (payload && typeof payload === "object" && !Array.isArray(payload))
         ? payload
         : {};
+    if (payload === undefined || payload === null) {
+        return "等待请求进入";
+    }
+    if (name === "Request") {
+        return compactText(record.service_request || record.case_id, "等待用户请求");
+    }
     if (name === "Route") {
         return compactText(record.backends);
     }
@@ -450,212 +383,8 @@ function nodeHint(name, payload) {
     }
     return compactText(record.business_process || record.risk_class || record.source);
 }
-function renderEvidence(items) {
-    const list = $("#evidenceList");
-    if (!items.length) {
-        list.innerHTML = '<div class="empty">没有证据</div>';
-        return;
-    }
-    list.innerHTML = items
-        .map((item) => `<article class="item">
-        <strong>${escapeHtml(item.source_ref || "未知来源")}</strong>
-        <p>${escapeHtml(item.summary || "")}</p>
-        <span class="pill">${escapeHtml(label(item.sensitivity || "unknown"))}</span>
-        <span class="pill">${escapeHtml(item.selected ? "已选用" : "已拒绝")}</span>
-        <span class="pill">${escapeHtml(relevanceHint(item.relevance))}</span>
-      </article>`)
-        .join("");
-}
-function relevanceHint(relevance) {
-    if (!relevance || !Object.keys(relevance).length) {
-        return "相关性未知";
-    }
-    const state = relevance.passed ? "相关" : "不相关";
-    const terms = relevance.matched_anchor_terms?.length
-        ? relevance.matched_anchor_terms.join(", ")
-        : relevance.overlap_terms?.join(", ");
-    return terms ? `${state}: ${terms}` : `${state}: ${label(relevance.reason || "-")}`;
-}
-function renderTrace(items) {
-    const list = $("#traceList");
-    if (!items.length) {
-        list.innerHTML = '<div class="empty">没有声明追踪</div>';
-        return;
-    }
-    list.innerHTML = items
-        .map((item) => `<article class="item">
-        <strong>${escapeHtml(label(item.claim_type))} · ${escapeHtml(label(item.status))}</strong>
-        <p>${escapeHtml(item.text)}</p>
-        <span class="pill">${escapeHtml(compactText(item.source_refs, "无来源"))}</span>
-      </article>`)
-        .join("");
-}
-async function runRag() {
-    const button = $("#runRagButton");
-    setBusy(button, true, "检索中");
-    try {
-        const payload = {
-            question: $("#ragQuestion").value,
-            embedding: $("#embeddingMode").value,
-            top_k: Number($("#topK").value),
-        };
-        const wikiPath = wikiPathValue();
-        if (wikiPath) {
-            payload.wiki_path = wikiPath;
-        }
-        const result = await api("/api/rag/query", {
-            method: "POST",
-            body: JSON.stringify(payload),
-        });
-        renderRag(result);
-    }
-    catch (error) {
-        $("#ragResults").innerHTML = `<div class="empty">${escapeHtml(errorMessage(error))}</div>`;
-    }
-    finally {
-        setBusy(button, false, "单独运行 RAG");
-    }
-}
-function renderRag(result) {
-    $("#ragMeta").textContent = `${result.embedding} · ${result.chunk_count} 个分块`;
-    if (!result.passages.length) {
-        $("#ragResults").innerHTML = '<div class="empty">没有命中</div>';
-        return;
-    }
-    $("#ragResults").innerHTML = result.passages
-        .map((item, index) => `<article class="item">
-        <strong>${index + 1}. ${escapeHtml(item.source)}</strong>
-        <p>${escapeHtml(item.text)}</p>
-        <span class="pill">分数 ${item.score.toFixed(3)}</span>
-        <span class="pill">${escapeHtml(scoreBreakdownHint(item.score_breakdown))}</span>
-        ${(item.tags || []).map((tag) => `<span class="pill">${escapeHtml(label(tag))}</span>`).join("")}
-      </article>`)
-        .join("");
-}
-function renderRagFromLog(log) {
-    $("#ragMeta").textContent = `${log.embedding} · ${log.chunk_count} 个分块 · 治理链路内`;
-    const passages = (log.retrieval?.passages || []);
-    if (!passages.length) {
-        $("#ragResults").innerHTML = '<div class="empty">治理链路内 RAG 没有命中</div>';
-        return;
-    }
-    $("#ragResults").innerHTML = passages
-        .map((item) => `<article class="item">
-        <strong>${item.rank}. ${escapeHtml(item.source)}</strong>
-        <p>${escapeHtml(item.snippet)}</p>
-        <span class="pill">分数 ${Number(item.score).toFixed(3)}</span>
-        <span class="pill">${escapeHtml(scoreBreakdownHint(item.score_breakdown))}</span>
-        ${(item.tags || []).map((tag) => `<span class="pill">${escapeHtml(label(tag))}</span>`).join("")}
-      </article>`)
-        .join("");
-}
-function scoreBreakdownHint(breakdown) {
-    if (!breakdown || !Object.keys(breakdown).length) {
-        return "分数明细 -";
-    }
-    const lexical = Number(breakdown.lexical_score || 0).toFixed(2);
-    const vector = Number(breakdown.vector_score || 0).toFixed(2);
-    return `词面 ${lexical} · 向量 ${vector}`;
-}
-async function writeFeedback() {
-    if (!currentRun) {
-        $("#feedbackStatus").textContent = "先运行一个请求";
-        return;
-    }
-    const button = $("#writeFeedbackButton");
-    setBusy(button, true, "写入中");
-    try {
-        const labels = Array.from(document.querySelectorAll("#feedbackLabels input:checked")).map((item) => item.value);
-        const result = await api("/api/feedback", {
-            method: "POST",
-            body: JSON.stringify({
-                governance_path: currentRun.artifact_paths.governance,
-                case_result_path: currentRun.artifact_paths.case_result,
-                labels,
-                note: $("#feedbackNote").value,
-            }),
-        });
-        $("#feedbackStatus").textContent = "已写入";
-        $("#feedbackPageStatus").textContent = "已写入";
-        renderJson($("#artifacts"), result.artifact_paths);
-        renderJson($("#feedbackArtifacts"), result.artifact_paths);
-    }
-    catch (error) {
-        $("#feedbackStatus").textContent = errorMessage(error);
-        $("#feedbackPageStatus").textContent = errorMessage(error);
-    }
-    finally {
-        setBusy(button, false, "写入反馈");
-    }
-}
-async function loadHistory() {
-    const list = $("#historyList");
-    list.innerHTML = '<div class="empty">加载历史中</div>';
-    try {
-        const items = await api("/api/runs");
-        if (!items.length) {
-            list.innerHTML = '<div class="empty">还没有运行记录</div>';
-            return;
-        }
-        list.innerHTML = items
-            .map((item) => `<button class="history-card ${currentRun?.run_key === item.run_key ? "active" : ""}" data-run-key="${escapeHtml(item.run_key)}" type="button">
-          <strong>${escapeHtml(label(item.business_process || item.case_id || item.run_key))}</strong>
-          <span>${escapeHtml(item.closed === true ? "已闭环" : item.closed === false ? "未闭环" : "未知")}</span>
-          <span>${escapeHtml(label(item.failure_mode || "正常"))}</span>
-          <span>${escapeHtml(compactText(item.route_backends, "未路由"))}</span>
-        </button>`)
-            .join("");
-        document.querySelectorAll(".history-card").forEach((button) => {
-            button.addEventListener("click", () => loadRunDetail(button.dataset.runKey || ""));
-        });
-    }
-    catch (error) {
-        list.innerHTML = `<div class="empty">${escapeHtml(errorMessage(error))}</div>`;
-    }
-}
-async function loadRunDetail(runKey) {
-    if (!runKey) {
-        return;
-    }
-    const result = await api(`/api/runs/${encodeURIComponent(runKey)}`);
-    currentRun = result;
-    renderRun(result);
-    await loadAudit(runKey);
-    await loadHistory();
-    showView("pipeline");
-}
-async function loadAudit(runKey) {
-    const list = $("#auditList");
-    list.innerHTML = '<div class="empty">加载审计中</div>';
-    try {
-        const events = await api(`/api/runs/${encodeURIComponent(runKey)}/audit`);
-        $("#auditCount").textContent = `${events.length}`;
-        if (!events.length) {
-            list.innerHTML = '<div class="empty">没有审计事件</div>';
-            return;
-        }
-        list.innerHTML = events
-            .map((event) => `<article class="audit-card">
-          <strong>${escapeHtml(label(event.event_type))}</strong>
-          <span>${escapeHtml(new Date(event.timestamp * 1000).toLocaleString())}</span>
-          <span>${escapeHtml(event.case_id)}</span>
-          <pre class="details small">${escapeHtml(JSON.stringify(event.payload, null, 2))}</pre>
-        </article>`)
-            .join("");
-    }
-    catch (error) {
-        $("#auditCount").textContent = "0";
-        list.innerHTML = `<div class="empty">${escapeHtml(errorMessage(error))}</div>`;
-    }
-}
 document.addEventListener("DOMContentLoaded", async () => {
-    document.querySelectorAll(".tab").forEach((tab) => {
-        tab.addEventListener("click", () => showView(tab.dataset.view || "run"));
-    });
     $("#runCaseButton").addEventListener("click", runCase);
-    $("#runRagButton").addEventListener("click", runRag);
-    $("#writeFeedbackButton").addEventListener("click", writeFeedback);
-    $("#refreshHistoryButton").addEventListener("click", loadHistory);
+    renderWorkflowTemplate();
     await loadHealth();
-    await loadHistory();
 });
