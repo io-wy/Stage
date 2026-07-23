@@ -8,7 +8,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from openagents_orchestration.interfaces.http.schemas import (
+from openagents_orchestration.handler.http.schemas import (
     AuditEventResponse,
     DemoCaseSummary,
     FeedbackRequest,
@@ -23,7 +23,7 @@ from openagents_orchestration.interfaces.http.schemas import (
     RunGovernanceResponse,
     RunHistoryItem,
 )
-from openagents_orchestration.interfaces.http.services import (
+from openagents_orchestration.service.console import (
     get_run_audit,
     get_run_detail,
     health_payload,
@@ -35,7 +35,7 @@ from openagents_orchestration.interfaces.http.services import (
     run_governance_case,
 )
 
-STATIC_DIR = Path(__file__).resolve().parents[1] / "web" / "static"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 def create_app() -> FastAPI:
@@ -124,7 +124,7 @@ def main() -> None:
     import uvicorn
 
     uvicorn.run(
-        "openagents_orchestration.interfaces.http.app:app",
+        "openagents_orchestration.handler.http.app:app",
         host="127.0.0.1",
         port=8765,
         reload=False,

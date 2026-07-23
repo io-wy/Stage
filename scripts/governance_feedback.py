@@ -16,7 +16,7 @@ for path in (REPO_ROOT, SRC_ROOT):
 
 
 def main() -> None:
-    from openagents_orchestration.governance.feedback import (
+    from openagents_orchestration.control.feedback import (
         CaseFeedbackRecord,
         write_feedback_artifacts,
     )

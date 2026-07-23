@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.governance.safety import scan_public_output
+from openagents_orchestration.control.safety import scan_public_output
 
 
 def test_scan_public_output_accepts_clean_payload() -> None:

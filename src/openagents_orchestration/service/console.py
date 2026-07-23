@@ -9,19 +9,19 @@ from pathlib import Path
 from time import time
 from typing import Any
 
-from openagents_orchestration.governance.audit import AuditStore
-from openagents_orchestration.governance.domain import GovernanceDomainResolver
-from openagents_orchestration.governance.feedback import (
+from openagents_orchestration.control.audit import AuditStore
+from openagents_orchestration.control.domain import GovernanceDomainResolver
+from openagents_orchestration.control.feedback import (
     CaseFeedbackRecord,
     write_feedback_artifacts,
 )
-from openagents_orchestration.governance.intent_llm import (
+from openagents_orchestration.control.intent_llm import (
     build_governance_intent_classifier,
 )
-from openagents_orchestration.governance.models import CaseAuditEvent
-from openagents_orchestration.governance.pipeline import StageGovernancePipeline
-from openagents_orchestration.governance.router import GovernancePlan
-from openagents_orchestration.interfaces.http.schemas import (
+from openagents_orchestration.control.models import CaseAuditEvent
+from openagents_orchestration.control.pipeline import StageGovernancePipeline
+from openagents_orchestration.control.router import GovernancePlan
+from openagents_orchestration.handler.http.schemas import (
     AuditEventResponse,
     DemoCaseSummary,
     EmbeddingMode,
@@ -44,7 +44,7 @@ from openagents_orchestration.rag import (
     build_pipeline,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_EVALS_JSON = REPO_ROOT / "skills" / "case-handling-baseline" / "evals" / "evals.json"
 DEFAULT_BASELINE_WORKSPACE = (
     REPO_ROOT / "skills" / "case-handling-baseline-workspace" / "hard-v2-baseline"

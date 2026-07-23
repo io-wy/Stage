@@ -9,36 +9,36 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
 
-from openagents_orchestration.governance.audit import AuditStore
-from openagents_orchestration.governance.claude_code import ClaudeCodeAdapter
-from openagents_orchestration.governance.closure import (
+from openagents_orchestration.control.audit import AuditStore
+from openagents_orchestration.control.claude_code import ClaudeCodeAdapter
+from openagents_orchestration.control.closure import (
     ClosureDecision,
     evaluate_closure,
 )
-from openagents_orchestration.governance.domain import (
+from openagents_orchestration.control.domain import (
     GovernanceDomainProfile,
     GovernanceDomainResolver,
     apply_domain_profile,
 )
-from openagents_orchestration.governance.evidence import build_public_evidence_summary
-from openagents_orchestration.governance.models import (
+from openagents_orchestration.control.evidence import build_public_evidence_summary
+from openagents_orchestration.control.models import (
     ActionPlan,
     ActionResult,
     CaseAuditEvent,
     EvidenceEntry,
 )
-from openagents_orchestration.governance.permissions import (
+from openagents_orchestration.control.permissions import (
     PermissionCheckResult,
     PermissionEngine,
     PermissionPolicy,
     merge_permission_results,
 )
-from openagents_orchestration.governance.router import GovernancePlan, GovernanceRouter
-from openagents_orchestration.governance.safety import (
+from openagents_orchestration.control.router import GovernancePlan, GovernanceRouter
+from openagents_orchestration.control.safety import (
     SafetyScanResult,
     scan_public_output,
 )
-from openagents_orchestration.governance.traceability import (
+from openagents_orchestration.control.traceability import (
     ClaimTraceEntry,
     build_source_to_claim_trace,
     traceability_gate_passed,

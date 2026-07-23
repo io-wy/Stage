@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.governance.models import EvidenceEntry
-from openagents_orchestration.governance.traceability import (
+from openagents_orchestration.control.models import EvidenceEntry
+from openagents_orchestration.control.traceability import (
     build_source_to_claim_trace,
     traceability_gate_passed,
 )

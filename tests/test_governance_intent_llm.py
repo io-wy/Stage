@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.governance import intent_llm
+from openagents_orchestration.control import intent_llm
 from openagents_orchestration.intent_classifier import IntentClassifier
 
 

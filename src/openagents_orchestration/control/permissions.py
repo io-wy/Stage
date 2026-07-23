@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from openagents_orchestration.governance.router import GovernancePlan
+from openagents_orchestration.control.router import GovernancePlan
 from openagents_orchestration.intent_classifier import IntentFrame
 
 PermissionVerdict = Literal["allow", "block", "needs_human"]

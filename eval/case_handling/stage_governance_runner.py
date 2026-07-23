@@ -17,7 +17,7 @@ from eval.case_handling.stage_governance_types import (
     StageGovernanceBenchmarkSummary,
     StageGovernanceEvalResult,
 )
-from openagents_orchestration.governance.pipeline import (
+from openagents_orchestration.control.pipeline import (
     ClaudeCodeReplayBackend,
     StageGovernancePipeline,
 )

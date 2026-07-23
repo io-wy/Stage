@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.governance.evidence import (
+from openagents_orchestration.control.evidence import (
     build_public_evidence_summary,
     evidence_entries_from_rag_log,
 )

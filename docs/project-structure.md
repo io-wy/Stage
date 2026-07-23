@@ -11,7 +11,7 @@ configs/governance/domain_packs/
 configs/governance/adapter_packs/
   service_adapters.yaml
 
-src/openagents_orchestration/governance/
+src/openagents_orchestration/control/
   pipeline.py       治理执行主链路
   models.py         case / evidence / audit / action plan / action result 结构
   domain.py         治理包加载和业务域匹配
@@ -24,15 +24,22 @@ src/openagents_orchestration/governance/
   audit.py          audit.jsonl 事件记录
   feedback.py       线上反馈转治理 patch / regression case
 
-src/openagents_orchestration/interfaces/
-  http/             产品 API
-  web/              中文 Web 控制台
+src/openagents_orchestration/handler/
+  http/             产品 API 入口、HTTP DTO、静态控制台资源
+
+src/openagents_orchestration/service/
+  console.py        HTTP 控制台的用例编排、查询和反馈回流
+
+src/openagents_orchestration/pkg/
+  ...               可复用的纯工具/公共模块，优先放无副作用逻辑
 ```
 
-产品请求进入 `interfaces/http`，再进入 `governance/pipeline.py`。业务差异优先写到 `configs/governance/domain_packs/*.yaml`，不要写死在 Python 代码里。
+产品请求进入 `handler/http`，再进入 `service/console.py`，最后进入
+`control/pipeline.py`。业务差异优先写到 `configs/governance/domain_packs/*.yaml`，
+不要写死在 Python 代码里。
 
-真实执行不另起一套平行 execution layer。Stage 复用 `governance/router.py`
-里的 `GovernancePlan` 和 `governance/models.py` 里的 `ActionPlan` /
+真实执行不另起一套平行 execution layer。Stage 复用 `control/router.py`
+里的 `GovernancePlan` 和 `control/models.py` 里的 `ActionPlan` /
 `ActionResult`，把 ClaudeCode、subagent、RAG、human、adapter 都当作受治理的
 backend。所有 backend 返回的执行结果必须进入 postcheck、verify、closure 和 audit。
 
@@ -114,9 +121,10 @@ eval 是 benchmark/dev 验证层，用来证明 Stage 在误闭环、越权、�
 
 推荐拆分：
 
-1. `governance`：治理主链路、治理包、HTTP/Web 产品入口。
-2. `rag`：真实检索、embedding、RAG CLI/eval 和相关测试。
-3. `runtime cleanup`：`core/`、`projects/` 迁到 `runtime/`，删除无用 state machine / metrics / sub board。
-4. `eval replay`：Stage governance runner、comparison reporter、临时 fixture 测试。
+1. `control + handler + service`：治理主链路、HTTP 入口和应用编排。
+2. `service`：HTTP 控制台、RAG 查询、反馈回流和其他应用编排。
+3. `rag`：真实检索、embedding、RAG CLI/eval 和相关测试。
+4. `runtime cleanup`：`core/`、`projects/` 迁到 `runtime/`，删除无用 state machine / metrics / sub board。
+5. `eval replay`：Stage governance runner、comparison reporter、临时 fixture 测试。
 
 不要把 skill 配置、截图、报告产物和代码提交混在一起。

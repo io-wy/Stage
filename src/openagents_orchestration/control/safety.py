@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from openagents_orchestration.governance.models import SafetyFinding
+from openagents_orchestration.control.models import SafetyFinding
 
 _DEFAULT_PATTERNS: tuple[tuple[str, str], ...] = (
     ("credential_marker", "sastsast"),

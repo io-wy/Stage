@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openagents_orchestration.governance.domain import (
+from openagents_orchestration.control.domain import (
     GovernanceDomainResolver,
     apply_domain_profile,
 )

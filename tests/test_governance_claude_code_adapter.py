@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from openagents_orchestration.governance.claude_code import ClaudeCodeAdapter
+from openagents_orchestration.control.claude_code import ClaudeCodeAdapter
 
 
 def test_import_run_captures_tool_metadata_and_public_output(tmp_path) -> None:

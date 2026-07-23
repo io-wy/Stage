@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.governance.models import (
+from openagents_orchestration.control.models import (
     ActionPlan,
     ActionResult,
     CaseAuditEvent,

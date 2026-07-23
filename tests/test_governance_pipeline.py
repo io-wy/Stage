@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from openagents_orchestration.governance.domain import GovernanceDomainResolver
-from openagents_orchestration.governance.pipeline import (
+from openagents_orchestration.control.domain import GovernanceDomainResolver
+from openagents_orchestration.control.pipeline import (
     ReplayCaseBackend,
     StageGovernancePipeline,
 )

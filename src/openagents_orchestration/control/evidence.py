@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from openagents_orchestration.governance.models import EvidenceEntry
-from openagents_orchestration.governance.safety import scan_public_output
+from openagents_orchestration.control.models import EvidenceEntry
+from openagents_orchestration.control.safety import scan_public_output
 from openagents_orchestration.rag.runlog import RagQueryRunLog, RagRetrievalPassageLog
 
 

@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 from fastapi.testclient import TestClient
 
+from openagents_orchestration.handler.http.app import create_app
 from openagents_orchestration.intent_classifier import IntentClassifier, IntentSchema
-from openagents_orchestration.interfaces.http import services
-from openagents_orchestration.interfaces.http.app import create_app
+from openagents_orchestration.service import console as services
 
 
 def test_stage_web_console_health_and_homepage() -> None:

@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.governance.domain import (
+from openagents_orchestration.control.domain import (
     GovernanceDomainResolver,
     apply_domain_profile,
 )
-from openagents_orchestration.governance.permissions import (
+from openagents_orchestration.control.permissions import (
     PermissionEngine,
     PermissionPolicy,
 )
-from openagents_orchestration.governance.router import GovernanceRouter
+from openagents_orchestration.control.router import GovernanceRouter
 from openagents_orchestration.intent_classifier import IntentClassifier, IntentFrame
 
 

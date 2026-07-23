@@ -38,13 +38,15 @@ configs/governance/adapter_packs/
   *.yaml          受治理执行手：ClaudeCode + lark-cli / gh skill / subagent 等边界
 
 src/openagents_orchestration/
-  governance/     产品主线：治理执行 pipeline、权限、证据、安全、闭环、审计、反馈
+  control/        产品主线：治理执行 pipeline、权限、证据、安全、闭环、审计、反馈
+  service/        HTTP 控制台的用例编排、查询、回流
+  handler/        产品入口：HTTP API 和静态 Web 控制台
   rag/            治理 pipeline 内部可调用的知识检索能力
-  interfaces/     产品入口：HTTP API 和 Web 控制台
   runtime/        旧编排运行时兼容层，只服务历史工具和 Matrix/agent 运行
-  tools/          工具适配层，逐步向 governance/runtime 明确边界收口
+  tools/          工具适配层，逐步向 control/runtime 明确边界收口
   models/         跨模块共享的数据模型
   utils/          通用工具函数
+  pkg/            可复用的纯模块，优先放无副作用逻辑
 
 eval/             benchmark/dev 验证，不进入产品前端
 scripts/          本地调试、RAG、治理 demo 和反馈回流命令
@@ -65,7 +67,7 @@ uv run --no-sync python scripts/stage_governance_demo.py --output-root docs/repo
 ## 本地 Web 控制台
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m openagents_orchestration.interfaces.http.app
+PYTHONPATH=src .venv/bin/python -m openagents_orchestration.handler.http.app
 ```
 
 打开 `http://127.0.0.1:8765`，可以提交治理请求、单独跑 RAG、看审计和反馈回流。

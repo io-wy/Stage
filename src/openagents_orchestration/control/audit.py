@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from openagents_orchestration.governance.models import CaseAuditEvent
+from openagents_orchestration.control.models import CaseAuditEvent
 
 
 class AuditStore:

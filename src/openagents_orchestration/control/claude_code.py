@@ -8,12 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from openagents_orchestration.governance.audit import AuditStore
-from openagents_orchestration.governance.models import (
+from openagents_orchestration.control.audit import AuditStore
+from openagents_orchestration.control.models import (
     CaseAuditEvent,
     ToolInvocationRecord,
 )
-from openagents_orchestration.governance.safety import scan_public_output
+from openagents_orchestration.control.safety import scan_public_output
 
 _FORBIDDEN_PATTERNS = (
     "sastsast",

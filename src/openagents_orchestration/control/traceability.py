@@ -6,7 +6,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from openagents_orchestration.governance.models import EvidenceEntry
+from openagents_orchestration.control.models import EvidenceEntry
 
 ClaimTraceStatus = Literal["supported", "unsupported", "not_required"]
 

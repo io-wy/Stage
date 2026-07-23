@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from openagents_orchestration.governance.closure import evaluate_closure
-from openagents_orchestration.governance.safety import SafetyScanResult
+from openagents_orchestration.control.closure import evaluate_closure
+from openagents_orchestration.control.safety import SafetyScanResult
 from openagents_orchestration.intent_classifier import IntentClassifier
 
 

@@ -29,9 +29,10 @@ Out of scope:
 
 ## Architecture
 
-The web layer lives under `src/openagents_orchestration/interfaces/`. It is an
-adapter layer. It does not own governance decisions, RAG ranking, permission
-rules, closure gates, or feedback patch generation.
+The web layer lives under `src/openagents_orchestration/handler/` and the
+application use cases live under `src/openagents_orchestration/service/`.
+These layers are adapters. They do not own governance decisions, RAG ranking,
+permission rules, closure gates, or feedback patch generation.
 
 ```text
 browser

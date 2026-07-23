@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from openagents_orchestration.governance.models import ActionPlan
+from openagents_orchestration.control.models import ActionPlan
 from openagents_orchestration.intent_classifier import IntentFrame
 
 

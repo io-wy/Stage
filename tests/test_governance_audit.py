@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.governance.audit import AuditStore, replay_case_state
-from openagents_orchestration.governance.models import CaseAuditEvent
+from openagents_orchestration.control.audit import AuditStore, replay_case_state
+from openagents_orchestration.control.models import CaseAuditEvent
 
 
 def test_audit_store_appends_and_reads_case_events(tmp_path) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from openagents_orchestration.governance.feedback import (
+from openagents_orchestration.control.feedback import (
     CaseFeedbackRecord,
     build_regression_case,
     suggest_governance_patch,
