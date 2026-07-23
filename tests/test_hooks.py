@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.hooks import (
     HookEvent,
     HookManager,
@@ -21,6 +20,7 @@ from openagents_orchestration.models.pattern import (
     PatternOutcomeStatus,
 )
 from openagents_orchestration.models.task import TaskGraph, TaskNode
+from openagents_orchestration.runtime.state_board import StateBoard
 from openagents_orchestration.skills_registry import SkillRegistry
 
 # -- HookManager core ------------------------------------------------------
@@ -132,7 +132,7 @@ def test_session_start_handler_injects_catalog(tmp_path):
 
 def test_runner_deps_exposes_hooks_field():
     # corecoder._get_hooks reads ctx.deps.hooks; the field must exist (default None)
-    from openagents_orchestration.core.runner import RunnerDeps
+    from openagents_orchestration.runtime.runner import RunnerDeps
 
     fields = RunnerDeps.__dataclass_fields__
     assert "hooks" in fields

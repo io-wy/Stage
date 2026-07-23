@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from openagents_orchestration.projects.human_channel import (
+from openagents_orchestration.runtime.human_channel import (
     HumanChannel,
     HumanMessage,
     HumanQuestion,

@@ -22,6 +22,8 @@ from openagents_orchestration.governance.feedback import (
     write_feedback_artifacts,
 )
 from openagents_orchestration.governance.models import (
+    ActionPlan,
+    ActionResult,
     CaseAuditEvent,
     CaseRecord,
     CaseRunRecord,
@@ -56,6 +58,8 @@ from openagents_orchestration.governance.traceability import (
 
 __all__ = [
     "AuditStore",
+    "ActionPlan",
+    "ActionResult",
     "CaseAuditEvent",
     "CaseFeedbackRecord",
     "CaseRecord",

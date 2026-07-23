@@ -14,9 +14,9 @@ from unittest.mock import patch
 
 import pytest
 
-from openagents_orchestration.core.runner import OrchestratorRunner
-from openagents_orchestration.core.state_board import Budget, TaskStatus
 from openagents_orchestration.models.task import TaskGraph, TaskNode
+from openagents_orchestration.runtime.runner import OrchestratorRunner
+from openagents_orchestration.runtime.state_board import Budget, TaskStatus
 from openagents_orchestration.tools.director.classify_intent import ClassifyIntentTool
 from openagents_orchestration.tools.director.decompose import DecomposeTool
 

@@ -18,12 +18,12 @@ from pathlib import Path
 
 import pytest
 
-from openagents_orchestration.core.agent_loader import _load_json, compile_one_spec
-from openagents_orchestration.core.runner import OrchestratorRunner
 from openagents_orchestration.models.pattern import (
     PatternOutcome,
     PatternOutcomeStatus,
 )
+from openagents_orchestration.runtime.agent_loader import _load_json, compile_one_spec
+from openagents_orchestration.runtime.runner import OrchestratorRunner
 from openagents_orchestration.tools.corecoder.sub_agent import (
     _MAX_SUB_AGENT_DEPTH,
     SubAgentTool,

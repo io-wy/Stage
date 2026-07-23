@@ -16,12 +16,12 @@ from typing import Any
 from openagents.errors.exceptions import ToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-from openagents_orchestration.core.agent_loader import (
+from openagents_orchestration.runtime.agent_loader import (
     AgentSpecError,
     _load_json,
     compile_one_spec,
 )
-from openagents_orchestration.core.runner import OrchestratorRunner
+from openagents_orchestration.runtime.runner import OrchestratorRunner
 
 _MAX_SUB_AGENT_DEPTH = 1
 

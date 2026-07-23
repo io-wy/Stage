@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from openagents_orchestration.projects.security import (
+from openagents_orchestration.runtime.security import (
     AgentIdentity,
     AuditLog,
     CapabilityToken,

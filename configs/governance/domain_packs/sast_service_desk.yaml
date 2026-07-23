@@ -7,6 +7,10 @@ rules:
       - safe ways to access nas
       - protocol clients
       - old shared account
+      - 安全访问方式
+      - 有哪些安全访问方式
+      - 旧共享账号
+      - 内部密钥
     profile:
       workflow_type: service_case
       business_process: identity_and_access_support
@@ -180,7 +184,88 @@ rules:
       verifier_profile: service_desk
       ambiguity_notes: ["change control details may be missing"]
       permission_required_fields: ["approver", "target", "scope", "change_ticket"]
-      permission_action_markers: ["apply overleaf change", "overleaf admin"]
+      permission_action_markers:
+        - apply overleaf change
+        - overleaf admin
+        - overleaf 管理配置
+        - 管理配置改
+        - 改配置
+
+  - id: sast_link_access_approval
+    keywords:
+      - sast-link
+      - sast link
+      - link 权限
+      - link账号
+    profile:
+      workflow_type: service_case
+      business_process: sast_link_access_approval
+      risk_class: privileged_action
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "approval_owner", "scope"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_sponsor_and_scope
+      verifier_profile: service_desk
+      ambiguity_notes: ["SAST-Link access changes require identity, scope, and approval"]
+      permission_required_fields: ["approver", "target", "scope", "ticket_id"]
+      permission_action_markers:
+        - sast-link 权限
+        - 开个 sast-link
+        - 开 sast-link
+        - 开 link 权限
+
+  - id: lark_document_permission_approval
+    keywords:
+      - 飞书文档
+      - 文档权限
+      - 开编辑权限
+      - 文档分享
+      - document permission
+    profile:
+      workflow_type: service_case
+      business_process: document_permission_approval
+      risk_class: privileged_action
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "approval_owner", "scope"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_owner_and_approval
+      verifier_profile: service_desk
+      ambiguity_notes: ["document permission changes require owner or approval evidence"]
+      execution_adapter: claude_code_lark_doc_permission
+      adapter_tools: ["claude_code", "lark-cli", "lark-drive"]
+      permission_required_fields: ["approver", "target", "scope", "ticket_id"]
+      permission_action_markers:
+        - 开编辑权限
+        - 开文档权限
+        - grant document permission
+        - share document
+
+  - id: github_repo_access_approval
+    keywords:
+      - github
+      - github repo
+      - github repository
+      - repo admin
+      - repo 权限
+    profile:
+      workflow_type: service_case
+      business_process: github_repo_access_approval
+      risk_class: privileged_action
+      backend_plan: ["rag_retrieval", "human_channel"]
+      evidence_requirements: ["source", "approval_owner", "scope"]
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_for_sponsor_and_scope
+      verifier_profile: service_desk
+      ambiguity_notes: ["repository permission changes require explicit scope and approval"]
+      execution_adapter: claude_code_gh_repo_permission
+      adapter_tools: ["claude_code", "gh-cli", "gh-skill"]
+      permission_required_fields: ["approver", "target", "scope", "ticket_id"]
+      permission_action_markers:
+        - github admin
+        - repo admin
+        - grant github access
+        - 开 github 权限
+        - 开 repo 权限
 
   - id: developer_platform_access_approval
     keywords:
@@ -199,7 +284,15 @@ rules:
       verifier_profile: service_desk
       ambiguity_notes: ["approval metadata may be missing"]
       permission_required_fields: ["approver", "target", "scope", "ticket_id"]
-      permission_action_markers: ["gitlab admin", "add maintainer", "grant maintainer"]
+      permission_action_markers:
+        - gitlab admin
+        - add maintainer
+        - grant maintainer
+        - 开 maintainer
+        - 开通 maintainer
+        - 授权 maintainer
+        - 直接给我开
+        - 开通权限
 
   - id: member_onboarding_routing
     keywords:

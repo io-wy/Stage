@@ -124,11 +124,11 @@ Examples:
     sys.path.insert(0, str(Path(__file__).parent / "src"))
     _load_env()
 
-    from openagents_orchestration.core.state_board import Budget
-    from openagents_orchestration.projects.global_orchestrator import (
+    from openagents_orchestration.runtime.global_orchestrator import (
         GlobalOrchestrator,
     )
-    from openagents_orchestration.projects.team import TeamSpec
+    from openagents_orchestration.runtime.state_board import Budget
+    from openagents_orchestration.runtime.team import TeamSpec
 
     team_specs = None
     if args.teams:

@@ -135,4 +135,3 @@ skills/case-handling-baseline-workspace/iteration-1/
 
 If quota is unavailable, stop and report that blocker.
 ```
-

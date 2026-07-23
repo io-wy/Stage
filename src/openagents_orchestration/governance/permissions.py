@@ -343,8 +343,6 @@ def _has_approval(
         return False
     if approvals.get("approved") is False:
         return False
-    if approvals.get("approval_id") or approvals.get("human_approved") is True:
-        return True
     return all(str(approvals.get(field, "")).strip() for field in required_fields)
 
 

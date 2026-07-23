@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from openagents_orchestration.core.state_board import Budget, StateBoard
 from openagents_orchestration.hooks import ContinuationHooks
 from openagents_orchestration.models.pattern import PatternOutcomeStatus
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.runtime.state_board import Budget, StateBoard
 
 
 class FakeRunner:

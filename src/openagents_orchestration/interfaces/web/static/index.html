@@ -108,6 +108,10 @@
             <span>人工介入</span>
             <strong id="humanValue">-</strong>
           </div>
+          <div>
+            <span>执行器</span>
+            <strong id="executorValue">-</strong>
+          </div>
         </section>
 
         <section class="panel view active" data-view-panel="run">
@@ -136,7 +140,19 @@
               <span>证据数量</span>
               <strong id="overviewEvidenceValue">-</strong>
             </div>
+            <div>
+              <span>执行适配器</span>
+              <strong id="adapterValue">-</strong>
+            </div>
           </div>
+        </section>
+
+        <section class="panel view active" data-view-panel="run pipeline">
+          <div class="section-head">
+            <h2>执行边界</h2>
+            <span id="actionBoundaryStatus">等待运行</span>
+          </div>
+          <div id="actionContract" class="contract-grid"></div>
         </section>
 
         <section class="panel timeline-panel view active" data-view-panel="run pipeline">

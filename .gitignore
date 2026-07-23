@@ -42,6 +42,15 @@ eval_*.log
 eval_report_*.json
 example/
 examples/
+skills/case-handling-baseline-workspace/
+
+# Generated reports and local browser test artifacts
+docs/reports/
+.playwright-mcp/
+
+# Local screenshots / design references
+stage-console-*.png
+newapi-reference.png
 
 
 # Package build

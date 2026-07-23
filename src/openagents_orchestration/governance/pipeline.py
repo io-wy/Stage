@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Protocol
@@ -21,7 +21,12 @@ from openagents_orchestration.governance.domain import (
     apply_domain_profile,
 )
 from openagents_orchestration.governance.evidence import build_public_evidence_summary
-from openagents_orchestration.governance.models import CaseAuditEvent, EvidenceEntry
+from openagents_orchestration.governance.models import (
+    ActionPlan,
+    ActionResult,
+    CaseAuditEvent,
+    EvidenceEntry,
+)
 from openagents_orchestration.governance.permissions import (
     PermissionCheckResult,
     PermissionEngine,
@@ -270,6 +275,12 @@ class StageGovernancePipeline:
         domain_profile = self._domain_resolver.resolve(routing_text)
         governance_frame = apply_domain_profile(raw_intent_frame, domain_profile)
         route_plan = self._router.plan(governance_frame)
+        action_plan = _stamp_action_plan(
+            route_plan.action_plan,
+            case_id=case_id,
+            run_id=run_id,
+        )
+        route_plan = replace(route_plan, action_plan=action_plan)
         permission_policy = PermissionPolicy.from_overrides(
             required_fields=domain_profile.permission_required_fields,
             privileged_action_markers=domain_profile.permission_action_markers,
@@ -295,6 +306,11 @@ class StageGovernancePipeline:
             output=backend_output,
             approvals=approvals,
             policy=permission_policy,
+        )
+        action_result = _action_result_from_backend(
+            backend_output,
+            action_plan=action_plan,
+            executor=backend.execution_mode,
         )
         permission_result = merge_permission_results(
             permission_preflight_result,
@@ -358,6 +374,8 @@ class StageGovernancePipeline:
             route_plan=route_plan,
             permission_preflight_result=permission_preflight_result,
             permission_postcheck_result=permission_postcheck_result,
+            action_plan=action_plan,
+            action_result=action_result,
             evidence_entries=evidence_entries,
             claim_trace=claim_trace,
             safety_result=safety_result,
@@ -374,6 +392,8 @@ class StageGovernancePipeline:
             "domain": domain_profile.to_dict(),
             "governance_frame": governance_frame.to_dict(),
             "route": route_plan.to_dict(),
+            "action_plan": action_plan.model_dump(),
+            "action_result": action_result.model_dump(),
             "policy": {
                 "permission": permission_policy.to_dict(),
                 "safety_forbidden_patterns": list(
@@ -424,6 +444,61 @@ class StageGovernancePipeline:
             governance_payload=governance_payload,
             audit_events=audit_events,
         )
+
+
+def _stamp_action_plan(
+    action_plan: ActionPlan | None,
+    *,
+    case_id: str,
+    run_id: str,
+) -> ActionPlan:
+    if action_plan is None:
+        return ActionPlan(case_id=case_id, run_id=run_id)
+    return action_plan.model_copy(update={"case_id": case_id, "run_id": run_id})
+
+
+def _action_result_from_backend(
+    backend_output: dict[str, Any],
+    *,
+    action_plan: ActionPlan,
+    executor: str,
+) -> ActionResult:
+    raw = backend_output.get("action_result")
+    if isinstance(raw, dict):
+        return ActionResult(
+            action_id=str(raw.get("action_id") or action_plan.action_id),
+            executor=str(raw.get("executor") or action_plan.executor or executor),
+            executed=bool(raw.get("executed", False)),
+            actions_taken=[
+                str(item) for item in raw.get("actions_taken", []) if str(item).strip()
+            ],
+            side_effects=[
+                str(item) for item in raw.get("side_effects", []) if str(item).strip()
+            ],
+            external_refs={
+                str(key): str(value)
+                for key, value in dict(raw.get("external_refs", {})).items()
+            },
+            verification_claims=[
+                str(item)
+                for item in raw.get("verification_claims", [])
+                if str(item).strip()
+            ],
+            errors=[str(item) for item in raw.get("errors", []) if str(item).strip()],
+            metadata=dict(raw.get("metadata", {})),
+        )
+    return ActionResult(
+        action_id=action_plan.action_id,
+        executor=action_plan.executor or executor,
+        executed=False,
+        actions_taken=[
+            str(action)
+            for action in backend_output.get("actions", [])
+            if str(action).strip() and str(action).strip() != "answer_user"
+        ],
+        errors=[],
+        metadata={"source": "backend_output_default"},
+    )
 
 
 def _build_evidence_entries(
@@ -713,6 +788,8 @@ def _append_governance_events(
     route_plan: GovernancePlan,
     permission_preflight_result: PermissionCheckResult,
     permission_postcheck_result: PermissionCheckResult,
+    action_plan: ActionPlan,
+    action_result: ActionResult,
     evidence_entries: list[EvidenceEntry],
     claim_trace: list[ClaimTraceEntry],
     safety_result: SafetyScanResult,
@@ -761,6 +838,15 @@ def _append_governance_events(
         CaseAuditEvent(
             case_id=case_id,
             run_id=run_id,
+            event_type="action_planned",
+            payload=action_plan.model_dump(),
+        )
+    )
+    event_types.append("action_planned")
+    audit_store.append(
+        CaseAuditEvent(
+            case_id=case_id,
+            run_id=run_id,
             event_type="permission_preflight_checked",
             payload=permission_preflight_result.to_dict(),
         )
@@ -775,6 +861,15 @@ def _append_governance_events(
         )
     )
     event_types.append("permission_postcheck_checked")
+    audit_store.append(
+        CaseAuditEvent(
+            case_id=case_id,
+            run_id=run_id,
+            event_type="action_result_recorded",
+            payload=action_result.model_dump(),
+        )
+    )
+    event_types.append("action_result_recorded")
     for entry in evidence_entries:
         audit_store.append(
             CaseAuditEvent(

@@ -26,6 +26,8 @@ class GovernanceDomainProfile:
     human_handoff_policy: str = "ask_if_needed"
     verifier_profile: str = "service_desk"
     ambiguity_notes: list[str] | None = None
+    execution_adapter: str = ""
+    adapter_tools: list[str] | None = None
     permission_required_fields: list[str] | None = None
     permission_action_markers: list[str] | None = None
     safety_forbidden_patterns: list[str] | None = None
@@ -44,6 +46,8 @@ class GovernanceDomainProfile:
             "human_handoff_policy": self.human_handoff_policy,
             "verifier_profile": self.verifier_profile,
             "ambiguity_notes": list(self.ambiguity_notes or []),
+            "execution_adapter": self.execution_adapter,
+            "adapter_tools": list(self.adapter_tools or []),
             "permission_required_fields": list(self.permission_required_fields or []),
             "permission_action_markers": list(self.permission_action_markers or []),
             "safety_forbidden_patterns": list(self.safety_forbidden_patterns or []),
@@ -71,9 +75,9 @@ class GovernanceDomainResolver:
     def resolve(self, objective: str) -> GovernanceDomainProfile:
         text = objective.lower()
         best_profile = GovernanceDomainProfile()
-        best_score = 0
+        best_score: tuple[int, int] = (0, 0)
         for rule in self._rules:
-            score = _service_keyword_score(text, rule.keywords)
+            score = _domain_rule_score(text, rule)
             if score > best_score:
                 best_score = score
                 best_profile = rule.profile
@@ -101,6 +105,11 @@ def apply_domain_profile(
         human_handoff_policy=profile.human_handoff_policy,
         verifier_profile=profile.verifier_profile,
         ambiguity_notes=list(profile.ambiguity_notes or frame.ambiguity_notes),
+        execution_adapter=profile.execution_adapter or frame.execution_adapter,
+        adapter_tools=list(profile.adapter_tools or frame.adapter_tools),
+        permission_required_fields=list(
+            profile.permission_required_fields or frame.permission_required_fields
+        ),
     )
 
 
@@ -111,6 +120,26 @@ def _max_risk(left: str, right: str) -> str:
         "privileged_action": 2,
     }
     return left if order.get(left, 0) >= order.get(right, 0) else right
+
+
+def _risk_rank(risk_class: str) -> int:
+    order = {
+        "normal": 0,
+        "sensitive": 1,
+        "privileged_action": 2,
+    }
+    return order.get(risk_class, 0)
+
+
+def _domain_rule_score(text: str, rule: GovernanceDomainRule) -> tuple[int, int]:
+    keyword_score = _service_keyword_score(text, rule.keywords)
+    action_score = _service_keyword_score(
+        text, rule.profile.permission_action_markers or []
+    )
+    weighted_score = keyword_score + (action_score * 3)
+    if weighted_score == 0:
+        return 0, 0
+    return weighted_score, _risk_rank(rule.profile.risk_class)
 
 
 def _matches_service_keywords(text: str, keywords: list[str]) -> bool:
@@ -176,6 +205,8 @@ def _profile_from_mapping(raw: dict[str, Any]) -> GovernanceDomainProfile:
         human_handoff_policy=str(raw.get("human_handoff_policy", "ask_if_needed")),
         verifier_profile=str(raw.get("verifier_profile", "service_desk")),
         ambiguity_notes=[str(item) for item in raw.get("ambiguity_notes", [])],
+        execution_adapter=str(raw.get("execution_adapter", "")),
+        adapter_tools=[str(item) for item in raw.get("adapter_tools", [])],
         permission_required_fields=[
             str(item) for item in raw.get("permission_required_fields", [])
         ],

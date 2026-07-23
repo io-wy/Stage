@@ -42,7 +42,6 @@ class ToolState:
 
 async def _orig_zombie(params: dict, ctx: dict, state: ToolState) -> str:
     """Simulates a tool invoke that blocks until shutdown in the worker thread."""
-    tid = threading.get_ident()
     call_no: int = params["call_no"]
     state.worker_started.add(call_no)
     try:
@@ -73,7 +72,7 @@ async def _sdk_wait_for_tool(call_no: int, state: ToolState, timeout: float) -> 
             _thread_safe_invoke(call_no, state),
             timeout=timeout,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return "TIMEOUT"
 
 
@@ -141,8 +140,8 @@ async def main() -> None:
     try:
         fast_result = await asyncio.wait_for(_fast_tool(), timeout=2.0)
         print(f"Fast tool returned in {time.monotonic() - start:.2f}s: {fast_result!r}")
-    except asyncio.TimeoutError:
-        print(f"Fast tool TIMED OUT after 2s (thread pool saturated by zombies)")
+    except TimeoutError:
+        print("Fast tool TIMED OUT after 2s (thread pool saturated by zombies)")
 
     print()
     print("Cleaning up: forcing all zombies to finish for process exit...")

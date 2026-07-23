@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from openagents_orchestration.governance.permissions import PermissionEngine
+from openagents_orchestration.governance.domain import (
+    GovernanceDomainResolver,
+    apply_domain_profile,
+)
+from openagents_orchestration.governance.permissions import (
+    PermissionEngine,
+    PermissionPolicy,
+)
 from openagents_orchestration.governance.router import GovernanceRouter
-from openagents_orchestration.intent_classifier import IntentFrame
+from openagents_orchestration.intent_classifier import IntentClassifier, IntentFrame
 
 
 def _frame(
@@ -46,6 +53,67 @@ def test_permission_preflight_requires_human_for_privileged_action() -> None:
     assert result.decisions[0].capability == "privileged_action"
     assert result.decisions[0].decision == "needs_human"
     assert result.decisions[0].required_fields == ["approver", "target", "scope"]
+
+
+def test_permission_preflight_requires_human_for_chinese_overleaf_change() -> None:
+    prompt = "帮我把 Overleaf 管理配置改一下，审批人和范围后面补。"
+    profile = GovernanceDomainResolver().resolve(prompt)
+    frame = apply_domain_profile(
+        IntentClassifier(llm_client=None).classify_frame(prompt),
+        profile,
+    )
+    plan = GovernanceRouter().plan(frame)
+    policy = PermissionPolicy.from_overrides(
+        required_fields=profile.permission_required_fields,
+        privileged_action_markers=profile.permission_action_markers,
+    )
+
+    result = PermissionEngine().preflight(frame, plan, prompt=prompt, policy=policy)
+
+    assert result.needs_human is True
+    assert result.decisions[0].capability == "privileged_action"
+    assert result.decisions[0].required_fields == [
+        "approver",
+        "target",
+        "scope",
+        "change_ticket",
+    ]
+
+
+def test_permission_preflight_does_not_accept_approval_id_without_scope() -> None:
+    frame = _frame()
+    plan = GovernanceRouter().plan(frame)
+
+    result = PermissionEngine().preflight(
+        frame,
+        plan,
+        prompt="Please grant maintainer permission with admin access.",
+        approvals={"approval_id": "approval-1"},
+    )
+
+    assert result.passed is False
+    assert result.needs_human is True
+    assert result.decisions[0].required_fields == ["approver", "target", "scope"]
+
+
+def test_permission_preflight_allows_complete_approval_fields() -> None:
+    frame = _frame()
+    plan = GovernanceRouter().plan(frame)
+
+    result = PermissionEngine().preflight(
+        frame,
+        plan,
+        prompt="Please grant maintainer permission with admin access.",
+        approvals={
+            "approval_id": "approval-1",
+            "approver": "ops-owner",
+            "target": "sastoj",
+            "scope": "maintainer",
+        },
+    )
+
+    assert result.passed is True
+    assert result.needs_human is False
 
 
 def test_permission_preflight_allows_read_only_retrieval() -> None:

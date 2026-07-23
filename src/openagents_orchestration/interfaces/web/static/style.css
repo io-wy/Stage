@@ -307,6 +307,40 @@ label {
   overflow-wrap: anywhere;
 }
 
+.contract-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+  gap: 10px;
+}
+
+.contract-card {
+  min-width: 0;
+  min-height: 116px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 12px;
+}
+
+.contract-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.contract-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.contract-card div {
+  margin-top: 2px;
+}
+
 .row {
   display: grid;
   grid-template-columns: 1fr 92px;
@@ -376,7 +410,7 @@ label {
 
 .decision {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
   overflow: hidden;
   background: var(--panel-solid);
   box-shadow: var(--shadow);

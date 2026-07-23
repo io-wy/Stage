@@ -116,8 +116,8 @@ class EvalHarness(abc.ABC):
         """
         import asyncio
 
-        from openagents_orchestration.core.runner import OrchestratorRunner
-        from openagents_orchestration.core.state_board import Budget
+        from openagents_orchestration.runtime.runner import OrchestratorRunner
+        from openagents_orchestration.runtime.state_board import Budget
 
         runner = OrchestratorRunner(config_path=str(self.config_path))
 

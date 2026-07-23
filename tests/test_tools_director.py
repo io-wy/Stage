@@ -8,13 +8,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openagents.errors.exceptions import PermanentToolError
 
-from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.models.pattern import (
     PatternError,
     PatternOutcome,
     PatternOutcomeStatus,
 )
 from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.runtime.state_board import StateBoard
 from openagents_orchestration.tools.director.ask_human import AskHumanTool
 from openagents_orchestration.tools.director.decompose import DecomposeTool
 from openagents_orchestration.tools.director.finalize import FinalizeTool

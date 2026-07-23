@@ -83,7 +83,7 @@ async def case_lock_held_on_main() -> None:
         try:
             await asyncio.wait_for(lock.acquire(), timeout=0.2)
             return "acquired"
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return "timeout (contended, no bomb)"
         except RuntimeError as exc:
             print(f"[Lock] acquire raised: {type(exc).__name__}: {exc}")

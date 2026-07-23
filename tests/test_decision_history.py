@@ -1,7 +1,7 @@
 """Tests for DecisionHistory — Director feedback loop."""
 from __future__ import annotations
 
-from openagents_orchestration.core.decision_history import (
+from openagents_orchestration.runtime.decision_history import (
     DecisionHistory,
     DecisionRecord,
 )

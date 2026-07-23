@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import pytest
 
-from openagents_orchestration.core.state_board import Budget
 from openagents_orchestration.models.delivery import DeliveryReport, TaskResult
-from openagents_orchestration.projects.global_orchestrator import GlobalOrchestrator
-from openagents_orchestration.projects.project import Project, ProjectStatus
-from openagents_orchestration.projects.team import TeamSpec
+from openagents_orchestration.runtime.global_orchestrator import GlobalOrchestrator
+from openagents_orchestration.runtime.project import Project, ProjectStatus
+from openagents_orchestration.runtime.state_board import Budget
+from openagents_orchestration.runtime.team import TeamSpec
 
 
 class _FakeRunner:
@@ -35,7 +35,7 @@ class _FakeRunner:
 
 @pytest.fixture
 def patched_runner(monkeypatch):
-    from openagents_orchestration.projects import global_orchestrator as go_mod
+    from openagents_orchestration.runtime import global_orchestrator as go_mod
 
     monkeypatch.setattr(go_mod, "OrchestratorRunner", _FakeRunner)
     return _FakeRunner
@@ -169,8 +169,8 @@ async def test_gap_explicit_project_id_collision_clobbers_previous(tmp_path, pat
 
 
 async def test_gap_teams_created_but_live_objects_discarded(tmp_path):
-    """``create_project(team_specs=...)`` builds live ``Team`` objects (each with
-    a SubStateBoard) but keeps only ``team.to_dict()`` in metadata — the live
+    """``create_project(team_specs=...)`` builds live ``Team`` objects but keeps
+    only ``team.to_dict()`` in metadata — the live
     objects are discarded, so teams can never be scheduled or stopped. The code
     comment even admits 'Project doesn't have teams dict yet'."""
     go = GlobalOrchestrator(tmp_path / "agent.json")

@@ -14,7 +14,7 @@ from typing import Any
 # Ensure src/ is on path when run from repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from openagents_orchestration.core.runner import OrchestratorRunner
+from openagents_orchestration.runtime.runner import OrchestratorRunner
 
 
 @dataclass

@@ -12,9 +12,9 @@ import re
 from pathlib import Path
 from typing import Any
 
-from openagents_orchestration.core.decision_history import DecisionRecord
-from openagents_orchestration.core.state_board import StateBoard
 from openagents_orchestration.models.pattern import PatternOutcomeStatus
+from openagents_orchestration.runtime.decision_history import DecisionRecord
+from openagents_orchestration.runtime.state_board import StateBoard
 from openagents_orchestration.utils.agent_id import infer_task_id
 from openagents_orchestration.utils.runtime_compat import extract_result_error_message
 

@@ -21,7 +21,11 @@ _TOKEN = re.compile(r"[A-Za-z0-9]+|[一-鿿]+")
 ENV_EMBED_BASE = "RAG_EMBED_BASE"
 ENV_EMBED_API_KEY = "RAG_EMBED_API_KEY"
 ENV_EMBED_MODEL = "RAG_EMBED_MODEL"
+ENV_OLLAMA_BASE = "RAG_OLLAMA_BASE"
+ENV_OLLAMA_MODEL = "RAG_OLLAMA_MODEL"
 _DEFAULT_MODEL = "text-embedding-3-small"
+_DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434"
+_DEFAULT_OLLAMA_MODEL = "nomic-embed-text"
 
 
 @runtime_checkable
@@ -103,3 +107,56 @@ class HttpxEmbeddingClient:
             return [list(map(float, it["embedding"])) for it in items]
         except (KeyError, TypeError, ValueError) as exc:
             raise RuntimeError(f"malformed embedding API response: {exc}") from exc
+
+
+class OllamaEmbeddingClient:
+    """Ollama 原生 /api/embed。用于本地离线 embedding,避免付费远程 API。"""
+
+    def __init__(
+        self,
+        base: str | None = None,
+        model: str | None = None,
+        timeout: float = 60.0,
+        batch_size: int = 16,
+    ):
+        self.base = (base or os.environ.get(ENV_OLLAMA_BASE, _DEFAULT_OLLAMA_BASE)).rstrip(
+            "/"
+        )
+        self.model = model or os.environ.get(ENV_OLLAMA_MODEL, _DEFAULT_OLLAMA_MODEL)
+        self.timeout = timeout
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        self.batch_size = batch_size
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            vectors: list[list[float]] = []
+            for i in range(0, len(texts), self.batch_size):
+                batch = texts[i : i + self.batch_size]
+                vectors.extend(await self._embed_batch(client, batch))
+            return vectors
+
+    async def _embed_batch(self, client, texts: list[str]) -> list[list[float]]:
+        payload = {"model": self.model, "input": texts}
+        try:
+            resp = await client.post(f"{self.base}/api/embed", json=payload)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"ollama embedding request failed: {exc}") from exc
+        data = resp.json()
+        try:
+            embeddings = data["embeddings"]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"ollama embedding response missing 'embeddings': {list(data.keys())}"
+            ) from exc
+        if len(embeddings) != len(texts):
+            raise RuntimeError(
+                f"ollama embedding returned {len(embeddings)} vectors for {len(texts)} texts"
+            )
+        try:
+            return [list(map(float, item)) for item in embeddings]
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"malformed ollama embedding response: {exc}") from exc

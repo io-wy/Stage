@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from openagents_orchestration.core.agent_loader import load_agent_specs
+from openagents_orchestration.runtime.agent_loader import load_agent_specs
 
 # ---------------------------------------------------------------------------
 # Helpers

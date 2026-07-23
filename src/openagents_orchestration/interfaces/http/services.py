@@ -15,6 +15,9 @@ from openagents_orchestration.governance.feedback import (
     CaseFeedbackRecord,
     write_feedback_artifacts,
 )
+from openagents_orchestration.governance.intent_llm import (
+    build_governance_intent_classifier,
+)
 from openagents_orchestration.governance.models import CaseAuditEvent
 from openagents_orchestration.governance.pipeline import StageGovernancePipeline
 from openagents_orchestration.governance.router import GovernancePlan
@@ -244,39 +247,20 @@ def get_run_audit(run_key: str, output_root: str | None = None) -> list[AuditEve
 
 
 def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
-    from eval.case_handling.stage_governance_grading import extract_case_prompt
-    from eval.case_handling.stage_governance_runner import load_hard_v2_eval_specs
-
     output_root = _resolve_path(request.output_root, DEFAULT_OUTPUT_ROOT / "live-runs")
     output_root.mkdir(parents=True, exist_ok=True)
     prompt = request.service_request or request.prompt or ""
-    eval_id = request.eval_id if request.eval_id is not None else -1
     eval_name = "service-governance-request"
-    if request.eval_id is not None:
-        specs = load_hard_v2_eval_specs(DEFAULT_EVALS_JSON, eval_ids=[request.eval_id])
-        if not specs:
-            raise ValueError(f"demo case not found: {request.eval_id}")
-        spec = specs[0]
-        prompt = prompt or spec.prompt
-        eval_name = spec.eval_name
     if not prompt.strip():
         raise ValueError("service_request is required")
 
-    routing_prompt = extract_case_prompt(prompt)
-    run_name = (
-        f"eval-{eval_id}-{eval_name}"
-        if eval_id >= 0
-        else f"service-{_text_digest(routing_prompt)}-{int(time())}"
-    )
+    routing_prompt = _extract_case_prompt(prompt)
+    run_name = f"service-{_text_digest(routing_prompt)}-{int(time())}"
     run_dir = output_root / run_name
     outputs_dir = run_dir / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
-    case_id = f"web-{eval_id}" if eval_id >= 0 else f"service-{_text_digest(routing_prompt)}"
-    run_id = (
-        f"web-governance-{eval_id}"
-        if eval_id >= 0
-        else f"web-governance-{_text_digest(run_name)}"
-    )
+    case_id = f"service-{_text_digest(routing_prompt)}"
+    run_id = f"web-governance-{_text_digest(run_name)}"
     audit_path = run_dir / "audit.jsonl"
     governance_path = run_dir / "governance.json"
     case_result_path = outputs_dir / "case_result.json"
@@ -295,7 +279,10 @@ def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
         if request.governance_pack_paths
         else GovernanceDomainResolver()
     )
-    pipeline_result = StageGovernancePipeline(domain_resolver=domain_resolver).run(
+    pipeline_result = StageGovernancePipeline(
+        intent_classifier=build_governance_intent_classifier(),
+        domain_resolver=domain_resolver,
+    ).run(
         prompt=prompt,
         routing_prompt=routing_prompt,
         case_id=case_id,
@@ -568,6 +555,17 @@ def _public_rag_refusal(refusal_reason: str) -> str:
     if refusal_reason == "no retrieval evidence available":
         return "没有检索到足够公开证据，不能直接闭环。"
     return refusal_reason
+
+
+def _extract_case_prompt(prompt: str) -> str:
+    marker = "Case:"
+    if marker not in prompt:
+        return prompt.strip()
+    case_text = prompt.split(marker, 1)[1].strip()
+    for stop_marker in ["Use only", "Produce the required"]:
+        if stop_marker in case_text:
+            case_text = case_text.split(stop_marker, 1)[0].strip()
+    return case_text or prompt.strip()
 
 
 def _default_kb_path(wiki_path: Path, embedding: EmbeddingMode) -> Path:

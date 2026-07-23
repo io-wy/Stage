@@ -24,10 +24,10 @@ from unittest.mock import patch
 
 import pytest
 
-from openagents_orchestration.core.runner import OrchestratorRunner, RunnerDeps
-from openagents_orchestration.core.state_board import Budget, StateBoard, TaskStatus
 from openagents_orchestration.models.pattern import PatternOutcomeStatus
 from openagents_orchestration.models.task import TaskGraph, TaskNode
+from openagents_orchestration.runtime.runner import OrchestratorRunner, RunnerDeps
+from openagents_orchestration.runtime.state_board import Budget, StateBoard, TaskStatus
 from openagents_orchestration.utils.agent_id import infer_task_id
 
 

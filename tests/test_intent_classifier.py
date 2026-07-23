@@ -92,6 +92,17 @@ async def test_l1_keyword_rules():
     mock_llm.generate.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_l1_keyword_rules_do_not_match_substrings():
+    classifier = IntentClassifier(llm_client=None)
+
+    verification = await classifier.classify("send a verification SMS")
+    configuration = await classifier.classify("change NUT configuration")
+
+    assert verification.task_type == "unknown"
+    assert configuration.task_type == "unknown"
+
+
 # ── L3 LLM call ─────────────────────────────────────────────────────────────
 
 
@@ -120,6 +131,29 @@ async def test_l3_llm_call():
     assert result.reason == "System administration task"
     assert result.source == "L3_llm"
 
+    mock_llm.generate.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_classify_frame_async_uses_llm_for_semantic_service_request():
+    schema = IntentSchema(
+        task_type="shell",
+        complexity="complex",
+        external=["lark"],
+        priority="normal",
+        confidence=0.88,
+        reason="用户请求执行权限类操作，需要治理层继续判断。",
+    )
+    mock_llm = _make_mock_llm(schema)
+    classifier = IntentClassifier(llm_client=mock_llm)
+
+    frame = await classifier.classify_frame_async("帮我开一下文档编辑权限，审批稍后补。")
+
+    assert frame.task_type == "shell"
+    assert frame.complexity == "complex"
+    assert frame.external == ["lark"]
+    assert frame.source == "L3_llm"
+    assert frame.reason == "用户请求执行权限类操作，需要治理层继续判断。"
     mock_llm.generate.assert_awaited_once()
 
 
@@ -174,15 +208,19 @@ async def test_l4_feedback_overrides_cache():
 
 @pytest.mark.asyncio
 async def test_llm_failure_fallback():
-    """When LLM raises, structured_generate raises and classify has no try/except."""
+    """When LLM raises, classify returns a controlled governance fallback."""
     mock_llm = AsyncMock()
     mock_llm.generate = AsyncMock(side_effect=RuntimeError("LLM timeout"))
     classifier = IntentClassifier(llm_client=mock_llm)
 
     obj = "Some obscure task that needs LLM"
-    # classify() does NOT wrap the LLM call in try/except, so exception propagates
-    with pytest.raises(RuntimeError, match="LLM timeout"):
-        await classifier.classify(obj)
+    result = await classifier.classify(obj)
+
+    assert result.task_type == "unknown"
+    assert result.complexity == "medium"
+    assert result.confidence == 0.0
+    assert result.source == "intent_llm_error"
+    assert result.reason == "语义模型暂不可用，已使用确定性兜底"
 
 
 # ── confidence clamping ─────────────────────────────────────────────────────
@@ -240,7 +278,7 @@ async def test_no_llm_client_fallback():
     assert result.complexity == "medium"
     assert result.confidence == 0.0
     assert result.source == "fallback"
-    assert result.reason == "No LLM client available"
+    assert result.reason == "规则未命中，已使用确定性兜底"
 
 
 # ── cache stores L1 results ───────────────────────────────────────────────────

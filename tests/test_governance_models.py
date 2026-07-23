@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from openagents_orchestration.governance.models import (
+    ActionPlan,
+    ActionResult,
     CaseAuditEvent,
     CaseRecord,
     CaseRunRecord,
@@ -12,6 +14,39 @@ from openagents_orchestration.governance.models import (
     ToolInvocationRecord,
     VerificationFinding,
 )
+
+
+def test_action_models_capture_governed_execution_contract() -> None:
+    plan = ActionPlan(
+        case_id="case-1",
+        run_id="run-1",
+        action_type="grant_gitlab_role",
+        executor="claude_code",
+        adapter_id="claude_code_gh_repo_permission",
+        adapter_tools=["claude_code", "gh-cli"],
+        side_effect_level="privileged_write",
+        allowed_actions=["prepare_change"],
+        forbidden_actions=["grant_without_approval"],
+        required_approval_fields=["approver", "target", "scope", "ticket_id"],
+        required_evidence=["source", "approval_record"],
+        verify_requirements=["confirm_project_member_role"],
+        rollback_plan=["revoke_role"],
+    )
+    result = ActionResult(
+        action_id=plan.action_id,
+        executor=plan.executor,
+        executed=False,
+        actions_taken=[],
+        errors=["missing ticket_id"],
+    )
+
+    assert plan.side_effect_level == "privileged_write"
+    assert plan.adapter_id == "claude_code_gh_repo_permission"
+    assert plan.adapter_tools == ["claude_code", "gh-cli"]
+    assert "ticket_id" in plan.required_approval_fields
+    assert result.action_id == plan.action_id
+    assert result.executed is False
+    assert result.errors == ["missing ticket_id"]
 
 
 def test_governance_models_round_trip() -> None:

@@ -60,6 +60,36 @@ class ToolInvocationRecord(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class ActionPlan(BaseModel):
+    action_id: str = Field(default_factory=lambda: str(uuid4()))
+    case_id: str
+    run_id: str
+    action_type: str = "answer_or_handoff"
+    executor: str = "noop"
+    adapter_id: str = ""
+    adapter_tools: list[str] = Field(default_factory=list)
+    side_effect_level: str = "read_only"
+    allowed_actions: list[str] = Field(default_factory=list)
+    forbidden_actions: list[str] = Field(default_factory=list)
+    required_approval_fields: list[str] = Field(default_factory=list)
+    required_evidence: list[str] = Field(default_factory=list)
+    verify_requirements: list[str] = Field(default_factory=list)
+    rollback_plan: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ActionResult(BaseModel):
+    action_id: str
+    executor: str
+    executed: bool = False
+    actions_taken: list[str] = Field(default_factory=list)
+    side_effects: list[str] = Field(default_factory=list)
+    external_refs: dict[str, str] = Field(default_factory=dict)
+    verification_claims: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SafetyFinding(BaseModel):
     finding_id: str = Field(default_factory=lambda: str(uuid4()))
     case_id: str

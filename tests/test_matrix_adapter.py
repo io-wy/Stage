@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openagents_orchestration.im_adapters.matrix import MatrixAdapter
 from openagents_orchestration.models.delivery import DeliveryReport
-from openagents_orchestration.projects.global_orchestrator import GlobalOrchestrator
+from openagents_orchestration.runtime.global_orchestrator import GlobalOrchestrator
 
 
 class FakeRoom:
@@ -94,7 +94,7 @@ class TestMatrixAdapter:
         adapter._get_orchestrator("!other:room").human_channel.ask(
             project_id="!other:room", from_agent="reviewer", question="Edge case?",
         )
-        await adapter._poll_human_questions()
+        await adapter._poll_human_questions_once()
         call = adapter._send_text.call_args_list[0]
         assert call[0][0] == "!other:room"
         assert "Edge case?" in call[0][1]
@@ -104,7 +104,7 @@ class TestMatrixAdapter:
         """No spurious output when there are no pending questions."""
         adapter._get_orchestrator("!test:example.org").human_channel._questions.clear()
         adapter._get_orchestrator("!other:room").human_channel._questions.clear()
-        await adapter._poll_human_questions()
+        await adapter._poll_human_questions_once()
         assert not adapter._send_text.called
 
     def test_room_work_dir_isolation(self) -> None:

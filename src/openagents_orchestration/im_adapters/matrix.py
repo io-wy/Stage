@@ -21,10 +21,10 @@ from pathlib import Path
 
 from nio import AsyncClient, MatrixRoom, RoomMessageText
 
-from openagents_orchestration.core.state_board import Budget
-from openagents_orchestration.projects.global_orchestrator import (
+from openagents_orchestration.runtime.global_orchestrator import (
     GlobalOrchestrator,
 )
+from openagents_orchestration.runtime.state_board import Budget
 
 
 class MatrixAdapter:
@@ -79,7 +79,6 @@ class MatrixAdapter:
         if room_id not in self._orchestrators:
             self._orchestrators[room_id] = GlobalOrchestrator(
                 self._config_path,
-                enable_monitor=False,
             )
         return self._orchestrators[room_id]
 
@@ -124,16 +123,20 @@ class MatrixAdapter:
         """Periodically check for unanswered human questions across all rooms."""
         while True:
             await asyncio.sleep(self._question_poll_interval_s)
-            for room_id, orch in list(self._orchestrators.items()):
-                try:
-                    questions = orch.human_channel.get_pending_questions(
-                        project_id=room_id,
-                    )
-                    for hq in questions:
-                        text = f"Question from {hq.from_agent}:\n{hq.question}"
-                        await self._send_text(room_id, text[:4000])
-                except Exception:  # noqa: BLE001
-                    pass
+            await self._poll_human_questions_once()
+
+    async def _poll_human_questions_once(self) -> None:
+        """Check all rooms once for unanswered human questions."""
+        for room_id, orch in list(self._orchestrators.items()):
+            try:
+                questions = orch.human_channel.get_pending_questions(
+                    project_id=room_id,
+                )
+                for hq in questions:
+                    text = f"Question from {hq.from_agent}:\n{hq.question}"
+                    await self._send_text(room_id, text[:4000])
+            except Exception:  # noqa: BLE001
+                pass
 
     # -- helpers ------------------------------------------------------------
 

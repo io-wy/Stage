@@ -6,12 +6,12 @@ from __future__ import annotations
 import pytest
 from openagents.errors.exceptions import PermanentToolError
 
-from openagents_orchestration.core.state_board import (
+from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
+from openagents_orchestration.runtime.state_board import (
     AgentStatus,
     Budget,
     StateBoard,
 )
-from openagents_orchestration.models.task import TaskGraph, TaskNode, TaskStatus
 from openagents_orchestration.tools.monitor.analyze_event_pattern import (
     AnalyzeEventPatternTool,
 )

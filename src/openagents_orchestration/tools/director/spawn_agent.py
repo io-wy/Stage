@@ -15,13 +15,13 @@ from typing import Any
 from openagents.errors.exceptions import PermanentToolError
 from openagents.interfaces.tool import ToolExecutionSpec, ToolPlugin
 
-from openagents_orchestration.core.agent_loader import (
+from openagents_orchestration.models.task import TaskStatus
+from openagents_orchestration.runtime.agent_loader import (
     AgentSpecError,
     _load_json,
     compile_one_spec,
 )
-from openagents_orchestration.core.state_board import AgentStatus
-from openagents_orchestration.models.task import TaskStatus
+from openagents_orchestration.runtime.state_board import AgentStatus
 from prompts.agent_constraints import CODER_CONSTRAINT, REVIEWER_CONSTRAINT
 
 

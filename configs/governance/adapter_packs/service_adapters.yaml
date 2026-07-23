@@ -1,0 +1,89 @@
+pack_id: service_governed_adapters
+version: 0.1.0
+adapters:
+  - id: claude_code_lark_doc_permission
+    executor: claude_code
+    tools:
+      - claude_code
+      - lark-cli
+      - lark-drive
+    supports:
+      - document_permission_inspect
+      - document_permission_grant
+      - document_permission_revoke
+    side_effect_level: privileged_write
+    required_fields:
+      - document_url
+      - target_user
+      - permission_level
+      - approver
+      - ticket_id
+    allowed_actions:
+      - inspect_current_permission
+      - prepare_permission_change
+      - apply_approved_permission_change
+      - verify_permission_state
+    forbidden_actions:
+      - share_public_link_without_approval
+      - grant_owner_without_explicit_scope
+      - bypass_stage_permission_gate
+    postcheck:
+      - verify_permission_state
+      - record_external_ref
+      - redact_sensitive_refs
+
+  - id: claude_code_gh_repo_permission
+    executor: claude_code
+    tools:
+      - claude_code
+      - gh-cli
+      - gh-skill
+    supports:
+      - repo_permission_inspect
+      - repo_permission_grant
+      - repo_permission_revoke
+      - branch_protection_inspect
+    side_effect_level: privileged_write
+    required_fields:
+      - repo
+      - target_user
+      - permission_level
+      - approver
+      - ticket_id
+    allowed_actions:
+      - inspect_current_collaborators
+      - prepare_permission_change
+      - apply_approved_permission_change
+      - verify_permission_state
+    forbidden_actions:
+      - grant_admin_without_approval
+      - change_branch_protection_without_scope
+      - bypass_stage_permission_gate
+    postcheck:
+      - verify_repo_permission_state
+      - record_external_ref
+      - redact_sensitive_refs
+
+  - id: subagent_service_triage
+    executor: subagent
+    tools:
+      - subagent
+    supports:
+      - incident_triage
+      - log_summary
+      - reproduction_checklist
+    side_effect_level: sensitive_read
+    required_fields:
+      - source
+      - scope
+    allowed_actions:
+      - retrieve_evidence
+      - summarize_findings
+      - propose_next_steps
+    forbidden_actions:
+      - mutate_external_system
+      - expose_sensitive_evidence
+      - close_without_verification
+    postcheck:
+      - evidence_relevance
+      - safety_scan

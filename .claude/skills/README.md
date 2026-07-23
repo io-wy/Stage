@@ -13,6 +13,12 @@ These are auto-discovered by Claude Code when working in this directory.
 | [pitfall-journal](pitfall-journal.md) | Core | AI mistake / user correction | Record PIT entries and track evolution: pitfall -> rule -> skill |
 | [pre-verify](pre-verify.md) | Core | Create files / add imports | Pre-verify structural operations before they happen |
 | [task-orchestrator-dev](task-orchestrator-dev/SKILL.md) | Core | Changes to src/openagents_orchestration/ | Development guide for the orchestration engine itself |
+| [emil-design-eng](emil-design-eng/SKILL.md) | Design | UI polish / frontend craft | Emil Kowalski design engineering guidance for polished interfaces |
+| [apple-design](apple-design/SKILL.md) | Design | Fluid UI / materials / motion | Apple-style interface design and fluid motion principles |
+| [animation-vocabulary](animation-vocabulary/SKILL.md) | Design | Animation specs | Vocabulary for precise animation direction |
+| [find-animation-opportunities](find-animation-opportunities/SKILL.md) | Design | Motion opportunities | Find places where motion genuinely helps |
+| [improve-animations](improve-animations/SKILL.md) | Design | Animation audit | Audit motion and write improvement plans |
+| [review-animations](review-animations/SKILL.md) | Design | Animation review | Review animation quality against motion standards |
 
 ## Usage
 
@@ -24,3 +30,6 @@ relevant skill guides the workflow.
 
 - `adversarial-review`, `change-impact-scan`, `brainstorming`, `pitfall-journal`, `pre-verify`
   adapted from [Coding-Vibe-Go](https://github.com/io-wy/Coding-Vibe-Go.git)
+- `emil-design-eng`, `apple-design`, `animation-vocabulary`, `find-animation-opportunities`,
+  `improve-animations`, `review-animations`
+  copied from [emilkowalski/skills](https://github.com/emilkowalski/skills.git)

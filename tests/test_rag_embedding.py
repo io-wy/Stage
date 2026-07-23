@@ -9,6 +9,7 @@ import pytest
 from openagents_orchestration.rag.embedding import (
     HttpxEmbeddingClient,
     MockEmbeddingClient,
+    OllamaEmbeddingClient,
 )
 
 
@@ -108,3 +109,99 @@ async def test_httpx_rejects_count_mismatch(monkeypatch):
     client = HttpxEmbeddingClient(base="http://x/v1", api_key="k", model="m")
     with pytest.raises(RuntimeError, match="returned 1 vectors for 2 texts"):
         await client.embed(["a", "b"])
+
+
+async def test_ollama_parses_embed_response(monkeypatch):
+    class FakeResp:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"embeddings": [[0.1, 0.2], [0.3, 0.4]], "model": "m"}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            assert url == "http://localhost:11434/api/embed"
+            assert json == {"model": "nomic-embed-text", "input": ["a", "b"]}
+            return FakeResp()
+
+    monkeypatch.setattr(
+        "openagents_orchestration.rag.embedding.httpx.AsyncClient", FakeClient
+    )
+    client = OllamaEmbeddingClient(base="http://localhost:11434")
+    assert await client.embed(["a", "b"]) == [[0.1, 0.2], [0.3, 0.4]]
+
+
+async def test_ollama_rejects_count_mismatch(monkeypatch):
+    class FakeResp:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"embeddings": [[0.1]]}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, *a, **k):
+            return FakeResp()
+
+    monkeypatch.setattr(
+        "openagents_orchestration.rag.embedding.httpx.AsyncClient", FakeClient
+    )
+    client = OllamaEmbeddingClient(base="http://localhost:11434")
+    with pytest.raises(RuntimeError, match="returned 1 vectors for 2 texts"):
+        await client.embed(["a", "b"])
+
+
+async def test_ollama_batches_requests(monkeypatch):
+    calls: list[list[str]] = []
+
+    class FakeResp:
+        def __init__(self, count: int):
+            self.count = count
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict:
+            return {"embeddings": [[float(i)] for i in range(self.count)]}
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            calls.append(list(json["input"]))
+            return FakeResp(len(json["input"]))
+
+    monkeypatch.setattr(
+        "openagents_orchestration.rag.embedding.httpx.AsyncClient", FakeClient
+    )
+    client = OllamaEmbeddingClient(base="http://localhost:11434", batch_size=2)
+    vecs = await client.embed(["a", "b", "c", "d", "e"])
+
+    assert calls == [["a", "b"], ["c", "d"], ["e"]]
+    assert len(vecs) == 5

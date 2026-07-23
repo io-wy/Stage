@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 EmbeddingMode = Literal["ollama", "mock"]
 
@@ -49,9 +49,10 @@ class RunDemoCaseResponse(BaseModel):
 
 
 class RunGovernanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     service_request: str | None = None
     prompt: str | None = None
-    eval_id: int | None = None
     wiki_path: str
     governance_pack_paths: list[str] = Field(default_factory=list)
     approvals: dict[str, Any] = Field(default_factory=dict)

@@ -28,10 +28,7 @@ for _k, _v in {
 }.items():
     os.environ.setdefault(_k, _v)
 
-from openagents.llm.registry import create_llm_client as _orig_create_llm
 from openagents_orchestration.im_adapters.matrix import MatrixAdapter
-from openagents_orchestration.models.delivery import DeliveryReport
-from openagents_orchestration.projects.global_orchestrator import GlobalOrchestrator
 
 
 @dataclass
@@ -94,11 +91,13 @@ def mock_create_llm(*args: Any, **kw: Any) -> MockLLMClient:
 
 # Patch at the SDK registry level
 import openagents.llm.registry as llm_reg
+
 llm_reg.create_llm_client = mock_create_llm
 
 
 # Also patch the actual module the runner imports
-import openagents_orchestration.core.runner as runner_mod
+import openagents_orchestration.runtime.runner as runner_mod
+
 runner_mod.create_llm_client = mock_create_llm
 
 
@@ -161,7 +160,7 @@ async def main() -> None:
     # Fire all rooms concurrently
     result_texts = await asyncio.gather(*[
         simulate_room(adapter, rid, obj)
-        for rid, obj in zip(ROOM_IDS, OBJECTIVES)
+        for rid, obj in zip(ROOM_IDS, OBJECTIVES, strict=True)
     ])
 
     elapsed = time.time() - t0
@@ -173,7 +172,7 @@ async def main() -> None:
 
     # Results
     success = 0
-    for i, (obj, rid, text) in enumerate(zip(OBJECTIVES, ROOM_IDS, result_texts)):
+    for i, (obj, rid, text) in enumerate(zip(OBJECTIVES, ROOM_IDS, result_texts, strict=True)):
         status = "✅" if text and "Error" not in text else "❌"
         if "✅" in status:
             success += 1
@@ -193,7 +192,7 @@ async def main() -> None:
     print(f"✅ {len(instances)} unique orchestrator instances — no sharing, no lock contention")
 
     await adapter.stop()
-    print(f"\n✅ 多任务并发测试完成")
+    print("\n✅ 多任务并发测试完成")
 
 
 if __name__ == "__main__":

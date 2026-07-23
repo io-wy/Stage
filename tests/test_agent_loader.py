@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from openagents_orchestration.core.agent_loader import (
+from openagents_orchestration.runtime.agent_loader import (
     TOOL_REGISTRY,
     AgentSpecError,
     compile_one_spec,

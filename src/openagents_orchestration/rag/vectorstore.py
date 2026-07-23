@@ -23,7 +23,11 @@ class VectorStore(Protocol):
     def add(self, chunks: list[Chunk]) -> None: ...
 
     def search(
-        self, vector: list[float], top_k: int = 5, filter_tags: list[str] | None = None
+        self,
+        vector: list[float],
+        top_k: int = 5,
+        filter_tags: list[str] | None = None,
+        required_tags: list[str] | None = None,
     ) -> list[Passage]: ...
 
     def save(self, path: str | Path) -> None: ...
@@ -31,6 +35,8 @@ class VectorStore(Protocol):
     def load(self, path: str | Path) -> None: ...
 
     def __len__(self) -> int: ...
+
+    def iter_chunks(self) -> list[Chunk]: ...
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -54,6 +60,10 @@ class InMemoryCosineStore:
         with self._lock:
             return len(self._chunks)
 
+    def iter_chunks(self) -> list[Chunk]:
+        with self._lock:
+            return [c.model_copy(deep=True) for c in self._chunks]
+
     def add(self, chunks: list[Chunk]) -> None:
         with self._lock:
             for c in chunks:
@@ -69,7 +79,11 @@ class InMemoryCosineStore:
             self._chunks.extend(chunks)
 
     def search(
-        self, vector: list[float], top_k: int = 5, filter_tags: list[str] | None = None
+        self,
+        vector: list[float],
+        top_k: int = 5,
+        filter_tags: list[str] | None = None,
+        required_tags: list[str] | None = None,
     ) -> list[Passage]:
         if top_k < 1:
             raise ValueError("top_k must be >= 1")
@@ -79,13 +93,19 @@ class InMemoryCosineStore:
                     f"query vector dim {len(vector)} != store dim {self._dim}"
                 )
             want = set(filter_tags) if filter_tags else None
+            required = set(required_tags) if required_tags else None
             scored: list[Passage] = []
             for c in self._chunks:
-                if want and not (want & set(c.metadata.tags)):
+                tags = set(c.metadata.tags)
+                if want and not (want & tags):
+                    continue
+                if required and not (required <= tags):
                     continue
                 score = _cosine(vector, c.embedding or [])
+                meta = c.metadata.model_copy(deep=True)
+                meta.extra["chunk_id"] = c.id
                 scored.append(
-                    Passage(text=c.text, score=score, metadata=c.metadata.model_copy(deep=True))
+                    Passage(text=c.text, score=score, metadata=meta)
                 )
             scored.sort(key=lambda p: p.score, reverse=True)
             return scored[:top_k]
