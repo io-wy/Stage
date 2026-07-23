@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+    "lib": ["ES2022", "DOM"],
+    "module": "ES2022",
+    "noEmitOnError": true,
+    "outDir": "src/openagents_orchestration/handler/http/static",
+    "rootDir": "src/openagents_orchestration/handler/http/frontend",
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "ES2022"
+  },
+  "include": ["src/openagents_orchestration/handler/http/frontend/**/*.ts"]
+}

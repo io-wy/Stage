@@ -67,6 +67,8 @@ uv run --no-sync python scripts/stage_governance_demo.py --output-root docs/repo
 ## 本地 Web 控制台
 
 ```bash
+npm install
+npm run build:web
 PYTHONPATH=src .venv/bin/python -m openagents_orchestration.handler.http.app
 ```
 
@@ -75,5 +77,6 @@ PYTHONPATH=src .venv/bin/python -m openagents_orchestration.handler.http.app
 ## 测试
 
 ```bash
+npm run check:web
 uv run --no-sync pytest tests/test_governance_pipeline.py tests/test_stage_web_console_api.py -q
 ```

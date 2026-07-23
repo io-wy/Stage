@@ -43,6 +43,10 @@ browser
   -> browser timeline / evidence / feedback views
 ```
 
+The browser console source is TypeScript under
+`src/openagents_orchestration/handler/http/frontend/`; `npm run build:web`
+compiles it into the static JavaScript served by FastAPI.
+
 ## HTTP API
 
 - `GET /api/health`

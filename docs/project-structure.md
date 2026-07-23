@@ -26,6 +26,8 @@ src/openagents_orchestration/control/
 
 src/openagents_orchestration/handler/
   http/             产品 API 入口、HTTP DTO、静态控制台资源
+  http/frontend/    Web 控制台 TypeScript 源码
+  http/static/      FastAPI 直接服务的 CSS/HTML 和编译后 JS
 
 src/openagents_orchestration/service/
   console.py        handler/http 使用的服务门面，只聚合公开用例

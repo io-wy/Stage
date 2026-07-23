@@ -55,6 +55,7 @@ newapi-reference.png
 
 # Package build
 *.egg-info/
+node_modules/
 
 # Misc artifacts
 fallback_test_plan.json
