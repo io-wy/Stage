@@ -39,7 +39,7 @@ configs/governance/adapter_packs/
 
 src/openagents_orchestration/
   control/        产品主线：治理执行 pipeline、权限、证据、安全、闭环、审计、反馈
-  service/        HTTP 控制台的用例编排、查询、回流
+  service/        应用用例层：case 执行、RAG 查询、历史、审计、反馈回流
   handler/        产品入口：HTTP API 和静态 Web 控制台
   rag/            治理 pipeline 内部可调用的知识检索能力
   runtime/        旧编排运行时兼容层，只服务历史工具和 Matrix/agent 运行

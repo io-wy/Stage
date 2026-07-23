@@ -28,15 +28,22 @@ src/openagents_orchestration/handler/
   http/             产品 API 入口、HTTP DTO、静态控制台资源
 
 src/openagents_orchestration/service/
-  console.py        HTTP 控制台的用例编排、查询和反馈回流
+  console.py        handler/http 使用的服务门面，只聚合公开用例
+  cases.py          demo case / live governance case 执行
+  rag.py            RAG 查询服务和受治理 RAG backend
+  runs.py           run history / detail / audit 查询
+  feedback.py       反馈回流服务
+  common.py         路径、JSON、digest 等服务层通用 helper
+  settings.py       服务层默认路径和本地配置
 
 src/openagents_orchestration/pkg/
   ...               可复用的纯工具/公共模块，优先放无副作用逻辑
 ```
 
 产品请求进入 `handler/http`，再进入 `service/console.py`，最后进入
-`control/pipeline.py`。业务差异优先写到 `configs/governance/domain_packs/*.yaml`，
-不要写死在 Python 代码里。
+`service/cases.py` 或其他具体 service 模块；治理请求最终进入
+`control/pipeline.py`。业务差异优先写到
+`configs/governance/domain_packs/*.yaml`，不要写死在 Python 代码里。
 
 真实执行不另起一套平行 execution layer。Stage 复用 `control/router.py`
 里的 `GovernancePlan` 和 `control/models.py` 里的 `ActionPlan` /
