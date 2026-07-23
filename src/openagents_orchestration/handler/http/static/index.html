@@ -155,13 +155,30 @@
           <div id="actionContract" class="contract-grid"></div>
         </section>
 
-        <section class="panel timeline-panel view active" data-view-panel="run pipeline">
+        <section class="panel workflow-panel view active" data-view-panel="run pipeline">
           <div class="section-head">
-            <h2>治理节点</h2>
+            <h2>企业服务治理流</h2>
             <span id="activeCase">等待运行</span>
           </div>
-          <div id="timeline" class="timeline"></div>
-          <pre id="nodeDetails" class="details"></pre>
+          <div class="workflow-shell">
+            <div class="workflow-main">
+              <div class="workflow-legend" aria-label="节点状态说明">
+                <span><i class="state-dot info"></i>已识别</span>
+                <span><i class="state-dot ok"></i>通过</span>
+                <span><i class="state-dot warn"></i>需处理</span>
+                <span><i class="state-dot danger"></i>阻断</span>
+              </div>
+              <div id="timeline" class="workflow-canvas" aria-label="交付阶段"></div>
+            </div>
+            <aside class="node-inspector" aria-label="节点详情">
+              <div class="inspector-head">
+                <span>节点详情</span>
+                <strong id="selectedNodeTitle">等待运行</strong>
+              </div>
+              <div id="selectedNodeSummary" class="inspector-summary">提交请求后查看状态流转</div>
+              <pre id="nodeDetails" class="details"></pre>
+            </aside>
+          </div>
         </section>
 
         <section class="grid-two view active" data-view-panel="run evidence">

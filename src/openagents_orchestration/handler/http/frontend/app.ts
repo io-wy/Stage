@@ -8,7 +8,15 @@ type StageRun = ApiRecord & {
   run_key?: string;
 };
 
-type TimelineNode = [name: string, payload: ApiValue, state: string];
+type WorkflowState = "info" | "ok" | "warn" | "danger";
+
+type WorkflowNode = {
+  name: string;
+  phase: string;
+  payload: ApiValue;
+  state: WorkflowState;
+  status: string;
+};
 
 let currentRun: StageRun | null = null;
 let currentView = "run";
@@ -388,44 +396,70 @@ function contractCard(title: string, main: string, pills: string[]): string {
 
 function renderTimeline(result: StageRun): void {
   const governance = result.governance;
-  const nodes: TimelineNode[] = [
-    ["Intent", governance.intent, "info"],
-    ["Domain", governance.domain, "info"],
-    ["Route", governance.route, governance.route.needs_human ? "warn" : "ok"],
-    [
+  const nodes: WorkflowNode[] = [
+    workflowNode("Intent", "请求理解", governance.intent, "info"),
+    workflowNode("Domain", "服务域", governance.domain, "info"),
+    workflowNode(
+      "Route",
+      "路由规划",
+      governance.route,
+      governance.route.needs_human ? "warn" : "ok",
+    ),
+    workflowNode(
       "Action",
+      "执行边界",
       {
         action_plan: governance.action_plan,
         action_result: governance.action_result,
       },
       governance.action_result?.executed ? "ok" : "warn",
-    ],
-    [
+    ),
+    workflowNode(
       "Permission",
+      "交付约束",
       governance.permissions,
       governance.permissions?.combined?.needs_human ? "warn" : "ok",
-    ],
-    ["Evidence", governance.public_evidence, governance.public_evidence?.length ? "ok" : "warn"],
-    [
+    ),
+    workflowNode(
+      "Evidence",
+      "证据收集",
+      governance.public_evidence,
+      governance.public_evidence?.length ? "ok" : "warn",
+    ),
+    workflowNode(
       "Verification",
+      "证据校验",
       governance.verification,
       governance.verification?.passed ? "ok" : "danger",
-    ],
-    ["Safety", governance.safety, governance.safety?.blocked ? "danger" : "ok"],
-    [
+    ),
+    workflowNode(
+      "Safety",
+      "安全检查",
+      governance.safety,
+      governance.safety?.blocked ? "danger" : "ok",
+    ),
+    workflowNode(
       "Closure",
+      "闭环判断",
       governance.closure,
       governance.closure?.closed ? "ok" : "warn",
-    ],
-    ["Trace", governance.claim_trace, traceState(governance.claim_trace)],
-    ["Audit", governance.audit_events, governance.audit_events?.length ? "ok" : "warn"],
+    ),
+    workflowNode("Trace", "声明追踪", governance.claim_trace, traceState(governance.claim_trace)),
+    workflowNode(
+      "Audit",
+      "审计沉淀",
+      governance.audit_events,
+      governance.audit_events?.length ? "ok" : "warn",
+    ),
   ];
   $("#timeline").innerHTML = nodes
     .map(
-      ([name, payload, state], index) =>
-        `<button class="node ${state}" data-index="${index}" type="button">
-          <strong>${escapeHtml(NODE_NAMES[name] || name)}</strong>
-          <span>${escapeHtml(nodeHint(name, payload))}</span>
+      (node, index) =>
+        `<button class="node ${node.state}" data-index="${index}" type="button">
+          <span class="node-phase">${escapeHtml(node.phase)}</span>
+          <strong>${escapeHtml(NODE_NAMES[node.name] || node.name)}</strong>
+          <span class="node-hint">${escapeHtml(nodeHint(node.name, node.payload))}</span>
+          <span class="node-status">${escapeHtml(node.status)}</span>
         </button>`,
     )
     .join("");
@@ -435,20 +469,53 @@ function renderTimeline(result: StageRun): void {
         node.classList.remove("active");
       });
       button.classList.add("active");
-      renderJson($("#nodeDetails"), {
-        节点: NODE_NAMES[nodes[index][0]] || nodes[index][0],
-        数据: nodes[index][1],
-      });
+      renderWorkflowInspector(nodes[index]);
     });
   });
   document.querySelector(".node")?.classList.add("active");
+  renderWorkflowInspector(nodes[0]);
+}
+
+function workflowNode(
+  name: string,
+  phase: string,
+  payload: ApiValue,
+  state: WorkflowState,
+): WorkflowNode {
+  return {
+    name,
+    phase,
+    payload,
+    state,
+    status: stateLabel(state),
+  };
+}
+
+function renderWorkflowInspector(node: WorkflowNode): void {
+  $("#selectedNodeTitle").textContent = NODE_NAMES[node.name] || node.name;
+  $("#selectedNodeSummary").textContent = `${node.phase} · ${node.status} · ${nodeHint(node.name, node.payload)}`;
   renderJson($("#nodeDetails"), {
-    节点: NODE_NAMES[nodes[0][0]] || nodes[0][0],
-    数据: nodes[0][1],
+    交付阶段: node.phase,
+    节点: NODE_NAMES[node.name] || node.name,
+    状态: node.status,
+    数据: node.payload,
   });
 }
 
-function traceState(trace: ApiRecord[]): string {
+function stateLabel(state: WorkflowState): string {
+  if (state === "ok") {
+    return "通过";
+  }
+  if (state === "warn") {
+    return "需处理";
+  }
+  if (state === "danger") {
+    return "阻断";
+  }
+  return "已识别";
+}
+
+function traceState(trace: ApiRecord[]): WorkflowState {
   if (!trace?.length) {
     return "warn";
   }

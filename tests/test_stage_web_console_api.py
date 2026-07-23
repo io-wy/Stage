@@ -25,6 +25,9 @@ def test_stage_web_console_health_and_homepage() -> None:
     assert "caseSelect" not in page.text
     assert "/Users/io/Downloads" not in page.text
     assert "value=\"/Users/io/Downloads" not in page.text
+    assert "企业服务治理流" in page.text
+    assert "节点详情" in page.text
+    assert "交付阶段" in page.text
     assert "执行边界" in page.text
     assert "执行适配器" in page.text
     for english_label in [
