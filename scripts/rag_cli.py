@@ -1,11 +1,11 @@
 """Standalone RAG CLI.
 
 Examples:
-  PYTHONPATH=src python scripts/rag_cli.py --kb /private/tmp/sast-full-wiki-kb.json \
-    --question "SAST Link 是什么？"
+  PYTHONPATH=src python scripts/rag_cli.py --kb /private/tmp/wiki-kb.json \
+    --question "服务入口是什么？"
 
-  PYTHONPATH=src python scripts/rag_cli.py --kb /private/tmp/sast-full-wiki-kb.json \
-    --question "SAST 有几台服务器？" \
+  PYTHONPATH=src python scripts/rag_cli.py --kb /private/tmp/wiki-kb.json \
+    --question "服务需要哪些审批信息？" \
     --required-tags perm:sensitive \
     --allowed-permission-tags perm:public,perm:internal,perm:sensitive \
     --json
@@ -34,7 +34,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mode", choices=("answer", "query"), default="answer")
     parser.add_argument("--embedding", choices=("ollama", "mock"), default="ollama")
     parser.add_argument("--top-k", type=int, default=3)
-    parser.add_argument("--filter-tags", default="", help="逗号分隔,如 SAST Link")
+    parser.add_argument("--filter-tags", default="", help="逗号分隔,如 service-guide")
     parser.add_argument("--required-tags", default="", help="逗号分隔,如 perm:sensitive")
     parser.add_argument(
         "--allowed-permission-tags",

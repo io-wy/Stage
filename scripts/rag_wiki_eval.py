@@ -1,10 +1,10 @@
 """Wiki-backed RAG build / eval helper.
 
 Examples:
-  PYTHONPATH=src python scripts/rag_wiki_eval.py --wiki /Users/io/Downloads/wiki \
+  PYTHONPATH=src python scripts/rag_wiki_eval.py --wiki "${STAGE_WIKI_PATH:?set STAGE_WIKI_PATH}" \
     --kb /private/tmp/sast-wiki-kb.json
 
-  PYTHONPATH=src python scripts/rag_wiki_eval.py --wiki /Users/io/Downloads/wiki \
+  PYTHONPATH=src python scripts/rag_wiki_eval.py --wiki "${STAGE_WIKI_PATH:?set STAGE_WIKI_PATH}" \
     --question "NAS 的访问方式是什么？" --top-k 3
 """
 

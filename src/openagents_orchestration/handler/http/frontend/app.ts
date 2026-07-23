@@ -242,6 +242,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function wikiPathValue(): string | undefined {
+  const value = $<HTMLInputElement>("#wikiPath").value.trim();
+  return value || undefined;
+}
+
 async function loadHealth(): Promise<void> {
   try {
     const health = await api("/api/health");
@@ -272,14 +277,18 @@ async function runCase(): Promise<void> {
   const button = $<HTMLButtonElement>("#runCaseButton");
   setBusy(button, true, "运行中");
   try {
+    const payload: ApiRecord = {
+      service_request: $<HTMLTextAreaElement>("#serviceRequest").value,
+      embedding: $<HTMLSelectElement>("#embeddingMode").value,
+      top_k: Number($<HTMLInputElement>("#topK").value),
+    };
+    const wikiPath = wikiPathValue();
+    if (wikiPath) {
+      payload.wiki_path = wikiPath;
+    }
     const result = await api<StageRun>("/api/governance/run", {
       method: "POST",
-      body: JSON.stringify({
-        service_request: $<HTMLTextAreaElement>("#serviceRequest").value,
-        wiki_path: $<HTMLInputElement>("#wikiPath").value,
-        embedding: $<HTMLSelectElement>("#embeddingMode").value,
-        top_k: Number($<HTMLInputElement>("#topK").value),
-      }),
+      body: JSON.stringify(payload),
     });
     currentRun = result;
     renderRun(result);
@@ -522,12 +531,15 @@ async function runRag(): Promise<void> {
   const button = $<HTMLButtonElement>("#runRagButton");
   setBusy(button, true, "检索中");
   try {
-    const payload = {
-      wiki_path: $<HTMLInputElement>("#wikiPath").value,
+    const payload: ApiRecord = {
       question: $<HTMLTextAreaElement>("#ragQuestion").value,
       embedding: $<HTMLSelectElement>("#embeddingMode").value,
       top_k: Number($<HTMLInputElement>("#topK").value),
     };
+    const wikiPath = wikiPathValue();
+    if (wikiPath) {
+      payload.wiki_path = wikiPath;
+    }
     const result = await api<ApiRecord>("/api/rag/query", {
       method: "POST",
       body: JSON.stringify(payload),

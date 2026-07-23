@@ -72,7 +72,7 @@ Suggested shape:
 claude -p \
   --output-format json \
   --add-dir /Users/io/workplace/Stage \
-  --add-dir /Users/io/Downloads/wiki \
+  --add-dir "${STAGE_WIKI_PATH:?set STAGE_WIKI_PATH}" \
   --tools Read,Grep,Glob \
   --max-budget-usd 0.10 \
   "Use the skill at skills/case-handling-baseline/SKILL.md and produce the required case_result JSON for the case."

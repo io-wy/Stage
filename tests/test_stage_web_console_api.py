@@ -23,6 +23,8 @@ def test_stage_web_console_health_and_homepage() -> None:
     assert page.status_code == 200
     assert "hard-v2" not in page.text
     assert "caseSelect" not in page.text
+    assert "/Users/io/Downloads" not in page.text
+    assert "value=\"/Users/io/Downloads" not in page.text
     assert "执行边界" in page.text
     assert "执行适配器" in page.text
     for english_label in [
@@ -197,6 +199,60 @@ def test_stage_web_console_runs_service_request_without_eval_fixture(
     assert Path(payload["artifact_paths"]["governance"]).parent.name.startswith("service-")
 
 
+def test_stage_web_console_uses_configured_wiki_path_for_governance(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client = TestClient(create_app())
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "nas.md").write_text(
+        "NAS 安全访问方式 包括 统一身份认证 WebDAV 客户端",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STAGE_WIKI_PATH", str(wiki))
+
+    response = client.post(
+        "/api/governance/run",
+        json={
+            "service_request": "请说明 NAS 有哪些安全访问方式。",
+            "embedding": "mock",
+            "top_k": 1,
+            "kb_path": str(tmp_path / "kb.json"),
+            "output_root": str(tmp_path / "live-runs"),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["rag"]["wiki_path"] == str(wiki)
+    assert payload["evidence"][0]["source_ref"] == "nas.md"
+
+
+def test_stage_web_console_rejects_missing_wiki_configuration() -> None:
+    client = TestClient(create_app())
+
+    governance_response = client.post(
+        "/api/governance/run",
+        json={
+            "service_request": "请说明 NAS 有哪些安全访问方式。",
+            "embedding": "mock",
+        },
+    )
+    rag_response = client.post(
+        "/api/rag/query",
+        json={
+            "question": "NAS 飞书 注册",
+            "embedding": "mock",
+        },
+    )
+
+    assert governance_response.status_code == 400
+    assert "STAGE_WIKI_PATH" in governance_response.json()["detail"]
+    assert rag_response.status_code == 400
+    assert "STAGE_WIKI_PATH" in rag_response.json()["detail"]
+
+
 def test_stage_web_console_rejects_eval_fields_on_product_api(tmp_path: Path) -> None:
     client = TestClient(create_app())
     wiki = tmp_path / "wiki"
@@ -291,6 +347,35 @@ def test_stage_web_console_runs_mock_rag_query(tmp_path: Path) -> None:
     assert payload["chunk_count"] == 1
     assert payload["passages"][0]["source"] == "nas.md"
     assert payload["passages"][0]["score"] > 0
+
+
+def test_stage_web_console_uses_configured_wiki_path_for_rag(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    client = TestClient(create_app())
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    (wiki / "nas.md").write_text(
+        "NAS 飞书 注册 账号 WebDAV 访问 存储 服务",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("STAGE_WIKI_PATH", str(wiki))
+
+    response = client.post(
+        "/api/rag/query",
+        json={
+            "question": "NAS 飞书 注册",
+            "embedding": "mock",
+            "top_k": 1,
+            "kb_path": str(tmp_path / "kb.json"),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["wiki_path"] == str(wiki)
+    assert payload["passages"][0]["source"] == "nas.md"
 
 
 def test_stage_web_console_writes_feedback_artifacts(tmp_path: Path) -> None:

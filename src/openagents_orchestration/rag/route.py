@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from pydantic import BaseModel, Field
 
 
@@ -18,70 +20,18 @@ class RouteDecision(BaseModel):
     reason: str = ""
 
 
-_ROUTE_ALIASES: dict[str, tuple[str, ...]] = {
-    "SAST 设施指南": (
-        "服务器",
-        "nas",
-        "打印机",
-        "云打印",
-        "内网",
-        "网络",
-        "tailscale",
-        "部署",
-        "自托管",
-        "gitlab",
-        "overleaf",
-        "jellyfin",
-        "ups",
-        "101服务器",
-        "反代",
-    ),
-    "SAST 规章制度": (
-        "规章",
-        "制度",
-        "守则",
-        "规则",
-        "商业行为",
-        "冰箱",
-        "冰柜",
-    ),
-    "SAST Link": (
-        "sast link",
-        "link账号",
-        "oauth",
-        "profile",
-        "统一身份认证",
-    ),
-    "SAST FreshCup": (
-        "freshcup",
-        "新柚杯",
-        "比赛管理系统",
-    ),
-    "SAST Evento": (
-        "evento",
-        "活动辅助",
-        "活动反馈",
-    ),
-    "SAST 说明书 Public 版": (
-        "部门",
-        "软件研发部",
-        "多媒体部",
-        "电子部",
-        "办公室",
-        "外联部",
-        "科宣部",
-        "赛事部",
-        "招新",
-        "有哪些组",
-    ),
-}
+_DEFAULT_ROUTE_ALIASES: dict[str, tuple[str, ...]] = {}
 
 
 class RouteClassifier:
     """基于受控 alias 的 route classifier。"""
 
-    def __init__(self, aliases: dict[str, tuple[str, ...]] | None = None):
-        self._aliases = aliases or _ROUTE_ALIASES
+    def __init__(self, aliases: Mapping[str, Sequence[str]] | None = None):
+        source = _DEFAULT_ROUTE_ALIASES if aliases is None else aliases
+        self._aliases = {
+            route: tuple(alias for alias in route_aliases if alias)
+            for route, route_aliases in source.items()
+        }
 
     def classify(self, query: str) -> RouteDecision:
         normalized = query.lower()

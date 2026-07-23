@@ -215,6 +215,10 @@ function localizePayload(payload) {
 function errorMessage(error) {
     return error instanceof Error ? error.message : String(error);
 }
+function wikiPathValue() {
+    const value = $("#wikiPath").value.trim();
+    return value || undefined;
+}
 async function loadHealth() {
     try {
         const health = await api("/api/health");
@@ -244,14 +248,18 @@ async function runCase() {
     const button = $("#runCaseButton");
     setBusy(button, true, "运行中");
     try {
+        const payload = {
+            service_request: $("#serviceRequest").value,
+            embedding: $("#embeddingMode").value,
+            top_k: Number($("#topK").value),
+        };
+        const wikiPath = wikiPathValue();
+        if (wikiPath) {
+            payload.wiki_path = wikiPath;
+        }
         const result = await api("/api/governance/run", {
             method: "POST",
-            body: JSON.stringify({
-                service_request: $("#serviceRequest").value,
-                wiki_path: $("#wikiPath").value,
-                embedding: $("#embeddingMode").value,
-                top_k: Number($("#topK").value),
-            }),
+            body: JSON.stringify(payload),
         });
         currentRun = result;
         renderRun(result);
@@ -476,11 +484,14 @@ async function runRag() {
     setBusy(button, true, "检索中");
     try {
         const payload = {
-            wiki_path: $("#wikiPath").value,
             question: $("#ragQuestion").value,
             embedding: $("#embeddingMode").value,
             top_k: Number($("#topK").value),
         };
+        const wikiPath = wikiPathValue();
+        if (wikiPath) {
+            payload.wiki_path = wikiPath;
+        }
         const result = await api("/api/rag/query", {
             method: "POST",
             body: JSON.stringify(payload),

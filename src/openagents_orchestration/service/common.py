@@ -7,7 +7,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from openagents_orchestration.service.settings import DEFAULT_OUTPUT_ROOT, REPO_ROOT
+from openagents_orchestration.service.settings import (
+    DEFAULT_OUTPUT_ROOT,
+    REPO_ROOT,
+    WIKI_PATH_ENV_VAR,
+    configured_wiki_path,
+)
 
 
 def extract_case_prompt(prompt: str) -> str:
@@ -47,6 +52,17 @@ def resolve_required_path(value: str | Path) -> Path:
     return path
 
 
+def resolve_wiki_path(value: str | Path | None) -> Path:
+    if value is not None and str(value).strip():
+        path = resolve_path(value, Path())
+    else:
+        path = configured_wiki_path()
+        if path is None:
+            raise ValueError(f"wiki_path is required or {WIKI_PATH_ENV_VAR} must be set")
+    if not path.exists():
+        raise FileNotFoundError(f"path not found: {path}")
+    return path
+
+
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
-

@@ -22,12 +22,12 @@ from openagents_orchestration.rag import (
     OllamaEmbeddingClient,
     build_pipeline,
 )
-from openagents_orchestration.service.common import resolve_path, resolve_required_path
+from openagents_orchestration.service.common import resolve_path, resolve_wiki_path
 from openagents_orchestration.service.settings import DEFAULT_OUTPUT_ROOT
 
 
 async def query_rag(request: RagQueryRequest) -> RagQueryResponse:
-    wiki_path = resolve_required_path(request.wiki_path)
+    wiki_path = resolve_wiki_path(request.wiki_path)
     kb_path = resolve_path(
         request.kb_path,
         default_kb_path(wiki_path, request.embedding),
@@ -230,4 +230,3 @@ def _public_rag_refusal(refusal_reason: str) -> str:
 def default_kb_path(wiki_path: Path, embedding: EmbeddingMode) -> Path:
     digest = hashlib.sha1(str(wiki_path).encode("utf-8")).hexdigest()[:12]
     return DEFAULT_OUTPUT_ROOT / "cache" / f"rag-{embedding}-{digest}.json"
-

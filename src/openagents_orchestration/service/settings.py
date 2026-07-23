@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -11,5 +12,12 @@ DEFAULT_BASELINE_WORKSPACE = (
 )
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "docs" / "reports" / "stage-web-console"
 DEFAULT_FEEDBACK_ROOT = REPO_ROOT / "docs" / "reports" / "stage-feedback"
-DEFAULT_WIKI_PATH = Path("/Users/io/Downloads/wiki/SAST 设施指南")
+WIKI_PATH_ENV_VAR = "STAGE_WIKI_PATH"
 
+
+def configured_wiki_path() -> Path | None:
+    value = os.environ.get(WIKI_PATH_ENV_VAR, "").strip()
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else REPO_ROOT / path

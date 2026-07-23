@@ -53,7 +53,7 @@ class RunGovernanceRequest(BaseModel):
 
     service_request: str | None = None
     prompt: str | None = None
-    wiki_path: str
+    wiki_path: str | None = None
     governance_pack_paths: list[str] = Field(default_factory=list)
     approvals: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
@@ -111,7 +111,7 @@ class AuditEventResponse(BaseModel):
 
 
 class RagQueryRequest(BaseModel):
-    wiki_path: str
+    wiki_path: str | None = None
     question: str
     top_k: int = 3
     embedding: EmbeddingMode = "ollama"

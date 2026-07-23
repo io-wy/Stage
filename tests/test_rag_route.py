@@ -12,9 +12,21 @@ from openagents_orchestration.rag import (
     build_pipeline,
 )
 
+TEST_ROUTE_ALIASES = {
+    "SAST 设施指南": (
+        "服务器",
+        "nas",
+        "部署",
+    ),
+    "SAST 说明书 Public 版": (
+        "软件研发部",
+        "有哪些组",
+    ),
+}
+
 
 def test_route_classifier_routes_facilities_question():
-    decision = RouteClassifier().classify("SAST 有几台服务器？")
+    decision = RouteClassifier(TEST_ROUTE_ALIASES).classify("SAST 有几台服务器？")
 
     assert decision.selected_route == "SAST 设施指南"
     assert decision.filter_tags == ["SAST 设施指南"]
@@ -23,7 +35,7 @@ def test_route_classifier_routes_facilities_question():
 
 
 def test_route_classifier_routes_department_question():
-    decision = RouteClassifier().classify("软件研发部有哪些组？")
+    decision = RouteClassifier(TEST_ROUTE_ALIASES).classify("软件研发部有哪些组？")
 
     assert decision.selected_route == "SAST 说明书 Public 版"
     assert decision.filter_tags == ["SAST 说明书 Public 版"]
@@ -38,7 +50,7 @@ def test_route_classifier_falls_back_to_general():
 
 
 async def test_query_with_log_uses_route_and_records_score_breakdown():
-    pipe = build_pipeline()
+    pipe = build_pipeline(route_classifier=RouteClassifier(TEST_ROUTE_ALIASES))
     await pipe.ingest_text(
         "SAST 主要服务器有腾讯云、浪潮和 X79 三台",
         DocMetadata(source="/wiki/SAST 设施指南/docx/部署及网络拓扑.md", tags=["SAST 设施指南"]),
@@ -62,7 +74,7 @@ async def test_query_with_log_uses_route_and_records_score_breakdown():
 
 
 async def test_query_with_log_records_controlled_rewrite_without_passage_text():
-    pipe = build_pipeline()
+    pipe = build_pipeline(route_classifier=RouteClassifier(TEST_ROUTE_ALIASES))
     await pipe.ingest_text(
         "部署及网络拓扑：腾讯云、浪潮、X79",
         DocMetadata(source="/wiki/SAST 设施指南/docx/部署及网络拓扑.md", tags=["SAST 设施指南"]),

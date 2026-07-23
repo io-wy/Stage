@@ -106,6 +106,8 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/feedback", response_model=FeedbackResponse)
     def feedback(request: FeedbackRequest) -> FeedbackResponse:

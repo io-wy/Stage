@@ -21,7 +21,7 @@ from openagents_orchestration.handler.http.schemas import (
 from openagents_orchestration.service.common import (
     extract_case_prompt,
     resolve_path,
-    resolve_required_path,
+    resolve_wiki_path,
     run_key,
     text_digest,
 )
@@ -112,7 +112,7 @@ def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
     if not prompt.strip():
         raise ValueError("service_request is required")
 
-    wiki_path = resolve_required_path(request.wiki_path)
+    wiki_path = resolve_wiki_path(request.wiki_path)
     routing_prompt = extract_case_prompt(prompt)
     run_name = f"service-{text_digest(routing_prompt)}-{int(time())}"
     run_dir = output_root / run_name
@@ -186,4 +186,3 @@ def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
         case_result=case_result,
         rag=backend.last_rag_log,
     )
-
