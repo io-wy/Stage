@@ -254,6 +254,47 @@ def test_stage_web_console_rejects_missing_wiki_configuration() -> None:
     assert "STAGE_WIKI_PATH" in rag_response.json()["detail"]
 
 
+def test_stage_web_console_allows_human_only_without_wiki(tmp_path: Path) -> None:
+    client = TestClient(create_app())
+    pack = tmp_path / "human_only.yaml"
+    pack.write_text(
+        """
+pack_id: human_only
+version: 1.0.0
+rules:
+  - id: manual_triage
+    keywords: ["manual triage"]
+    profile:
+      workflow_type: service_case
+      business_process: manual_triage
+      risk_class: normal
+      backend_plan: ["human_channel"]
+      evidence_requirements: []
+      closure_policy: verify_before_close
+      human_handoff_policy: ask_if_needed
+      verifier_profile: service_desk
+""",
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/api/governance/run",
+        json={
+            "service_request": "manual triage this request with an operator",
+            "governance_pack_paths": [str(pack)],
+            "embedding": "mock",
+            "output_root": str(tmp_path / "live-runs"),
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["selected_backend"] == "human"
+    assert payload["rag"] == {}
+    assert payload["closed"] is False
+    assert payload["case_result"]["actions"] == ["create_handoff"]
+
+
 def test_stage_web_console_rejects_eval_fields_on_product_api(tmp_path: Path) -> None:
     client = TestClient(create_app())
     wiki = tmp_path / "wiki"

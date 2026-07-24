@@ -93,6 +93,64 @@ def test_stage_governance_pipeline_uses_routing_prompt_for_intent(
     )
 
 
+def test_stage_governance_pipeline_builds_evidence_from_rag_log(
+    tmp_path: Path,
+) -> None:
+    class RagLogBackend:
+        execution_mode = "test_rag_log"
+
+        def run(self, **kwargs):
+            return {
+                "closed": True,
+                "family": "knowledge",
+                "answer": "Use documented NAS access paths.",
+                "actions": ["answer_user"],
+                "evidence": [],
+                "rag_log": {
+                    "run_id": "rag-run-1",
+                    "query": "A member asks for complete safe ways to access NAS.",
+                    "retrieval": {
+                        "query": "A member asks for complete safe ways to access NAS.",
+                        "top_k": 1,
+                        "filter_tags": [],
+                        "required_tags": [],
+                        "passages": [
+                            {
+                                "rank": 1,
+                                "source": "nas.md",
+                                "score": 0.99,
+                                "tags": ["wiki", "perm:public"],
+                                "snippet": (
+                                    "complete safe ways to access NAS are documented"
+                                ),
+                                "score_breakdown": {},
+                            }
+                        ],
+                    },
+                    "answer": {
+                        "status": "answered",
+                        "answer_text": "Use documented NAS access paths.",
+                        "citations": [],
+                        "refusal_reason": "",
+                        "errors": [],
+                    },
+                    "errors": [],
+                },
+            }
+
+    result = StageGovernancePipeline().run(
+        prompt="A member asks for complete safe ways to access NAS.",
+        case_id="case-rag-log",
+        run_id="run-rag-log",
+        backend=RagLogBackend(),
+        audit_path=tmp_path / "audit-rag-log.jsonl",
+    )
+
+    assert result.evidence_entries
+    assert result.evidence_entries[0].source_ref == "nas.md"
+    assert result.governance_payload["public_evidence"][0]["selected"] is True
+
+
 def test_stage_governance_pipeline_uses_llm_intent_then_domain_governance(
     tmp_path: Path,
 ) -> None:

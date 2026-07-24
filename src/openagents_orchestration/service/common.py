@@ -64,5 +64,11 @@ def resolve_wiki_path(value: str | Path | None) -> Path:
     return path
 
 
+def resolve_optional_wiki_path(value: str | Path | None) -> Path | None:
+    if value is not None and str(value).strip():
+        return resolve_wiki_path(value)
+    return configured_wiki_path()
+
+
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))

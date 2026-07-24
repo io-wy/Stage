@@ -20,6 +20,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
+pytest.importorskip("nio")
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 for _k, _v in {
     "LLM_API_BASE": "http://mock-llm.local/v1",

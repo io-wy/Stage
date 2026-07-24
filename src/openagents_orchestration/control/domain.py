@@ -97,18 +97,30 @@ def apply_domain_profile(
         workflow_type=profile.workflow_type,
         business_process=profile.business_process,
         risk_class=_max_risk(frame.risk_class, profile.risk_class),
-        backend_plan=list(profile.backend_plan or frame.backend_plan),
+        backend_plan=list(
+            profile.backend_plan if profile.backend_plan is not None else frame.backend_plan
+        ),
         evidence_requirements=list(
-            profile.evidence_requirements or frame.evidence_requirements
+            profile.evidence_requirements
+            if profile.evidence_requirements is not None
+            else frame.evidence_requirements
         ),
         closure_policy=profile.closure_policy,
         human_handoff_policy=profile.human_handoff_policy,
         verifier_profile=profile.verifier_profile,
-        ambiguity_notes=list(profile.ambiguity_notes or frame.ambiguity_notes),
+        ambiguity_notes=list(
+            profile.ambiguity_notes
+            if profile.ambiguity_notes is not None
+            else frame.ambiguity_notes
+        ),
         execution_adapter=profile.execution_adapter or frame.execution_adapter,
-        adapter_tools=list(profile.adapter_tools or frame.adapter_tools),
+        adapter_tools=list(
+            profile.adapter_tools if profile.adapter_tools is not None else frame.adapter_tools
+        ),
         permission_required_fields=list(
-            profile.permission_required_fields or frame.permission_required_fields
+            profile.permission_required_fields
+            if profile.permission_required_fields is not None
+            else frame.permission_required_fields
         ),
     )
 
@@ -197,23 +209,21 @@ def _profile_from_mapping(raw: dict[str, Any]) -> GovernanceDomainProfile:
         workflow_type=str(raw.get("workflow_type", "general")),
         business_process=str(raw.get("business_process", "unknown")),
         risk_class=str(raw.get("risk_class", "normal")),
-        backend_plan=[str(item) for item in raw.get("backend_plan", [])],
-        evidence_requirements=[
-            str(item) for item in raw.get("evidence_requirements", [])
-        ],
+        backend_plan=_optional_str_list(raw, "backend_plan"),
+        evidence_requirements=_optional_str_list(raw, "evidence_requirements"),
         closure_policy=str(raw.get("closure_policy", "verify_before_close")),
         human_handoff_policy=str(raw.get("human_handoff_policy", "ask_if_needed")),
         verifier_profile=str(raw.get("verifier_profile", "service_desk")),
-        ambiguity_notes=[str(item) for item in raw.get("ambiguity_notes", [])],
+        ambiguity_notes=_optional_str_list(raw, "ambiguity_notes"),
         execution_adapter=str(raw.get("execution_adapter", "")),
-        adapter_tools=[str(item) for item in raw.get("adapter_tools", [])],
-        permission_required_fields=[
-            str(item) for item in raw.get("permission_required_fields", [])
-        ],
-        permission_action_markers=[
-            str(item) for item in raw.get("permission_action_markers", [])
-        ],
-        safety_forbidden_patterns=[
-            str(item) for item in raw.get("safety_forbidden_patterns", [])
-        ],
+        adapter_tools=_optional_str_list(raw, "adapter_tools"),
+        permission_required_fields=_optional_str_list(raw, "permission_required_fields"),
+        permission_action_markers=_optional_str_list(raw, "permission_action_markers"),
+        safety_forbidden_patterns=_optional_str_list(raw, "safety_forbidden_patterns"),
     )
+
+
+def _optional_str_list(raw: dict[str, Any], key: str) -> list[str] | None:
+    if key not in raw:
+        return None
+    return [str(item) for item in raw.get(key, [])]

@@ -67,6 +67,7 @@ class RunGovernanceResponse(BaseModel):
     run_key: str = ""
     case_id: str = ""
     case_name: str = ""
+    selected_backend: str = ""
     closed: bool
     failure_mode: str | None = None
     route: dict[str, Any] = Field(default_factory=dict)

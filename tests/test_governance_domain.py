@@ -161,6 +161,36 @@ rules:
     assert profile.safety_forbidden_patterns == ["internal-only route"]
 
 
+def test_domain_pack_explicit_empty_lists_override_classifier_defaults(
+    tmp_path: Path,
+) -> None:
+    pack_path = tmp_path / "domain_pack.yaml"
+    pack_path.write_text(
+        """
+rules:
+  - id: human_triage
+    keywords: ["human triage"]
+    profile:
+      workflow_type: service_case
+      business_process: human_triage
+      risk_class: normal
+      backend_plan: ["human_channel"]
+      evidence_requirements: []
+      ambiguity_notes: []
+""",
+        encoding="utf-8",
+    )
+    prompt = "human triage this request"
+    frame = IntentClassifier(llm_client=None).classify_frame(prompt)
+
+    profile = GovernanceDomainResolver(domain_pack_paths=[pack_path]).resolve(prompt)
+    enriched = apply_domain_profile(frame, profile)
+
+    assert enriched.backend_plan == ["human_channel"]
+    assert enriched.evidence_requirements == []
+    assert enriched.ambiguity_notes == []
+
+
 def test_domain_resolver_records_pack_version_and_rule_id(tmp_path: Path) -> None:
     pack_path = tmp_path / "domain_pack.yaml"
     pack_path.write_text(

@@ -1,7 +1,10 @@
 from openagents_orchestration import backend as backend_pkg
 from openagents_orchestration.backend import (
     ClaudeCodeAdapter,
+    GovernedBackendDispatcher,
+    HumanGovernanceBackend,
     RagGovernanceBackend,
+    SubagentGovernanceBackend,
     default_kb_path,
     query_rag,
 )
@@ -12,6 +15,9 @@ from openagents_orchestration.service import rag as service_rag
 def test_backend_package_exports_governed_backends() -> None:
     assert backend_pkg.RagGovernanceBackend is RagGovernanceBackend
     assert backend_pkg.ClaudeCodeAdapter is ClaudeCodeAdapter
+    assert backend_pkg.GovernedBackendDispatcher is GovernedBackendDispatcher
+    assert backend_pkg.HumanGovernanceBackend is HumanGovernanceBackend
+    assert backend_pkg.SubagentGovernanceBackend is SubagentGovernanceBackend
     assert backend_pkg.query_rag is query_rag
     assert backend_pkg.default_kb_path is default_kb_path
 

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+pytest.importorskip("nio")
+
 from openagents_orchestration.im_adapters.matrix import MatrixAdapter
 from openagents_orchestration.models.delivery import DeliveryReport
 from openagents_orchestration.runtime.global_orchestrator import GlobalOrchestrator

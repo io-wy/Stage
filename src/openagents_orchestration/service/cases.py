@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from time import time
 
+from openagents_orchestration.backend.governed import GovernedBackendDispatcher
 from openagents_orchestration.control.domain import GovernanceDomainResolver
 from openagents_orchestration.control.intent_llm import (
     build_governance_intent_classifier,
@@ -20,12 +22,11 @@ from openagents_orchestration.handler.http.schemas import (
 )
 from openagents_orchestration.service.common import (
     extract_case_prompt,
+    resolve_optional_wiki_path,
     resolve_path,
-    resolve_wiki_path,
     run_key,
     text_digest,
 )
-from openagents_orchestration.backend.rag import RagGovernanceBackend, default_kb_path
 from openagents_orchestration.service.settings import (
     DEFAULT_BASELINE_WORKSPACE,
     DEFAULT_EVALS_JSON,
@@ -112,7 +113,7 @@ def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
     if not prompt.strip():
         raise ValueError("service_request is required")
 
-    wiki_path = resolve_wiki_path(request.wiki_path)
+    wiki_path = resolve_optional_wiki_path(request.wiki_path)
     routing_prompt = extract_case_prompt(prompt)
     run_name = f"service-{text_digest(routing_prompt)}-{int(time())}"
     run_dir = output_root / run_name
@@ -124,13 +125,10 @@ def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
     governance_path = run_dir / "governance.json"
     case_result_path = outputs_dir / "case_result.json"
 
-    backend = RagGovernanceBackend(
+    backend = GovernedBackendDispatcher(
         wiki_path=wiki_path,
         embedding=request.embedding,
-        kb_path=resolve_path(
-            request.kb_path,
-            default_kb_path(wiki_path, request.embedding),
-        ),
+        kb_path=resolve_path(request.kb_path, Path()) if request.kb_path else None,
         top_k=request.top_k,
     )
     domain_resolver = (
@@ -153,6 +151,7 @@ def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
     governance = {
         **pipeline_result.governance_payload,
         "case_result_path": str(case_result_path),
+        "selected_backend": backend.selected_backend,
         "rag": backend.last_rag_log,
     }
     case_result = pipeline_result.governed_case_result
@@ -168,6 +167,7 @@ def run_governance_case(request: RunGovernanceRequest) -> RunGovernanceResponse:
         run_key=run_key(governance_path),
         case_id=case_id,
         case_name=eval_name,
+        selected_backend=backend.selected_backend,
         closed=bool(case_result.get("closed")),
         failure_mode=case_result.get("failure_mode"),
         route=governance.get("route", {}),

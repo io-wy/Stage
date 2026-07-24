@@ -106,6 +106,7 @@ class RagGovernanceBackend:
         if "rag_retrieval" not in route_plan.backends:
             self.last_rag_log = {"skipped": True, "reason": "route did not request RAG"}
             return {
+                "backend": "rag",
                 "family": _family_for_route(route_plan),
                 "closed": False,
                 "answer": "该请求没有路由到 RAG，需要后续执行节点处理。",
@@ -141,6 +142,7 @@ class RagGovernanceBackend:
         ]
         needs_human = bool(route_plan.needs_human or "human_channel" in route_plan.backends)
         return {
+            "backend": "rag",
             "family": _family_for_route(route_plan),
             "closed": bool(answered and not needs_human),
             "answer": answer.get("answer_text")
@@ -148,6 +150,7 @@ class RagGovernanceBackend:
             or "没有检索到足够证据。",
             "actions": ["answer_user"] if answered and not needs_human else ["create_handoff"],
             "evidence": evidence,
+            "rag_log": rag_log,
             "human_questions": _route_human_questions(route_plan) if needs_human else [],
             "failure_mode": None if answered else "missing_required_information",
             "confidence": route_plan.confidence,

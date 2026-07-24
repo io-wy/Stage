@@ -21,7 +21,10 @@ from openagents_orchestration.control.domain import (
     GovernanceDomainResolver,
     apply_domain_profile,
 )
-from openagents_orchestration.control.evidence import build_public_evidence_summary
+from openagents_orchestration.control.evidence import (
+    build_public_evidence_summary,
+    evidence_entries_from_rag_log,
+)
 from openagents_orchestration.control.models import (
     ActionPlan,
     ActionResult,
@@ -45,6 +48,7 @@ from openagents_orchestration.control.traceability import (
     traceability_gate_passed,
 )
 from openagents_orchestration.intent_classifier import IntentClassifier, IntentFrame
+from openagents_orchestration.rag.runlog import RagQueryRunLog
 
 _VALID_FAILURE_MODES = {
     "missing_required_information",
@@ -303,7 +307,7 @@ class StageGovernancePipeline:
             permission_postcheck_result,
         )
         evidence_entries = _build_evidence_entries(
-            backend_output.get("evidence", []),
+            backend_output,
             case_id=case_id,
             run_id=run_id,
             retrieval_query=routing_text,
@@ -488,6 +492,45 @@ def _action_result_from_backend(
 
 
 def _build_evidence_entries(
+    backend_output: dict[str, Any],
+    *,
+    case_id: str,
+    run_id: str,
+    retrieval_query: str,
+    forbidden_patterns: list[str] | None = None,
+) -> list[EvidenceEntry]:
+    rag_log = backend_output.get("rag_log")
+    if isinstance(rag_log, dict):
+        try:
+            parsed_log = RagQueryRunLog.model_validate(rag_log)
+        except ValueError:
+            parsed_log = None
+        if parsed_log is not None:
+            entries = evidence_entries_from_rag_log(
+                parsed_log,
+                case_id=case_id,
+                run_id=run_id,
+            )
+            for entry in entries:
+                relevance = _evidence_relevance(
+                    retrieval_query,
+                    source_ref=entry.source_ref,
+                    summary=entry.summary,
+                    score=_coerce_float(entry.metadata.get("score")),
+                )
+                entry.metadata["relevance"] = relevance
+                entry.selected = relevance["passed"] and entry.sensitivity == "public_safe"
+            return entries
+    return _build_evidence_entries_from_dicts(
+        backend_output.get("evidence", []),
+        case_id=case_id,
+        run_id=run_id,
+        retrieval_query=retrieval_query,
+        forbidden_patterns=forbidden_patterns,
+    )
+
+
+def _build_evidence_entries_from_dicts(
     evidence: list[dict[str, Any]],
     *,
     case_id: str,
@@ -547,16 +590,18 @@ def _verify_backend_output(
     safety_result: SafetyScanResult,
 ) -> dict[str, Any]:
     reasons: list[str] = []
+    actions = {str(action).strip() for action in backend_output.get("actions", [])}
+    is_handoff = bool(actions & {"create_handoff", "ask_human", "request_human"})
     selected_public_evidence = [
         entry
         for entry in evidence_entries
         if entry.selected and entry.sensitivity == "public_safe"
     ]
-    if not backend_output.get("answer"):
+    if not backend_output.get("answer") and not is_handoff:
         reasons.append("missing_answer")
-    if not evidence_entries:
+    if not evidence_entries and not is_handoff:
         reasons.append("missing_evidence")
-    elif not selected_public_evidence:
+    elif evidence_entries and not selected_public_evidence:
         reasons.append("no_relevant_public_evidence")
     if safety_result.blocked:
         reasons.append("safety_blocked")
