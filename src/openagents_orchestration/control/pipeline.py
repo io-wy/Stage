@@ -7,10 +7,11 @@ import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Protocol
+from typing import Any
 
+from openagents_orchestration.backend.claude_code import ClaudeCodeAdapter
+from openagents_orchestration.backend.contracts import CaseBackend
 from openagents_orchestration.control.audit import AuditStore
-from openagents_orchestration.control.claude_code import ClaudeCodeAdapter
 from openagents_orchestration.control.closure import (
     ClosureDecision,
     evaluate_closure,
@@ -139,21 +140,6 @@ _HUMAN_QUESTION_TEMPLATES = {
         "你想选择哪个方向：软件研发、Web、Python 还是算法？",
     ],
 }
-
-
-class CaseBackend(Protocol):
-    execution_mode: str
-
-    def run(
-        self,
-        *,
-        case_id: str,
-        run_id: str,
-        prompt: str,
-        route_plan: GovernancePlan,
-        audit_store: AuditStore,
-    ) -> dict[str, Any]:
-        """Execute the backend and return a public case result."""
 
 
 class ReplayCaseBackend:

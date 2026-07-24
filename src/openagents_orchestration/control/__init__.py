@@ -1,7 +1,6 @@
 """Stage governance primitives."""
 
 from openagents_orchestration.control.audit import AuditStore, replay_case_state
-from openagents_orchestration.control.claude_code import ClaudeCodeAdapter
 from openagents_orchestration.control.closure import (
     ClosureDecision,
     evaluate_closure,
@@ -39,12 +38,6 @@ from openagents_orchestration.control.permissions import (
     PermissionEngine,
     PermissionPolicy,
 )
-from openagents_orchestration.control.pipeline import (
-    ClaudeCodeReplayBackend,
-    ReplayCaseBackend,
-    StageGovernancePipeline,
-    StageGovernancePipelineResult,
-)
 from openagents_orchestration.control.router import GovernancePlan, GovernanceRouter
 from openagents_orchestration.control.safety import (
     SafetyScanResult,
@@ -65,7 +58,6 @@ __all__ = [
     "CaseRecord",
     "CaseRunRecord",
     "ClaimTraceEntry",
-    "ClaudeCodeAdapter",
     "ClosureDecision",
     "GovernanceDomainProfile",
     "GovernanceDomainResolver",
@@ -77,12 +69,8 @@ __all__ = [
     "PermissionDecision",
     "PermissionEngine",
     "PermissionPolicy",
-    "ClaudeCodeReplayBackend",
-    "ReplayCaseBackend",
     "SafetyFinding",
     "SafetyScanResult",
-    "StageGovernancePipeline",
-    "StageGovernancePipelineResult",
     "build_public_evidence_summary",
     "build_regression_case",
     "build_source_to_claim_trace",
@@ -97,3 +85,29 @@ __all__ = [
     "VerificationFinding",
     "write_feedback_artifacts",
 ]
+
+
+def __getattr__(name: str):
+    if name == "ClaudeCodeAdapter":
+        from openagents_orchestration.control.claude_code import ClaudeCodeAdapter
+
+        return ClaudeCodeAdapter
+    if name == "ReplayCaseBackend":
+        from openagents_orchestration.control.pipeline import ReplayCaseBackend
+
+        return ReplayCaseBackend
+    if name == "ClaudeCodeReplayBackend":
+        from openagents_orchestration.control.pipeline import ClaudeCodeReplayBackend
+
+        return ClaudeCodeReplayBackend
+    if name == "StageGovernancePipeline":
+        from openagents_orchestration.control.pipeline import StageGovernancePipeline
+
+        return StageGovernancePipeline
+    if name == "StageGovernancePipelineResult":
+        from openagents_orchestration.control.pipeline import (
+            StageGovernancePipelineResult,
+        )
+
+        return StageGovernancePipelineResult
+    raise AttributeError(name)

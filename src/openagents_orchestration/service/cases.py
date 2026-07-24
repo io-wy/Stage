@@ -25,7 +25,7 @@ from openagents_orchestration.service.common import (
     run_key,
     text_digest,
 )
-from openagents_orchestration.service.rag import RagGovernanceBackend, default_kb_path
+from openagents_orchestration.backend.rag import RagGovernanceBackend, default_kb_path
 from openagents_orchestration.service.settings import (
     DEFAULT_BASELINE_WORKSPACE,
     DEFAULT_EVALS_JSON,
