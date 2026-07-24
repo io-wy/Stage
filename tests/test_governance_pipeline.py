@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+from openagents_orchestration.backend.governed import GovernedBackendDispatcher
 from openagents_orchestration.control.domain import GovernanceDomainResolver
 from openagents_orchestration.control.pipeline import (
     ReplayCaseBackend,
@@ -149,6 +150,47 @@ def test_stage_governance_pipeline_builds_evidence_from_rag_log(
     assert result.evidence_entries
     assert result.evidence_entries[0].source_ref == "nas.md"
     assert result.governance_payload["public_evidence"][0]["selected"] is True
+
+
+def test_stage_governance_pipeline_closes_governed_claude_code_run(
+    tmp_path: Path,
+) -> None:
+    calls = []
+
+    def fake_runner(**kwargs):
+        calls.append(kwargs)
+        return {
+            "exit_code": 0,
+            "output": "implemented helper and ran tests",
+            "command": "claude -p <prompt>",
+        }
+
+    backend = GovernedBackendDispatcher(
+        wiki_path=None,
+        embedding="mock",
+        kb_path=None,
+        top_k=1,
+        claude_code_runner=fake_runner,
+    )
+
+    result = StageGovernancePipeline().run(
+        prompt="Please review this pull request and propose a small patch",
+        case_id="case-code-pipeline",
+        run_id="run-code-pipeline",
+        backend=backend,
+        audit_path=tmp_path / "audit-code-pipeline.jsonl",
+    )
+
+    assert backend.selected_backend == "claude_code"
+    assert result.execution_mode == "claude_code_governed"
+    assert result.route_plan.backends == ["claude_code"]
+    assert result.route_plan.action_plan is not None
+    assert result.route_plan.action_plan.executor == "claude_code"
+    assert result.governed_case_result["closed"] is True
+    assert result.governed_case_result["failure_mode"] is None
+    assert result.governance_payload["permissions"]["combined"]["passed"] is True
+    assert result.governance_payload["verification"]["passed"] is True
+    assert calls
 
 
 def test_stage_governance_pipeline_uses_llm_intent_then_domain_governance(

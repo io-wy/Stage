@@ -5,6 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from openagents_orchestration.backend.claude_code import (
+    ClaudeCodeBackend,
+    ClaudeCodeRunner,
+)
 from openagents_orchestration.backend.contracts import CaseBackend
 from openagents_orchestration.backend.rag import RagGovernanceBackend, default_kb_path
 from openagents_orchestration.control.audit import AuditStore
@@ -127,6 +131,7 @@ class GovernedBackendDispatcher:
         embedding: EmbeddingMode,
         kb_path: Path | None,
         top_k: int,
+        claude_code_runner: ClaudeCodeRunner | None = None,
     ):
         self._wiki_path = wiki_path
         self._embedding = embedding
@@ -135,6 +140,7 @@ class GovernedBackendDispatcher:
         self._rag_backend: RagGovernanceBackend | None = None
         self._human_backend = HumanGovernanceBackend()
         self._subagent_backend: SubagentGovernanceBackend | None = None
+        self._claude_code_backend = ClaudeCodeBackend(runner=claude_code_runner)
         self.selected_backend = ""
 
     @property
@@ -183,6 +189,8 @@ class GovernedBackendDispatcher:
         backends = set(route_plan.backends)
         if "subagent" in backends:
             return self._subagent()
+        if "claude_code" in backends:
+            return self._claude_code_backend
         if "rag_retrieval" in backends:
             return self._rag()
         if "human_channel" in backends:
@@ -212,6 +220,8 @@ def _backend_name(backend: CaseBackend) -> str:
         return "human"
     if isinstance(backend, SubagentGovernanceBackend):
         return "subagent"
+    if isinstance(backend, ClaudeCodeBackend):
+        return "claude_code"
     if isinstance(backend, RagGovernanceBackend):
         return "rag"
     return "unknown"

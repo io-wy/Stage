@@ -301,6 +301,11 @@ def _requested_capability(
         frame.risk_class == "privileged_action" and has_write_request
     ):
         return "privileged_action"
+    if (
+        frame.risk_class == "normal"
+        and any(node.capability == "claude_code" for node in route_plan.nodes)
+    ):
+        return "code_or_tool_analysis"
     if has_write_request:
         return "write_action"
     if frame.risk_class == "sensitive":
@@ -321,9 +326,18 @@ def _claimed_capability(
         for action in output.get("actions", [])
         if str(action).strip()
     ]
-    read_only_actions = set(policy.read_only_actions)
-    if any(action not in read_only_actions for action in actions):
+    allowed_actions = set(policy.read_only_actions)
+    if route_plan.action_plan is not None:
+        allowed_actions.update(
+            action.lower() for action in route_plan.action_plan.allowed_actions
+        )
+    if any(action not in allowed_actions for action in actions):
         return "claimed_write_action"
+    if (
+        frame.risk_class == "normal"
+        and any(node.capability == "claude_code" for node in route_plan.nodes)
+    ):
+        return "code_or_tool_analysis"
     if output.get("closed") is True and frame.risk_class == "privileged_action":
         public_text = _flatten_public_text(output)
         if _contains_marker(public_text, policy.write_claim_markers):

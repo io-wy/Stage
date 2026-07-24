@@ -9,7 +9,6 @@ from openagents_orchestration.control.safety import SafetyScanResult
 from openagents_orchestration.intent_classifier import IntentFrame
 
 _HANDOFF_REQUIRED_POLICIES = {
-    "ask_if_needed",
     "ask_if_missing_identity_or_state",
     "ask_for_sponsor_and_scope",
     "ask_for_maintainer_if_internal_access_needed",
@@ -39,11 +38,9 @@ def _needs_human_handoff(frame: IntentFrame) -> bool:
         return False
     if frame.human_handoff_policy == "ask_if_destination_is_ambiguous":
         return False
-    if frame.human_handoff_policy in _HANDOFF_REQUIRED_POLICIES:
-        return True
     if frame.human_handoff_policy == "ask_if_needed":
         return frame.risk_class in {"sensitive", "privileged_action"} or frame.confidence < 0.7
-    return False
+    return frame.human_handoff_policy in _HANDOFF_REQUIRED_POLICIES
 
 
 def evaluate_closure(

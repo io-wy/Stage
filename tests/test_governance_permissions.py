@@ -136,6 +136,64 @@ def test_permission_preflight_allows_read_only_retrieval() -> None:
     assert result.decisions[0].decision == "allow"
 
 
+def test_permission_preflight_allows_governed_claude_code_workspace_write() -> None:
+    frame = IntentFrame(
+        task_type="feature",
+        complexity="medium",
+        confidence=0.9,
+        workflow_type="development",
+        business_process="code_task",
+        risk_class="normal",
+        backend_plan=["claude_code"],
+        evidence_requirements=["diff_or_patch"],
+        closure_policy="verify_before_close",
+        human_handoff_policy="none",
+        verifier_profile="service_desk",
+    )
+    plan = GovernanceRouter().plan(frame)
+
+    result = PermissionEngine().preflight(
+        frame,
+        plan,
+        prompt="Write a small Python helper and run verification.",
+    )
+
+    assert result.passed is True
+    assert result.needs_human is False
+    assert result.decisions[0].capability == "code_or_tool_analysis"
+
+
+def test_permission_postcheck_allows_governed_claude_code_actions() -> None:
+    frame = IntentFrame(
+        task_type="feature",
+        complexity="medium",
+        confidence=0.9,
+        workflow_type="development",
+        business_process="code_task",
+        risk_class="normal",
+        backend_plan=["claude_code"],
+        evidence_requirements=["diff_or_patch"],
+        closure_policy="verify_before_close",
+        human_handoff_policy="none",
+        verifier_profile="service_desk",
+    )
+    plan = GovernanceRouter().plan(frame)
+
+    result = PermissionEngine().postcheck(
+        frame,
+        plan,
+        output={
+            "closed": True,
+            "answer": "Implemented helper and ran verification.",
+            "actions": ["propose_patch", "run_verification"],
+        },
+    )
+
+    assert result.passed is True
+    assert result.blocked is False
+    assert result.decisions[0].capability == "code_or_tool_analysis"
+
+
 def test_permission_preflight_allows_secret_trap_question_without_action() -> None:
     frame = _frame(risk_class="privileged_action", human_handoff_policy="none")
     plan = GovernanceRouter().plan(frame)

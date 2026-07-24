@@ -74,6 +74,8 @@ async def test_l1_keyword_rules():
         ("refactor the user service", "refactor"),
         ("create a new API endpoint", "feature"),
         ("implement a function to hash passwords", "feature"),
+        ("write a Python helper to summarize processes", "feature"),
+        ("请帮我写一个 Python 函数 summarize_process_memory", "feature"),
         ("review this pull request", "review"),
         ("write README documentation", "doc"),
     ]

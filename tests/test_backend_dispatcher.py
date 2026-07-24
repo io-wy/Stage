@@ -2,6 +2,7 @@ from pathlib import Path
 
 from openagents_orchestration.backend.governed import GovernedBackendDispatcher
 from openagents_orchestration.control.audit import AuditStore
+from openagents_orchestration.control.models import ActionPlan
 from openagents_orchestration.control.router import GovernancePlan
 
 
@@ -101,6 +102,145 @@ def test_dispatcher_runs_rag_before_handoff_for_mixed_route(tmp_path: Path) -> N
     assert output["actions"] == ["create_handoff"]
     assert output["rag_log"]["retrieval"]["passages"]
     assert output["human_questions"]
+
+
+def test_dispatcher_selects_claude_code_backend_without_wiki(tmp_path: Path) -> None:
+    calls = []
+
+    def fake_runner(**kwargs):
+        calls.append(kwargs)
+        return {
+            "exit_code": 0,
+            "output": "created summarize_process_memory helper",
+            "command": "claude -p <prompt>",
+        }
+
+    backend = GovernedBackendDispatcher(
+        wiki_path=None,
+        embedding="mock",
+        kb_path=None,
+        top_k=1,
+        claude_code_runner=fake_runner,
+    )
+    route_plan = GovernancePlan(
+        route_label="development",
+        backends=["claude_code"],
+        needs_human=False,
+        confidence=0.9,
+        business_process="code_task",
+        action_plan=ActionPlan(
+            case_id="case-code",
+            run_id="run-code",
+            executor="claude_code",
+            side_effect_level="workspace_write",
+        ),
+    )
+
+    output = backend.run(
+        case_id="case-code",
+        run_id="run-code",
+        prompt="Write a summarize_process_memory helper",
+        route_plan=route_plan,
+        audit_store=AuditStore(tmp_path / "audit-code.jsonl"),
+    )
+
+    assert backend.selected_backend == "claude_code"
+    assert backend.execution_mode == "claude_code_governed"
+    assert output["backend"] == "claude_code"
+    assert output["closed"] is True
+    assert output["actions"] == ["propose_patch", "run_verification"]
+    assert output["action_result"]["executed"] is True
+    assert output["evidence"][0]["source_ref"] == "claude_code_output"
+    assert calls[0]["instruction"].startswith("Stage governed code task")
+    audit_text = (tmp_path / "audit-code.jsonl").read_text(encoding="utf-8")
+    assert "backend_selected" in audit_text
+    assert "claude_code" in audit_text
+
+
+def test_dispatcher_classifies_claude_code_timeout(tmp_path: Path) -> None:
+    def fake_runner(**kwargs):
+        return {
+            "exit_code": 124,
+            "output": "claude-code timed out after 1s.\nstdout: \nstderr:",
+            "command": "claude --safe-mode -p <prompt>",
+        }
+
+    backend = GovernedBackendDispatcher(
+        wiki_path=None,
+        embedding="mock",
+        kb_path=None,
+        top_k=1,
+        claude_code_runner=fake_runner,
+    )
+    route_plan = GovernancePlan(
+        route_label="development",
+        backends=["claude_code"],
+        needs_human=False,
+        confidence=0.9,
+        business_process="code_task",
+        action_plan=ActionPlan(
+            case_id="case-code-timeout",
+            run_id="run-code-timeout",
+            executor="claude_code",
+            side_effect_level="workspace_write",
+        ),
+    )
+
+    output = backend.run(
+        case_id="case-code-timeout",
+        run_id="run-code-timeout",
+        prompt="Write a helper",
+        route_plan=route_plan,
+        audit_store=AuditStore(tmp_path / "audit-code-timeout.jsonl"),
+    )
+
+    assert output["closed"] is False
+    assert output["failure_mode"] == "execution_timeout"
+    assert output["actions"] == ["create_handoff"]
+    assert output["action_result"]["executed"] is False
+    assert "超时" in output["human_questions"][0]
+
+
+def test_dispatcher_classifies_claude_code_budget_exhaustion(tmp_path: Path) -> None:
+    def fake_runner(**kwargs):
+        return {
+            "exit_code": 1,
+            "output": '{"subtype":"error_max_budget_usd","errors":["Reached maximum budget"]}',
+            "command": "claude --safe-mode -p <prompt>",
+        }
+
+    backend = GovernedBackendDispatcher(
+        wiki_path=None,
+        embedding="mock",
+        kb_path=None,
+        top_k=1,
+        claude_code_runner=fake_runner,
+    )
+    route_plan = GovernancePlan(
+        route_label="development",
+        backends=["claude_code"],
+        needs_human=False,
+        confidence=0.9,
+        business_process="code_task",
+        action_plan=ActionPlan(
+            case_id="case-code-budget",
+            run_id="run-code-budget",
+            executor="claude_code",
+            side_effect_level="workspace_write",
+        ),
+    )
+
+    output = backend.run(
+        case_id="case-code-budget",
+        run_id="run-code-budget",
+        prompt="Write a helper",
+        route_plan=route_plan,
+        audit_store=AuditStore(tmp_path / "audit-code-budget.jsonl"),
+    )
+
+    assert output["closed"] is False
+    assert output["failure_mode"] == "over_budget"
+    assert "预算" in output["human_questions"][0]
 
 
 def test_dispatcher_selects_subagent_backend_for_complex_service_case(

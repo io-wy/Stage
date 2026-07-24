@@ -1,6 +1,9 @@
 """Governed backend executors for Stage."""
 
-from openagents_orchestration.backend.claude_code import ClaudeCodeAdapter
+from openagents_orchestration.backend.claude_code import (
+    ClaudeCodeAdapter,
+    ClaudeCodeBackend,
+)
 from openagents_orchestration.backend.contracts import CaseBackend
 from openagents_orchestration.backend.governed import (
     GovernedBackendDispatcher,
@@ -16,6 +19,7 @@ from openagents_orchestration.backend.rag import (
 __all__ = [
     "CaseBackend",
     "ClaudeCodeAdapter",
+    "ClaudeCodeBackend",
     "GovernedBackendDispatcher",
     "HumanGovernanceBackend",
     "RagGovernanceBackend",

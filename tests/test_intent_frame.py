@@ -75,3 +75,16 @@ def test_classify_frame_serializes_to_dict() -> None:
     assert data["business_process"] == frame.business_process
     assert data["backend_plan"] == frame.backend_plan
     assert data["ambiguity_notes"] == frame.ambiguity_notes
+
+
+def test_classify_frame_routes_chinese_python_function_request_to_code_task() -> None:
+    classifier = IntentClassifier(llm_client=None)
+
+    frame = classifier.classify_frame(
+        "请帮我写一个 Python 函数 summarize_process_memory"
+    )
+
+    assert frame.workflow_type == "development"
+    assert frame.business_process == "code_task"
+    assert frame.backend_plan == ["claude_code"]
+    assert frame.human_handoff_policy == "none"

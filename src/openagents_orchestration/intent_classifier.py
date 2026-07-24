@@ -245,7 +245,18 @@ class IntentClassifier:
                 "confidence": 0.85,
             },
             {
-                "keywords": ["function", "implement", "write a function", "solve"],
+                "keywords": [
+                    "function",
+                    "implement",
+                    "write a function",
+                    "python function",
+                    "python helper",
+                    "write a python",
+                    "写一个 python",
+                    "写个 python",
+                    "函数",
+                    "solve",
+                ],
                 "intent": {
                     "task_type": "feature",
                     "complexity": "simple",
