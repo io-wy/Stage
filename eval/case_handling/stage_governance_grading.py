@@ -17,6 +17,8 @@ _VALID_FAILURE_MODES = {
     "source_conflict",
     "need_human_judgment",
     "tool_unavailable",
+    "execution_timeout",
+    "auth_or_network_failure",
     "over_budget",
     "permission_policy_failure",
     "safety_policy_failure",
